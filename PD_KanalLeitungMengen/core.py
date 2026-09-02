@@ -241,13 +241,15 @@ def analyze(canals, shafts, utility_lines,
     canal_details = []
     earth_segments = []
     shaft_details = []
+    stub_details = []
     utility_details = []
 
     for pipe in pipes:
         start = shaft_index.get(pipe.get("start_id"))
         end = shaft_index.get(pipe.get("end_id"))
         if not start or not end:
-            warnings.append("Haltung %s: Anfangs- oder Endknoten fehlt." % pipe.get("id", ""))
+            reference = str(pipe.get("name") or "").strip() or "ohne Bezeichnung"
+            warnings.append("Haltung %s: Anfangs- oder Endknoten fehlt." % reference)
             continue
         length_2d = number(pipe.get("length_m"), "Haltungslänge", 0.0)
         delta = number(pipe.get("end_invert_m"), "Endsohle") - number(
@@ -257,9 +259,11 @@ def analyze(canals, shafts, utility_lines,
         outside_mm = number(pipe.get("outside_diameter_mm", dn), "Rohraußendurchmesser", 0.0, False)
         explicit = bool(pipe.get("outside_diameter_explicit", False))
         if not explicit:
+            reference = str(pipe.get("name") or "").strip() or "%s – %s" % (
+                start.get("name", ""), end.get("name", ""))
             warnings.append(
                 "Haltung %s: OD fehlt; für die Vorermittlung wurde DN %d als Außendurchmesser verwendet."
-                % (pipe.get("id", ""), dn))
+                % (reference, dn))
         start_depth = max(0.0, number(start.get("kd_m"), "Deckelhöhe") -
                           number(pipe.get("start_invert_m"), "Anfangssohle"))
         end_depth = max(0.0, number(end.get("kd_m"), "Deckelhöhe") -
@@ -283,6 +287,8 @@ def analyze(canals, shafts, utility_lines,
             trench_start_depth, trench_end_depth, shoring_thickness_m)
         detail = {
             "id": pipe.get("id", ""), "network_id": pipe.get("network_id", ""),
+            "name": (str(pipe.get("name") or "").strip() or
+                     "%s – %s" % (start.get("name", ""), end.get("name", ""))),
             "kind": pipe.get("kind", ""), "dn_mm": dn,
             "outside_diameter_mm": outside_mm,
             "outside_diameter_explicit": explicit,
@@ -315,12 +321,30 @@ def analyze(canals, shafts, utility_lines,
             row = dict(segment)
             row["station_start_m"] += start_trim
             row["station_end_m"] += start_trim
-            row.update(pipe_id=detail["id"], kind=detail["kind"], dn_mm=dn,
+            row.update(pipe_id=detail["id"], pipe_name=detail["name"],
+                       kind=detail["kind"], dn_mm=dn,
                        material=detail["material"], segment=index,
                        outside_diameter_mm=outside_mm)
             earth_segments.append(row)
 
     for shaft in shaft_rows:
+        stub = shaft.get("stub")
+        if shaft.get("structure_type") == "stub" and isinstance(stub, dict):
+            main_ids = set(str(value) for value in stub.get("main_pipe_ids", ()))
+            branches = [
+                pipe for pipe in pipes
+                if shaft.get("id") in (pipe.get("start_id"), pipe.get("end_id"))
+                and str(pipe.get("id", "")) not in main_ids
+            ]
+            branch = branches[0] if branches else {}
+            stub_details.append({
+                "kind": shaft.get("kind", ""),
+                "dn_mm": int(number(
+                    stub.get("branch_dn_mm", branch.get("dn_mm", 150)),
+                    "Stutzen-Nennweite", 0.0, False)),
+                "material": str(branch.get("material", "") or ""),
+                "alignment": str(stub.get("alignment", "invert") or "invert"),
+            })
         if not shaft.get("visible", False):
             continue
         body_width, body_height = shaft_body_dimensions(shaft)
@@ -364,11 +388,17 @@ def analyze(canals, shafts, utility_lines,
             "length_3d_m": number(line.get("length_3d_m"), "3D-Leitungslänge", 0.0),
         })
         if not utility_details[-1]["outside_diameter_explicit"]:
+            reference = (utility_details[-1]["route_name"] or
+                         "%s DN %d" % (utility_details[-1]["utility_type"],
+                                        utility_details[-1]["dn_mm"]))
             warnings.append(
                 "Leitung %s: OD fehlt; DN wird nur als gekennzeichneter Ersatzwert geführt."
-                % utility_details[-1]["id"])
+                % reference)
 
     canal_summary = _canal_summary(canal_details, shaft_details)
+    pipe_summary = _pipe_summary(canal_details)
+    shaft_summary = _shaft_summary(shaft_details)
+    stub_summary = _stub_summary(stub_details)
     utility_summary = _utility_summary(utility_details)
     totals = {
         "canal_length_2d_m": sum(row["length_2d_m"] for row in canal_details),
@@ -376,6 +406,7 @@ def analyze(canals, shafts, utility_lines,
         "utility_length_2d_m": sum(row["length_2d_m"] for row in utility_details),
         "utility_length_3d_m": sum(row["length_3d_m"] for row in utility_details),
         "shaft_count": len(shaft_details),
+        "stub_count": len(stub_details),
         "shaft_height_m": sum(row["height_m"] for row in shaft_details),
         "trench_excavation_m3": sum(row["excavation_volume_m3"] for row in canal_details),
         "shaft_pit_excavation_m3": sum(row["pit_volume_m3"] for row in shaft_details),
@@ -387,8 +418,11 @@ def analyze(canals, shafts, utility_lines,
     totals["shoring_total_m2"] = (totals["trench_shoring_m2"] +
                                    totals["shaft_pit_shoring_m2"])
     return {
-        "canal_summary": canal_summary, "utility_summary": utility_summary,
+        "canal_summary": canal_summary, "pipe_summary": pipe_summary,
+        "shaft_summary": shaft_summary, "stub_summary": stub_summary,
+        "utility_summary": utility_summary,
         "canals": tuple(canal_details), "shafts": tuple(shaft_details),
+        "stubs": tuple(stub_details),
         "utilities": tuple(utility_details), "earth_segments": tuple(earth_segments),
         "totals": totals, "warnings": tuple(dict.fromkeys(warnings)),
     }
@@ -419,6 +453,60 @@ def _canal_summary(canals, shafts):
             "trench_shoring_m2": sum(row["shoring_area_m2"] for row in pipe_rows),
         })
     return tuple(result)
+
+
+def _pipe_summary(canals):
+    """Group equal canal pipes by canal type, DN and material."""
+    keys = sorted({(row["kind"], row["dn_mm"], row["material"]) for row in canals})
+    return tuple({
+        "kind": kind, "dn_mm": dn, "material": material,
+        "holding_count": len({row["name"] for row in rows}),
+        "length_2d_m": sum(row["length_2d_m"] for row in rows),
+        "length_3d_m": sum(row["length_3d_m"] for row in rows),
+        "trench_excavation_m3": sum(row["excavation_volume_m3"] for row in rows),
+        "trench_shoring_m2": sum(row["shoring_area_m2"] for row in rows),
+    } for key in keys
+      for kind, dn, material in (key,)
+      for rows in ([row for row in canals
+                    if (row["kind"], row["dn_mm"], row["material"]) == key],))
+
+
+def _shaft_summary(shafts):
+    """Group equal shaft structures without exposing internal object ids."""
+    keys = sorted({(
+        row["kind"], row["structure_type"], row["construction_material"],
+        row["inside_diameter_m"]) for row in shafts})
+    return tuple({
+        "kind": kind, "structure_type": structure_type,
+        "construction_material": material, "inside_diameter_m": diameter,
+        "shaft_count": len(rows),
+        "shaft_height_m": sum(row["height_m"] for row in rows),
+        "inlets_0": sum(row["inlets"] == 0 for row in rows),
+        "inlets_1": sum(row["inlets"] == 1 for row in rows),
+        "inlets_2": sum(row["inlets"] == 2 for row in rows),
+        "inlets_3": sum(row["inlets"] == 3 for row in rows),
+        "inlets_4_plus": sum(row["inlets"] >= 4 for row in rows),
+        "pit_excavation_m3": sum(row["pit_volume_m3"] for row in rows),
+        "pit_shoring_m2": sum(row["pit_shoring_area_m2"] for row in rows),
+    } for key in keys
+      for kind, structure_type, material, diameter in (key,)
+      for rows in ([row for row in shafts if (
+          row["kind"], row["structure_type"], row["construction_material"],
+          row["inside_diameter_m"]) == key],))
+
+
+def _stub_summary(stubs):
+    """Count canal stubs independently from the connected branch pipes."""
+    keys = sorted({(
+        row["kind"], row["dn_mm"], row["material"], row["alignment"])
+        for row in stubs})
+    return tuple({
+        "kind": kind, "dn_mm": dn, "material": material,
+        "alignment": alignment,
+        "stub_count": sum(1 for row in stubs if (
+            row["kind"], row["dn_mm"], row["material"], row["alignment"]) == key),
+    } for key in keys
+      for kind, dn, material, alignment in (key,))
 
 
 def _utility_summary(lines):

@@ -18,13 +18,13 @@ def action_dialog(has_worksheet, warning_count=0):
     vs.CreateStaticText(
         dialog, 11,
         "Die Mengen werden unmittelbar aus den verwalteten Kanal- und Leitungsobjekten neu berechnet. "
-        "Ein vorhandenes Vectorworks-Arbeitsblatt wird nach erfolgreichen Objektänderungen automatisch aktualisiert.", 82)
+        "Die getrennten Summen- und Detail-Arbeitsblätter werden nach erfolgreichen Objektänderungen automatisch aktualisiert.", 82)
     vs.CreateStaticText(dialog, 12, "Ausgabe:", -1)
     vs.CreatePullDownMenu(dialog, 13, 58)
     vs.CreateStaticText(
         dialog, 14,
-        ("Das laufende Arbeitsblatt ist bereits vorhanden." if has_worksheet else
-         "Beim ersten Aufruf wird das laufende Arbeitsblatt angelegt."), 72)
+        ("Mindestens eines der laufenden Arbeitsblätter ist bereits vorhanden." if has_worksheet else
+         "Beim ersten Aufruf werden Summen- und Detail-Arbeitsblatt angelegt."), 72)
     vs.CreateStaticText(dialog, 15, "%d Prüfhinweis(e) in der aktuellen Berechnung." % warning_count, 72)
     vs.SetFirstLayoutItem(dialog, 10)
     vs.SetBelowItem(dialog, 10, 11, 0, 6)
@@ -32,9 +32,9 @@ def action_dialog(has_worksheet, warning_count=0):
     vs.SetRightItem(dialog, 12, 13, 8, 0)
     vs.SetBelowItem(dialog, 12, 14, 0, 6)
     vs.SetBelowItem(dialog, 14, 15, 0, 4)
-    actions = (("Arbeitsblatt aktualisieren und öffnen", "worksheet"),
+    actions = (("Summen- und Detail-Arbeitsblätter aktualisieren", "worksheet"),
                ("Excel-Datei exportieren", "xlsx"),
-               ("Arbeitsblatt aktualisieren und Excel exportieren", "both"))
+               ("Arbeitsblätter aktualisieren und Excel exportieren", "both"))
     result = {"value": None}
 
     def handler(item, _data):

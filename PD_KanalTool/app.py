@@ -397,7 +397,16 @@ def _shaft_sheets(preferences, managed):
             "Die erste Seite ist zur Vorschau geöffnet." % len(layer_names))
 
 
+_QUANTITY_MUTATIONS = frozenset((
+    "sources", "draw", "edit", "split", "connect", "connect_shafts", "stub",
+    "special", "drop", "floor_drain", "house", "merge", "delete",
+    "terrain_covers", "settings", "smart",
+))
+
+
 def run(action=None):
+    quantity_reporting = None
+    quantity_batch = False
     try:
         adapter.cancel_point_input()
         preferences = sewer_settings.load()
@@ -414,6 +423,10 @@ def run(action=None):
                 selected_pipe_count)
         if action is None:
             return
+        if action in _QUANTITY_MUTATIONS:
+            from PD_KanalLeitungMengen import reporting as quantity_reporting
+            quantity_reporting.begin_changes()
+            quantity_batch = True
         if action == "sources":
             if not sources:
                 raise core.SewerError(
@@ -497,10 +510,13 @@ def run(action=None):
                 _create(preferences)
         else:
             raise core.SewerError("Unbekannte Kanalaktion.")
-        if action != "quantities":
-            from PD_KanalLeitungMengen import reporting as quantity_reporting
-            quantity_reporting.refresh_existing(force=True)
+        if quantity_batch:
+            quantity_reporting.end_changes(refresh=True)
+            quantity_batch = False
     except (core.SewerError, RuntimeError, ValueError) as error:
         adapter.alert(error)
     except Exception as error:
         adapter.alert("Kanalanlage: unerwarteter Fehler: %s" % error)
+    finally:
+        if quantity_batch:
+            quantity_reporting.end_changes(refresh=False)

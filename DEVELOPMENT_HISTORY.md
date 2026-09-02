@@ -91,3 +91,12 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   Erzeugungs-, Beschriftungs- und Höhenfanggrenzen sicher behandelt. Ein
   vollständiger Ketten-Render-Test bildet genau diese verzögerte native
   Rückgabe nach.
+- Kanaltool 1.1.4 / Leitungstool 1.0.2 / Mengenausgabe 1.1.1: Änderungen an
+  Material und anderen Kanal-/Leitungseigenschaften lösen bei einem
+  zusammengesetzten Vorgang nur noch einen Tabellenneuaufbau aus;
+  Beschriftungs-Resets stoßen keine Mengenermittlung mehr an. Die Ausgabe
+  besitzt ein separates reines Summenblatt für gruppierte Kanalrohre nach Art,
+  DN und Material, Kanalstutzen, Schächte, Leitungen, Erdmassen und Verbau.
+  Interne Objekt- und Netz-IDs wurden aus allen sichtbaren Tabellen entfernt.
+  Der Excel-Pfad erhält zuverlässig die Endung `.xlsx`; die erzeugte Datei wird
+  in der Regression als OOXML und zusätzlich mit Microsoft Excel geprüft.

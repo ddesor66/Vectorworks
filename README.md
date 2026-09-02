@@ -2,8 +2,9 @@
 
 Quellstand der Vectorworks-2026-Plug-ins aus der Gesamtinstallation **1.30.22**.
 
-Der Branch `main` enthält darüber hinaus die weiterentwickelte Kanal- und
-Mengenausgabe 1.1.0. Die Änderungen sind in `ST_COMPARISON.md` dokumentiert.
+Der Branch `main` enthält darüber hinaus das weiterentwickelte Kanaltool 1.1.4,
+das Leitungsmodul 1.0.2 und die Mengenausgabe 1.1.1. Die Änderungen sind in
+`ST_COMPARISON.md` und `DEVELOPMENT_HISTORY.md` dokumentiert.
 
 ## Herkunft und Integritaet
 

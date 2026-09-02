@@ -55,10 +55,13 @@ def run():
             vs.vsoAppendWidget(12, widget, title, 0)
         return
     if event == 3:
+        valid, _name, handle, _record, _wall = vs.GetCustomObjectInfo()
         live.reset()
         try:
-            from PD_KanalLeitungMengen import reporting as quantity_reporting
-            quantity_reporting.refresh_existing()
+            data = live_objects.data_of(handle) if valid and handle else None
+            if data and data.get("role") in ("sewer_pipe", "sewer_shaft"):
+                from PD_KanalLeitungMengen import reporting as quantity_reporting
+                quantity_reporting.refresh_existing()
         except Exception:
             pass
         return

@@ -1,4 +1,4 @@
-# PD Kanaltool 1.1.3
+# PD Kanaltool 1.1.4
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und

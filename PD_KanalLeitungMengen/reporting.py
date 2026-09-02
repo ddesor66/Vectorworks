@@ -19,8 +19,11 @@ from . import core
 
 
 WORKSHEET_NAME = "PD Kanal- und Leitungsmengen"
+SUMMARY_WORKSHEET_NAME = "PD Kanal- und Leitungssummen"
 _REFRESHING = False
 _LAST_REFRESH = None
+_SUSPEND_DEPTH = 0
+_PENDING_REFRESH = False
 
 
 def _interpolate(stations, values, targets):
@@ -84,10 +87,10 @@ def _style_row(values, style):
     return [styled(value, style) for value in values]
 
 
-def xlsx_sheets(report):
+def summary_sheet(report):
     totals = report["totals"]
-    overview = [
-        _style_row(("KANAL- UND LEITUNGSMENGEN", "Wert", "Einheit"), STYLE_HEADER),
+    rows = [
+        _style_row(("KANAL- UND LEITUNGSSUMMEN", "Wert", "Einheit"), STYLE_HEADER),
         ("Dokument", report["metadata"]["document"], ""),
         ("Berechnungsstand", report["metadata"]["created"], ""),
         ("Kanal-Achslänge 2D", styled(totals["canal_length_2d_m"], STYLE_NUMBER), "m"),
@@ -95,6 +98,7 @@ def xlsx_sheets(report):
         ("Versorgungsleitungen 2D", styled(totals["utility_length_2d_m"], STYLE_NUMBER), "m"),
         ("Versorgungsleitungen 3D", styled(totals["utility_length_3d_m"], STYLE_NUMBER), "m"),
         ("Schächte", styled(totals["shaft_count"], STYLE_INTEGER), "Stk."),
+        ("Kanalstutzen", styled(totals["stub_count"], STYLE_INTEGER), "Stk."),
         ("Summe Schachthöhen KD-KS", styled(totals["shaft_height_m"], STYLE_NUMBER), "m"),
         ("Aushub Rohrgräben", styled(totals["trench_excavation_m3"], STYLE_NUMBER), "m³"),
         ("Aushub Schachtbaugruben", styled(totals["shaft_pit_excavation_m3"], STYLE_NUMBER), "m³"),
@@ -103,24 +107,63 @@ def xlsx_sheets(report):
         ("Verbau Schachtbaugruben", styled(totals["shaft_pit_shoring_m2"], STYLE_NUMBER), "m²"),
         _style_row(("Verbau gesamt", totals["shoring_total_m2"], "m²"), STYLE_TOTAL),
         (),
-        _style_row(("KANALART", "DN", "Material", "Länge 2D [m]", "Länge 3D [m]",
-                    "Schächte", "Schachthöhe [m]", "0 Zul.", "1 Zul.", "2 Zul.",
-                    "3 Zul.", "4+ Zul.", "Aushub [m³]", "Verbau [m²]"), STYLE_HEADER),
+        _style_row(("KANALROHRE", "DN", "Material", "Haltungen", "Länge 2D [m]",
+                    "Länge 3D [m]", "Aushub [m³]", "Verbau [m²]"), STYLE_HEADER),
     ]
-    for row in report["canal_summary"]:
-        overview.append((row["kind"], row["dn_mm"], row["material"],
-                         row["length_2d_m"], row["length_3d_m"], row["shaft_count"],
-                         row["shaft_height_m"], row["inlets_0"], row["inlets_1"],
-                         row["inlets_2"], row["inlets_3"], row["inlets_4_plus"],
-                         row["trench_excavation_m3"], row["trench_shoring_m2"]))
-    overview.extend(((), _style_row(
+    for row in report["pipe_summary"]:
+        rows.append((row["kind"], row["dn_mm"], row["material"], row["holding_count"],
+                     row["length_2d_m"], row["length_3d_m"],
+                     row["trench_excavation_m3"], row["trench_shoring_m2"]))
+
+    rows.extend(((), _style_row(
+        ("KANALSTUTZEN", "DN", "Material", "Anschlussart", "Anzahl"),
+        STYLE_HEADER)))
+    alignment_labels = {
+        "invert": "Sohlgleich", "axis": "Achsgleich",
+        "springline": "Kämpfergleich", "crown": "Scheitelgleich",
+    }
+    for row in report["stub_summary"]:
+        rows.append((row["kind"], row["dn_mm"], row["material"],
+                     alignment_labels.get(row["alignment"], row["alignment"]),
+                     row["stub_count"]))
+
+    rows.extend(((), _style_row(
+        ("SCHÄCHTE", "Bauform", "Material", "Innen-Ø [m]", "Anzahl",
+         "Gesamthöhe [m]", "0 Zul.", "1 Zul.", "2 Zul.", "3 Zul.",
+         "4+ Zul.", "Aushub [m³]", "Verbau [m²]"), STYLE_HEADER)))
+    for row in report["shaft_summary"]:
+        rows.append((
+            row["kind"], row["structure_type"], row["construction_material"],
+            row["inside_diameter_m"], row["shaft_count"], row["shaft_height_m"],
+            row["inlets_0"], row["inlets_1"], row["inlets_2"], row["inlets_3"],
+            row["inlets_4_plus"], row["pit_excavation_m3"], row["pit_shoring_m2"]))
+
+    rows.extend(((), _style_row(
         ("LEITUNGSTYP", "DN", "Material", "Einzelleitungen", "Länge 2D [m]", "Länge 3D [m]"),
         STYLE_HEADER)))
     for row in report["utility_summary"]:
-        overview.append((row["utility_type"], row["dn_mm"], row["material"],
-                         row["line_count"], row["length_2d_m"], row["length_3d_m"]))
+        rows.append((row["utility_type"], row["dn_mm"], row["material"],
+                     row["line_count"], row["length_2d_m"], row["length_3d_m"]))
 
-    canal_headers = ("ID", "Netz", "Art", "DN", "OD [mm]", "Wand [mm]", "3D hohl",
+    rows.extend(((), _style_row(
+        ("ERDMASSEN UND VERBAU", "Menge", "Einheit"), STYLE_HEADER),
+        ("Aushub Rohrgräben", totals["trench_excavation_m3"], "m³"),
+        ("Aushub Schachtbaugruben", totals["shaft_pit_excavation_m3"], "m³"),
+        _style_row(("Aushub gesamt", totals["earthwork_total_m3"], "m³"), STYLE_TOTAL),
+        ("Verbau Rohrgräben", totals["trench_shoring_m2"], "m²"),
+        ("Verbau Schachtbaugruben", totals["shaft_pit_shoring_m2"], "m²"),
+        _style_row(("Verbau gesamt", totals["shoring_total_m2"], "m²"), STYLE_TOTAL),
+    ))
+    return {
+        "name": "00_Summen", "rows": rows,
+        "widths": (36, 22, 18, 18, 18, 18, 16, 16, 13, 13, 13, 18, 18),
+        "freeze_rows": 1,
+    }
+
+
+def detail_sheets(report):
+
+    canal_headers = ("Haltung", "Art", "DN", "OD [mm]", "Wand [mm]", "3D hohl",
                      "OD bestätigt", "Material", "Von", "Nach",
                      "X A [m]", "Y A [m]", "X E [m]", "Y E [m]",
                      "Sohle A [m]", "Sohle E [m]", "Achse A [m]", "Achse E [m]", "Gefälle [%]", "Tiefe A [m]",
@@ -131,7 +174,7 @@ def xlsx_sheets(report):
                      "Aushub [m³]", "Verbau [m²]")
     canal_rows = [_style_row(canal_headers, STYLE_HEADER)]
     for row in report["canals"]:
-        canal_rows.append((row["id"], row["network_id"], row["kind"], row["dn_mm"],
+        canal_rows.append((row["name"], row["kind"], row["dn_mm"],
                            row["outside_diameter_mm"], row["wall_thickness_mm"],
                            "Ja" if row["hollow_3d"] else "Nein",
                            "Ja" if row["outside_diameter_explicit"] else "NEIN",
@@ -145,14 +188,14 @@ def xlsx_sheets(report):
                            row["minimum_excavation_width_m"], row["maximum_excavation_width_m"],
                            row["excavation_volume_m3"], row["shoring_area_m2"]))
 
-    shaft_headers = ("ID", "Schacht", "Kanalart", "Bauform", "Material", "Innen-Ø [m]",
+    shaft_headers = ("Schacht", "Kanalart", "Bauform", "Material", "Innen-Ø [m]",
                      "Wand [m]", "Außenbreite [m]", "Außenlänge [m]", "KD [m]", "KS [m]",
                      "Höhe KD-KS [m]", "Zuläufe", "Abläufe", "Baugrube licht B [m]",
                      "Baugrube licht L [m]", "Aushubmaß B [m]", "Aushubmaß L [m]",
                      "Aushub [m³]", "Verbau [m²]")
     shaft_rows = [_style_row(shaft_headers, STYLE_HEADER)]
     for row in report["shafts"]:
-        shaft_rows.append((row["id"], row["name"], row["kind"], row["structure_type"],
+        shaft_rows.append((row["name"], row["kind"], row["structure_type"],
                            row["construction_material"], row["inside_diameter_m"],
                            row["wall_thickness_m"], row["body_width_m"], row["body_height_m"],
                            row["kd_m"], row["ks_m"], row["height_m"], row["inlets"], row["outlets"],
@@ -160,11 +203,11 @@ def xlsx_sheets(report):
                            row["pit_excavation_width_m"], row["pit_excavation_height_m"],
                            row["pit_volume_m3"], row["pit_shoring_area_m2"]))
 
-    utility_headers = ("ID", "Trasse-ID", "Trasse", "Leitungstyp", "DN", "OD [mm]",
+    utility_headers = ("Trasse", "Leitungstyp", "DN", "OD [mm]",
                        "OD bestätigt", "Material", "Länge 2D [m]", "Länge 3D [m]")
     utility_rows = [_style_row(utility_headers, STYLE_HEADER)]
     for row in report["utilities"]:
-        utility_rows.append((row["id"], row["route_id"], row["route_name"], row["utility_type"],
+        utility_rows.append((row["route_name"], row["utility_type"],
                              row["dn_mm"], row["outside_diameter_mm"],
                              "Ja" if row["outside_diameter_explicit"] else "NEIN",
                              row["material"], row["length_2d_m"], row["length_3d_m"]))
@@ -175,7 +218,7 @@ def xlsx_sheets(report):
                      "Aushub [m³]", "Verbau [m²]")
     earth_rows = [_style_row(earth_headers, STYLE_HEADER)]
     for row in report["earth_segments"]:
-        earth_rows.append((row["pipe_id"], row["kind"], row["dn_mm"],
+        earth_rows.append((row["pipe_name"], row["kind"], row["dn_mm"],
                            row["outside_diameter_mm"], row["material"], row["segment"],
                            row["station_start_m"], row["station_end_m"], row["length_m"],
                            row["depth_start_m"], row["depth_end_m"], row["clear_width_m"],
@@ -201,13 +244,16 @@ def xlsx_sheets(report):
         notes.append(("OK", "Keine unvollständigen Mengengrundlagen erkannt."))
 
     return [
-        {"name": "00_Uebersicht", "rows": overview, "widths": (36, 22, 16, 18, 18, 16, 18, 13, 13, 13, 13, 13, 18, 18), "freeze_rows": 1},
-        {"name": "01_Kanalhaltungen", "rows": canal_rows, "widths": (38, 20, 12, 10) + (14,) * 28, "freeze_rows": 1},
-        {"name": "02_Schaechte", "rows": shaft_rows, "widths": (38, 18, 12, 18, 16) + (15,) * 15, "freeze_rows": 1},
-        {"name": "03_Leitungen", "rows": utility_rows, "widths": (38, 38, 24, 24, 10, 12, 14, 18, 18, 18), "freeze_rows": 1},
+        {"name": "01_Kanalhaltungen", "rows": canal_rows, "widths": (26, 12, 10) + (14,) * 28, "freeze_rows": 1},
+        {"name": "02_Schaechte", "rows": shaft_rows, "widths": (18, 12, 18, 16) + (15,) * 15, "freeze_rows": 1},
+        {"name": "03_Leitungen", "rows": utility_rows, "widths": (24, 24, 10, 12, 14, 18, 18, 18), "freeze_rows": 1},
         {"name": "04_Erdmassen", "rows": earth_rows, "widths": (38, 12, 10, 12, 16, 12) + (16,) * 9, "freeze_rows": 1},
         {"name": "05_Annahmen_Pruefung", "rows": notes, "widths": (28, 90), "freeze_rows": 1},
     ]
+
+
+def xlsx_sheets(report):
+    return [summary_sheet(report)] + detail_sheets(report)
 
 
 def export_xlsx(path, report=None):
@@ -222,8 +268,8 @@ def default_xlsx_name():
         base, datetime.datetime.now().strftime("%Y%m%d_%H%M"))
 
 
-def worksheet_rows(report):
-    sheets = xlsx_sheets(report)
+def worksheet_rows(report, summary=False):
+    sheets = [summary_sheet(report)] if summary else detail_sheets(report)
     result = []
     for spec in sheets:
         result.append({"kind": "section", "values": (spec["name"].replace("_", " "),)})
@@ -294,22 +340,20 @@ def _populate(ws, rows):
         vs.SetWSAutoRecalcState(ws, original)
 
 
-def update_worksheet(report=None, show=True):
-    report = report or collect_live()
-    rows = worksheet_rows(report)
+def _update_named_worksheet(name, rows, show=False):
     columns = max([len(row["values"]) for row in rows] or [1])
-    temporary = vs.CreateWS(WORKSHEET_NAME + " – Prüfung", len(rows), columns)
+    temporary = vs.CreateWS(name + " – Prüfung", len(rows), columns)
     if not temporary:
         raise RuntimeError("Das Mengen-Arbeitsblatt konnte nicht vorbereitet werden.")
     try:
         _populate(temporary, rows)
-        existing = vs.GetObject(WORKSHEET_NAME)
+        existing = vs.GetObject(name)
         if existing:
             _populate(existing, rows)
             vs.DelObject(temporary)
             worksheet = existing
         else:
-            vs.SetName(temporary, WORKSHEET_NAME)
+            vs.SetName(temporary, name)
             worksheet = temporary
         image = vs.GetWSImage(worksheet)
         if image:
@@ -320,16 +364,51 @@ def update_worksheet(report=None, show=True):
     except Exception:
         if temporary:
             try:
-                vs.SetName(temporary, WORKSHEET_NAME + " – Wiederherstellung")
+                vs.SetName(temporary, name + " – Wiederherstellung")
             except Exception:
                 pass
         raise
 
 
+def update_worksheet(report=None, show=True):
+    """Update the detail report and the separate summary-only worksheet."""
+    report = report or collect_live()
+    detail = _update_named_worksheet(
+        WORKSHEET_NAME, worksheet_rows(report, summary=False), show=False)
+    summary = _update_named_worksheet(
+        SUMMARY_WORKSHEET_NAME, worksheet_rows(report, summary=True), show=show)
+    return summary if show else detail
+
+
+def begin_changes():
+    """Suspend expensive worksheet rebuilds during one compound command."""
+    global _SUSPEND_DEPTH
+    _SUSPEND_DEPTH += 1
+
+
+def end_changes(refresh=False):
+    """Resume reporting and perform at most one pending rebuild."""
+    global _SUSPEND_DEPTH, _PENDING_REFRESH
+    if _SUSPEND_DEPTH <= 0:
+        return False
+    _SUSPEND_DEPTH -= 1
+    if _SUSPEND_DEPTH:
+        if refresh:
+            _PENDING_REFRESH = True
+        return False
+    pending = bool(refresh or _PENDING_REFRESH)
+    _PENDING_REFRESH = False
+    return refresh_existing(force=True) if pending else False
+
+
 def refresh_existing(force=False):
     """Refresh an already-created report; never creates one implicitly."""
-    global _REFRESHING, _LAST_REFRESH
-    if _REFRESHING or not vs.GetObject(WORKSHEET_NAME):
+    global _REFRESHING, _LAST_REFRESH, _PENDING_REFRESH
+    if _SUSPEND_DEPTH:
+        _PENDING_REFRESH = True
+        return False
+    if _REFRESHING or not (
+            vs.GetObject(WORKSHEET_NAME) or vs.GetObject(SUMMARY_WORKSHEET_NAME)):
         return False
     now = datetime.datetime.now()
     if (not force and _LAST_REFRESH is not None and
@@ -338,7 +417,10 @@ def refresh_existing(force=False):
     _REFRESHING = True
     try:
         update_worksheet(show=False)
-        _LAST_REFRESH = now
+        # Measure the cooldown from the completed rebuild.  A large report may
+        # itself take longer than the cooldown; using its start time would let
+        # the following reset event immediately rebuild the same report again.
+        _LAST_REFRESH = datetime.datetime.now()
         return True
     finally:
         _REFRESHING = False
