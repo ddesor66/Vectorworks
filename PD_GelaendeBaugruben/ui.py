@@ -102,15 +102,24 @@ def source_options(defaults=None):
     vs.CreateEditText(dialog, 26, defaults.get("model_name", "DGM Bestand"), 36)
     vs.CreateEditText(dialog, 27, defaults.get("model_class", "PD-GB-Gelaendemodell"), 36)
     vs.CreateEditReal(dialog, 28, 1, defaults.get("contour_interval_m", 0.5), 14)
+    vs.CreateCheckBox(dialog, 29,
+        "Unabhängig von der Markierung alle Objekte der aktiven Ebene prüfen")
+    vs.SetBooleanItem(dialog, 29, defaults.get("all_active_layer", False))
+    vs.CreateCheckBox(dialog, 31,
+        "Erstes markiertes geschlossenes 2D-Polygon als Modellbegrenzung verwenden")
+    vs.SetBooleanItem(dialog, 31, defaults.get("use_selected_boundary", False))
     vs.CreateStaticText(dialog, 30,
-        "Vor dem Start geeignete 3D-Objekte markieren. Ein zusätzlich markiertes geschlossenes "
-        "Polygon wird als optionale Modellbegrenzung verwendet und nicht verändert.", 70)
+        "Standardmäßig werden sämtliche markierten 3D-Objekte einschließlich Gruppeninhalten "
+        "geprüft. Die optionale Ebenenprüfung nimmt zusätzlich unmarkierte Objekte auf. Ohne "
+        "aktivierte Begrenzungsoption schneidet keine geschlossene Fremdgeometrie Quelldaten ab.", 70)
     vs.SetFirstLayoutItem(dialog, 10)
     for label, field in zip(range(10, 19), range(20, 29)):
         vs.SetRightItem(dialog, label, field, 10, 0)
         if label < 18:
             vs.SetBelowItem(dialog, label, label + 1, 0, 8)
-    vs.SetBelowItem(dialog, 18, 30, 0, 14)
+    vs.SetBelowItem(dialog, 18, 29, 0, 14)
+    vs.SetBelowItem(dialog, 29, 31, 0, 8)
+    vs.SetBelowItem(dialog, 31, 30, 0, 12)
     vs.SetBelowItem(dialog, 30, BACK, 0, 14)
     state = {"result": None, "back": False}
 
@@ -129,6 +138,8 @@ def source_options(defaults=None):
                 "model_name": _text(dialog, 26),
                 "model_class": _text(dialog, 27),
                 "contour_interval_m": _real(dialog, 28, "Höhenlinien-Äquidistanz", 0.001),
+                "all_active_layer": bool(vs.GetBooleanItem(dialog, 29)),
+                "use_selected_boundary": bool(vs.GetBooleanItem(dialog, 31)),
             }
         return item
     if not vs.VerifyLayout(dialog):

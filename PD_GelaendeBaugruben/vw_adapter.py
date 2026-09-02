@@ -116,6 +116,38 @@ def selected_handles():
         vs.ForEachObjectInLayer(collect, 2, 2, 1)
     except (AttributeError, TypeError):
         pass
+    # Large imported selections can be truncated by all selection iterators
+    # (1,024 handles observed). Enumerate every object and inspect its selection
+    # flag individually so no selected 3D source is lost at that iterator limit.
+    def collect_if_selected(handle):
+        try:
+            if vs.Selected(handle):
+                collect(handle)
+        except (AttributeError, TypeError):
+            pass
+    try:
+        vs.ForEachObjectInLayer(collect_if_selected, 0, 2, 1)
+    except (AttributeError, TypeError):
+        pass
+    return tuple(result)
+
+
+def active_layer_handles():
+    """Return every object on the active layer, including nested containers."""
+    result = []
+    seen = set()
+
+    def collect(handle):
+        if handle and handle not in seen:
+            seen.add(handle)
+            result.append(handle)
+    try:
+        # objOptions 0 = all objects; traversal 2 = groups deeply;
+        # layerOptions 0 = active layer only.
+        vs.ForEachObjectInLayer(collect, 0, 2, 0)
+    except (AttributeError, TypeError) as error:
+        raise core.TerrainError(
+            "Die Objekte der aktiven Ebene konnten nicht vollständig gelesen werden.") from error
     return tuple(result)
 
 
@@ -198,24 +230,31 @@ def _source_element(handle, factor, chord_tolerance_m):
                 "kind": "contour" if vs.IsPolyClosed(handle) else "breakline",
                 "points": points, "class": class_name, "layer": layer_name}
     if object_type in (TYPE_PARAMETRIC, TYPE_SYMBOL):
-        record = vs.GetParametricRecord(handle)
-        plug_in = str(vs.GetName(record) if record else "").casefold()
+        try:
+            record = vs.GetParametricRecord(handle)
+            plug_in = str(vs.GetName(record) if record else "").casefold()
+        except (AttributeError, TypeError):
+            plug_in = ""
         if (object_type == TYPE_SYMBOL or "stake" in plug_in or
                 "vermessung" in plug_in or "survey" in plug_in or
                 "hoehe" in plug_in or "höhe" in plug_in or
                 "point" in plug_in or "punkt" in plug_in):
-            x, y, z = vs.GetSymLoc3D(handle)
-            return {"id": identifier, "kind": "point",
-                    "points": ((x * factor, y * factor, (z + layer_z) * factor),),
-                    "class": class_name, "layer": layer_name}
-        return None
+            try:
+                x, y, z = vs.GetSymLoc3D(handle)
+                return {"id": identifier, "kind": "point",
+                        "points": ((x * factor, y * factor, (z + layer_z) * factor),),
+                        "class": class_name, "layer": layer_name}
+            except (AttributeError, TypeError, ValueError):
+                pass
     # Imported 2D and layer-plane geometry often has no 3D centre although its
     # layer elevation is a valid terrain height. Do not reject it for that.
+    has_3d_center = False
     try:
         center = vs.Get3DCntr(handle)
         if not isinstance(center, (tuple, list)) or len(center) < 3:
             raise ValueError("kein 3D-Mittelpunkt")
         z_value = (float(center[2]) + layer_z) * factor
+        has_3d_center = True
     except (TypeError, ValueError, IndexError):
         center = (0.0, 0.0, 0.0)
         z_value = layer_z * factor
@@ -245,7 +284,8 @@ def _source_element(handle, factor, chord_tolerance_m):
     if object_type in (TYPE_POLYGON, TYPE_POLYLINE):
         points = tuple((float(x) * factor, float(y) * factor, z_value)
                        for x, y in (vs.GetPolyPt(handle, index)
-                                    for index in range(int(vs.GetVertNum(handle) or 0))))
+                                    for index in range(
+                                        1, int(vs.GetVertNum(handle) or 0) + 1)))
         return {"id": identifier,
                 "kind": "contour" if vs.IsPolyClosed(handle) else "breakline",
                 "points": points, "class": class_name, "layer": layer_name}
@@ -257,6 +297,14 @@ def _source_element(handle, factor, chord_tolerance_m):
             return {"id": identifier, "kind": "curve",
                     "points": tuple((x * factor, y * factor, z_value) for x, y in points_2d),
                     "class": class_name, "layer": layer_name}
+    # Any remaining selected object that Vectorworks locates in 3D still
+    # contributes a terrain support point instead of being discarded solely
+    # because its imported object type has no dedicated converter.
+    if has_3d_center:
+        return {"id": identifier, "kind": "point",
+                "points": ((float(center[0]) * factor, float(center[1]) * factor,
+                            z_value),),
+                "class": class_name, "layer": layer_name}
     return None
 
 
@@ -296,7 +344,11 @@ def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
     """Expand containers and vertex collections into normalized source elements."""
     object_type = int(vs.GetTypeN(handle) or 0)
     if object_type == TYPE_MESH:
-        return _mesh_source_elements(handle, factor)
+        values = _mesh_source_elements(handle, factor)
+        if values:
+            return values
+        fallback = _source_element(handle, factor, chord_tolerance_m)
+        return (fallback,) if fallback else ()
     if object_type == TYPE_NURBS_CURVE:
         identifier = _identifier(handle)
         class_name, layer_name = _context(handle)
@@ -309,7 +361,8 @@ def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
         if len(points) >= 2:
             return ({"id": identifier, "kind": "breakline", "points": points,
                      "class": class_name, "layer": layer_name},)
-        return ()
+        fallback = _source_element(handle, factor, chord_tolerance_m)
+        return (fallback,) if fallback else ()
     if object_type == TYPE_GROUP:
         identity = _identifier(handle)
         if identity in ancestry:
@@ -318,7 +371,10 @@ def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
         for child in _contained_handles(handle):
             result.extend(_source_elements(
                 child, factor, chord_tolerance_m, ancestry + (identity,)))
-        return tuple(result)
+        if result:
+            return tuple(result)
+        fallback = _source_element(handle, factor, chord_tolerance_m)
+        return (fallback,) if fallback else ()
     element = _source_element(handle, factor, chord_tolerance_m)
     return (element,) if element else ()
 
@@ -330,7 +386,8 @@ def selected_boundary(handles=None):
         if object_type in (TYPE_POLYGON, TYPE_POLYLINE) and vs.IsPolyClosed(handle):
             points = tuple((float(x) * factor, float(y) * factor)
                            for x, y in (vs.GetPolyPt(handle, index)
-                                        for index in range(int(vs.GetVertNum(handle) or 0))))
+                                        for index in range(
+                                            1, int(vs.GetVertNum(handle) or 0) + 1)))
             return handle, core.normalize_polygon(points)
     return None, None
 
@@ -347,12 +404,24 @@ def selected_boundaries(handles=None):
 
 def extract_selected_sources(chord_tolerance_m=core.DEFAULT_CHORD_TOLERANCE_M,
                              ignore_handle=None):
+    return extract_sources(selected_handles(), chord_tolerance_m, ignore_handle)
+
+
+def extract_sources(handles, chord_tolerance_m=core.DEFAULT_CHORD_TOLERANCE_M,
+                    ignore_handle=None):
     factor = units_to_meters()
     result, unsupported = [], []
-    for handle in selected_handles():
+    for handle in tuple(handles or ()):
         if handle == ignore_handle:
             continue
-        elements = _source_elements(handle, factor, chord_tolerance_m)
+        try:
+            elements = _source_elements(handle, factor, chord_tolerance_m)
+        except Exception as error:
+            object_type = int(vs.GetTypeN(handle) or 0)
+            unsupported.append(dict(
+                id=_identifier(handle), type=object_type,
+                type_name=object_type_name(object_type), error=str(error)))
+            continue
         if elements:
             result.extend(elements)
         else:

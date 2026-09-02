@@ -29,21 +29,36 @@ def _preview_sources(options):
         raise core.TerrainError("Der gewünschte Geländemodellname fehlt.")
     if not str(options.get("model_class") or "").strip():
         raise core.TerrainError("Der gewünschte Geländemodell-Klassenname fehlt.")
-    boundaries = adapter.selected_boundaries()
+    selected = adapter.selected_handles()
+    boundaries = (adapter.selected_boundaries(selected)
+                  if options.get("use_selected_boundary", False) else ())
     boundary_handle, boundary = boundaries[0] if boundaries else (None, None)
-    sources, unsupported = adapter.extract_selected_sources(
-        options["chord_tolerance_m"], boundary_handle)
+    all_active_layer = options.get("all_active_layer", False)
+    handles = adapter.active_layer_handles() if all_active_layer else selected
+    if not handles:
+        raise core.TerrainError(
+            "Auf der aktiven Ebene wurden keine Objekte gefunden." if all_active_layer else
+            "Es wurden keine Objekte markiert.")
+    sources, unsupported = adapter.extract_sources(
+        handles, options["chord_tolerance_m"], boundary_handle)
     review = core.review_sources(
         sources, options["xy_tolerance_m"], options["z_tolerance_m"], boundary,
         options["excluded_classes"], options["excluded_layers"])
     message = (
         "Quelldatenprüfung\n\n"
-        "Markierte Objekte: %d\nErkannte Quellen: %d\n"
+        "%s: %d\nErkannte Quellgeometrien: %d\n"
         "Verwendbar: %d\nAusgeschlossen: %d\nProbleme: %d\n"
         "Nicht unterstützte Objekte: %d\nVerwendbare Stützpunkte: %d" %
-        (review["input_count"] + len(unsupported), review["input_count"],
+        ("Geprüfte Objekte der aktiven Ebene" if all_active_layer else "Geprüfte markierte Objekte",
+         len(handles), review["input_count"],
          review["usable_count"], review["excluded_count"],
          review["problem_count"], len(unsupported), review["vertex_count"]))
+    if all_active_layer:
+        message += "\nErfassungsbereich: gesamte aktive Ebene einschließlich Gruppen"
+    else:
+        message += "\nErfassungsbereich: markierte Objekte"
+    message += ("\nModellbegrenzung: %s" %
+                ("markiertes Polygon" if boundary else "keine"))
     if unsupported:
         message += "\nNicht unterstützt nach Typ: " + _count_labels(unsupported, "type_name")
     if review["excluded"]:

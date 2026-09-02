@@ -23,7 +23,9 @@ class FakeVS(types.ModuleType):
     def GetSegPt1(self, handle): return self.points[handle][0][:2]
     def GetSegPt2(self, handle): return self.points[handle][1][:2]
     def GetVertNum(self, handle): return len(self.points[handle])
+    def GetPolyPt(self, handle, index): return self.points[handle][index - 1]
     def GetPolyPt3D(self, handle, index): return self.points[handle][index]
+    def IsPolyClosed(self, handle): return handle in getattr(self, "closed", ())
     def GetMeshVertsCnt(self, handle): return len(self.points[handle])
     def GetMeshVertex(self, handle, index): return self.points[handle][index]
     def FInGroup(self, handle): return self.children.get(handle, [None])[0]
@@ -40,11 +42,16 @@ class FakeVS(types.ModuleType):
             callback(handle)
 
     def Selected(self, handle):
-        return False
+        return handle in getattr(self, "selected_members", ())
 
     def ForEachObjectInLayer(self, callback, obj_options, traversal_options, layer_options):
         self.layer_search_options = (obj_options, traversal_options, layer_options)
-        for handle in getattr(self, "all_layer_selection", ()):
+        values = (getattr(self, "active_layer_objects", ())
+                  if (obj_options, traversal_options, layer_options) == (0, 2, 0)
+                  else getattr(self, "all_document_objects", ())
+                  if (obj_options, traversal_options, layer_options) == (0, 2, 1)
+                  else getattr(self, "all_layer_selection", ()))
+        for handle in values:
             callback(handle)
 
     def FSActLayer(self):
@@ -90,7 +97,28 @@ class Foreign3DTests(unittest.TestCase):
         adapter = load_adapter(fake)
         handles = adapter.selected_handles()
         self.assertEqual(6059, len(handles))
-        self.assertEqual((2, 2, 1), fake.layer_search_options)
+        self.assertEqual((0, 2, 1), fake.layer_search_options)
+
+    def test_complete_active_layer_is_independent_of_partial_selection(self):
+        fake = FakeVS()
+        fake.selection = tuple("object-%d" % index for index in range(95))
+        fake.active_layer_objects = tuple("object-%d" % index for index in range(6059))
+        adapter = load_adapter(fake)
+        handles = adapter.active_layer_handles()
+        self.assertEqual(6059, len(handles))
+        self.assertEqual((0, 2, 0), fake.layer_search_options)
+
+    def test_individual_selection_flags_recover_selection_iterator_limit(self):
+        fake = FakeVS()
+        fake.selection = tuple("object-%d" % index for index in range(95))
+        fake.active_selection = tuple("object-%d" % index for index in range(1024))
+        fake.all_layer_selection = tuple("object-%d" % index for index in range(1024))
+        fake.all_document_objects = tuple("object-%d" % index for index in range(7000))
+        fake.selected_members = set("object-%d" % index for index in range(6059))
+        adapter = load_adapter(fake)
+        handles = adapter.selected_handles()
+        self.assertEqual(6059, len(handles))
+        self.assertEqual(6059, len(set(handles)))
 
     def test_imported_arc_uses_direct_geometry_fallback(self):
         fake = FakeVS()
@@ -138,6 +166,24 @@ class Foreign3DTests(unittest.TestCase):
         elements = adapter._source_elements("curve", 1.0, 0.1)
         self.assertEqual(((0.0, 0.0, 1.0), (2.0, 0.0, 3.0)), elements[0]["points"])
 
+    def test_3d_polygon_keeps_every_zero_based_vertex(self):
+        fake = FakeVS()
+        fake.types["poly3d"] = 25
+        fake.points["poly3d"] = ((0.0, 0.0, 1.0), (2.0, 0.0, 2.0),
+                                 (2.0, 3.0, 4.0))
+        adapter = load_adapter(fake)
+        element = adapter._source_element("poly3d", 1.0, 0.1)
+        self.assertEqual(fake.points["poly3d"], element["points"])
+
+    def test_2d_polyline_reads_every_one_based_vertex(self):
+        fake = FakeVS()
+        fake.types["polyline"] = 21
+        fake.points["polyline"] = ((1.0, 2.0), (3.0, 4.0), (5.0, 6.0))
+        adapter = load_adapter(fake)
+        element = adapter._source_element("polyline", 1.0, 0.1)
+        self.assertEqual(((1.0, 2.0, 0.0), (3.0, 4.0, 0.0),
+                          (5.0, 6.0, 0.0)), element["points"])
+
     def test_group_expands_mesh_vertices_and_text(self):
         fake = FakeVS()
         fake.types.update(group=11, mesh=40, text=10)
@@ -148,6 +194,15 @@ class Foreign3DTests(unittest.TestCase):
         elements = adapter._source_elements("group", 1.0, 0.1)
         self.assertEqual(3, len(elements))
         self.assertEqual(["point", "point", "point"], [item["kind"] for item in elements])
+
+    def test_unknown_spatial_object_becomes_support_point(self):
+        fake = FakeVS()
+        fake.types["foreign-solid"] = 84
+        fake.points["foreign-solid"] = ((10.0, 20.0, 30.0),)
+        adapter = load_adapter(fake)
+        element = adapter._source_element("foreign-solid", 1.0, 0.1)
+        self.assertEqual("point", element["kind"])
+        self.assertEqual(((10.0, 20.0, 30.0),), element["points"])
 
 
 class ForeignGeometryRecoveryTests(unittest.TestCase):
