@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Lokale Vectorworks- und Lizenzdaten
+PD_Netzwerklizenz.json
+**/PD_Netzwerklizenz.json
+*.vwx
+*.bak
+
+# Lokale Einstellungen und Exporte
+.env
+.env.*
+*.log
+*.xlsx
+*.csv~
+
+# Betriebssystem und Editoren
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

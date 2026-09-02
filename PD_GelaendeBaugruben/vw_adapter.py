@@ -1,0 +1,597 @@
+# -*- coding: utf-8 -*-
+"""Verified Vectorworks 2026 boundary, source, site-model and output adapter."""
+from __future__ import absolute_import
+
+import json
+import math
+import uuid
+
+import vs
+
+from PD_ToolsPD.ddvw.vw import site_model
+
+from . import core
+
+
+TYPE_LINE = 2
+TYPE_ARC = 6
+TYPE_LOCUS_3D = 9
+TYPE_POLYGON = 5
+TYPE_POLYLINE = 21
+TYPE_POLYGON_3D = 25
+TYPE_PARAMETRIC = 86
+MODEL_RECORD = "PD_GB_Modell"
+MODEL_FIELD = "Daten"
+OUTPUT_RECORD = "PD_GB_Ausgabe"
+OUTPUT_FIELD = "Daten"
+CLASS_SOURCE_POINT = "PD-GB-Quelldaten-Punkt"
+CLASS_SOURCE_LINE = "PD-GB-Quelldaten-Bruchkante"
+CLASS_PIT = "PD-GB-Baugrube"
+CLASS_SLOPE = "PD-GB-Boeschung"
+CLASS_HATCH = "PD-GB-Boeschungsschraffur"
+CLASS_CONFLICT = "PD-GB-Konflikt"
+CLASS_GRID = "PD-GB-Raster"
+CLASS_CUT = "PD-GB-Abtrag"
+CLASS_FILL = "PD-GB-Auftrag"
+CLASS_TEXT = "PD-GB-Text"
+CLASS_NO_DATA = "PD-GB-Keine-Daten"
+
+
+def alert(message):
+    try:
+        vs.AlertInform(str(message), "", False)
+    except Exception:
+        vs.AlrtDialog(str(message))
+
+
+def confirm(question, advice=""):
+    return int(vs.AlertQuestion(str(question), str(advice), 0, "Weiter", "Abbrechen", "", "")) == 1
+
+
+def units_to_meters():
+    values = vs.GetUnits()
+    try:
+        units_per_inch = float(values[3])
+    except (TypeError, ValueError, IndexError) as error:
+        raise core.TerrainError("Dokumenteinheiten konnten nicht gelesen werden.") from error
+    if not math.isfinite(units_per_inch) or units_per_inch <= 0.0:
+        raise core.TerrainError("Die Dokumenteinheiten sind ungültig.")
+    return 0.0254 / units_per_inch
+
+
+def _layer_z_units(handle, factor):
+    layer = vs.GetLayer(handle)
+    if not layer:
+        return 0.0
+    value = vs.GetLayerElevation(layer)
+    try:
+        return float(value[0]) / 1000.0 / factor
+    except (TypeError, ValueError, IndexError):
+        return 0.0
+
+
+def selected_handles():
+    result = []
+
+    def collect(handle):
+        if vs.Selected(handle):
+            result.append(handle)
+    vs.ForEachObject(collect, "(SEL=TRUE)")
+    return tuple(result)
+
+
+def _identifier(handle):
+    value = str(vs.GetObjectUuid(handle) or "").strip()
+    return value or str(vs.GetName(handle) or "Objekt")
+
+
+def _context(handle):
+    layer = vs.GetLayer(handle)
+    return str(vs.GetClass(handle) or ""), str(vs.GetLName(layer) if layer else "")
+
+
+def object_label(handle):
+    name = str(vs.GetName(handle) or "").strip()
+    class_name, layer_name = _context(handle)
+    return name or "%s / %s" % (layer_name or "Ebene ?", class_name or "Klasse ?")
+
+
+def _sample_2d_path(handle, tolerance_doc):
+    length = float(vs.HLength(handle) or 0.0)
+    if length <= 0.0:
+        return ()
+    segments = max(1, min(10000, int(math.ceil(length / max(tolerance_doc, 1e-9)))))
+    result = []
+    for index in range(segments + 1):
+        value = vs.PointAlongPoly(handle, length * index / segments)
+        if not isinstance(value, (tuple, list)) or len(value) < 2 or not value[0]:
+            return ()
+        point = value[1]
+        if not isinstance(point, (tuple, list)) or len(point) < 2:
+            return ()
+        result.append((float(point[0]), float(point[1])))
+    return tuple(result)
+
+
+def _source_element(handle, factor, chord_tolerance_m):
+    object_type = int(vs.GetTypeN(handle) or 0)
+    identifier = _identifier(handle)
+    class_name, layer_name = _context(handle)
+    layer_z = _layer_z_units(handle, factor)
+    if object_type == TYPE_LOCUS_3D:
+        x, y, z = vs.GetLocus3D(handle)
+        return {"id": identifier, "kind": "point",
+                "points": ((x * factor, y * factor, (z + layer_z) * factor),),
+                "class": class_name, "layer": layer_name}
+    if object_type == TYPE_POLYGON_3D:
+        points = tuple(tuple(float(value) * factor for value in vs.GetPolyPt3D(handle, index))
+                       for index in range(int(vs.GetVertNum(handle) or 0)))
+        return {"id": identifier,
+                "kind": "contour" if vs.IsPolyClosed(handle) else "breakline",
+                "points": points, "class": class_name, "layer": layer_name}
+    if object_type == TYPE_PARAMETRIC:
+        record = vs.GetParametricRecord(handle)
+        plug_in = str(vs.GetName(record) if record else "").casefold()
+        if "stake" in plug_in or "vermessung" in plug_in:
+            x, y, z = vs.GetSymLoc3D(handle)
+            return {"id": identifier, "kind": "point",
+                    "points": ((x * factor, y * factor, (z + layer_z) * factor),),
+                    "class": class_name, "layer": layer_name}
+        return None
+    try:
+        center = vs.Get3DCntr(handle)
+        z_value = (float(center[2]) + layer_z) * factor
+    except (TypeError, ValueError, IndexError):
+        return None
+    if object_type == TYPE_LINE:
+        first, second = vs.GetSegPt1(handle), vs.GetSegPt2(handle)
+        points = ((float(first[0]) * factor, float(first[1]) * factor, z_value),
+                  (float(second[0]) * factor, float(second[1]) * factor, z_value))
+        return {"id": identifier, "kind": "breakline", "points": points,
+                "class": class_name, "layer": layer_name}
+    if object_type in (TYPE_POLYGON, TYPE_POLYLINE):
+        points = tuple((float(x) * factor, float(y) * factor, z_value)
+                       for x, y in (vs.GetPolyPt(handle, index)
+                                    for index in range(int(vs.GetVertNum(handle) or 0))))
+        return {"id": identifier,
+                "kind": "contour" if vs.IsPolyClosed(handle) else "breakline",
+                "points": points, "class": class_name, "layer": layer_name}
+    if object_type == TYPE_ARC:
+        points_2d = _sample_2d_path(handle, chord_tolerance_m / factor)
+        if points_2d:
+            return {"id": identifier, "kind": "curve",
+                    "points": tuple((x * factor, y * factor, z_value) for x, y in points_2d),
+                    "class": class_name, "layer": layer_name}
+    return None
+
+
+def selected_boundary(handles=None):
+    factor = units_to_meters()
+    for handle in handles or selected_handles():
+        object_type = int(vs.GetTypeN(handle) or 0)
+        if object_type in (TYPE_POLYGON, TYPE_POLYLINE) and vs.IsPolyClosed(handle):
+            points = tuple((float(x) * factor, float(y) * factor)
+                           for x, y in (vs.GetPolyPt(handle, index)
+                                        for index in range(int(vs.GetVertNum(handle) or 0))))
+            return handle, core.normalize_polygon(points)
+    return None, None
+
+
+def selected_boundaries(handles=None):
+    values = []
+    remaining = tuple(handles or selected_handles())
+    for handle in remaining:
+        found_handle, polygon = selected_boundary((handle,))
+        if found_handle and polygon:
+            values.append((found_handle, polygon))
+    return tuple(values)
+
+
+def extract_selected_sources(chord_tolerance_m=core.DEFAULT_CHORD_TOLERANCE_M,
+                             ignore_handle=None):
+    factor = units_to_meters()
+    result, unsupported = [], []
+    for handle in selected_handles():
+        if handle == ignore_handle:
+            continue
+        element = _source_element(handle, factor, chord_tolerance_m)
+        if element:
+            result.append(element)
+        else:
+            unsupported.append(dict(id=_identifier(handle), type=int(vs.GetTypeN(handle) or 0)))
+    return tuple(result), tuple(unsupported)
+
+
+def _ensure_class(name, color):
+    active = str(vs.ActiveClass() or "")
+    if not vs.GetObject(name):
+        vs.NameClass(name)
+    handle = vs.GetObject(name)
+    if not handle:
+        raise core.TerrainError("Klasse konnte nicht angelegt werden: " + name)
+    try:
+        vs.SetPenFore(handle, tuple(color))
+        vs.SetFillFore(handle, tuple(color))
+    finally:
+        if active and vs.ActiveClass() != active:
+            vs.NameClass(active)
+
+
+def ensure_class(name):
+    value = str(name or "").strip()
+    if not value:
+        raise core.TerrainError("Der gewünschte Klassenname fehlt.")
+    _ensure_class(value, (0, 0, 0))
+    return value
+
+
+def _unique_name(base):
+    base = str(base or "PD-GB-Ausgabe").strip() or "PD-GB-Ausgabe"
+    if not vs.GetObject(base):
+        return base
+    index = 2
+    while vs.GetObject("%s-%d" % (base, index)):
+        index += 1
+    return "%s-%d" % (base, index)
+
+
+def _record(name, field):
+    if not vs.GetObject(name):
+        vs.NewField(name, field, "", 4, 0)
+    if not vs.GetObject(name):
+        raise core.TerrainError("Datensatz konnte nicht angelegt werden: " + name)
+
+
+def _write_record(handle, name, field, data):
+    _record(name, field)
+    if not vs.GetRField(handle, name, field):
+        vs.SetRecord(handle, name)
+    payload = json.dumps(data, ensure_ascii=True, sort_keys=True,
+                         separators=(",", ":"), allow_nan=False)
+    previous = str(vs.GetRField(handle, name, field) or "")
+    vs.SetRField(handle, name, field, payload)
+    if str(vs.GetRField(handle, name, field) or "") != payload:
+        vs.SetRField(handle, name, field, previous)
+        raise core.TerrainError("Objektdaten konnten nicht verifiziert werden.")
+
+
+def _read_record(handle, name, field):
+    raw = str(vs.GetRField(handle, name, field) or "")
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
+    if review.get("blocking_count"):
+        raise core.TerrainError("Die Quelldaten enthalten noch blockierende Konflikte.")
+    if not review.get("usable"):
+        raise core.TerrainError("Keine verwendbaren Quelldaten vorhanden.")
+    factor = units_to_meters()
+    target_name = _unique_name(layer_name)
+    previous_layer = str(vs.GetLName(vs.ActLayer()) or "")
+    previous_class = str(vs.ActiveClass() or "")
+    layer = None
+    created = []
+    _ensure_class(CLASS_SOURCE_POINT, (0, 45000, 0))
+    _ensure_class(CLASS_SOURCE_LINE, (0, 25000, 50000))
+    try:
+        layer = vs.CreateLayer(target_name, 1)
+        if not layer:
+            raise core.TerrainError("Die Quelldaten-Ebene konnte nicht angelegt werden.")
+        vs.Layer(target_name)
+        layer_z = _layer_z_units(layer, factor)
+        for element in review["usable"]:
+            if element["kind"] == "point":
+                x, y, z = element["points"][0]
+                vs.Locus3D((x / factor, y / factor, z / factor - layer_z))
+                handle = vs.LNewObj()
+                if handle:
+                    created.append(handle)
+                if not handle or vs.GetTypeN(handle) != TYPE_LOCUS_3D:
+                    raise core.TerrainError("3D-Quellpunkt konnte nicht erzeugt werden.")
+                vs.SetClass(handle, CLASS_SOURCE_POINT)
+            else:
+                vs.BeginPoly3D()
+                try:
+                    for x, y, z in element["points"]:
+                        vs.Add3DPt((x / factor, y / factor, z / factor - layer_z))
+                finally:
+                    vs.EndPoly3D()
+                handle = vs.LNewObj()
+                if handle:
+                    created.append(handle)
+                if not handle or vs.GetTypeN(handle) != TYPE_POLYGON_3D:
+                    raise core.TerrainError("3D-Bruchkante konnte nicht erzeugt werden.")
+                vs.SetPolyClosed(handle, element["kind"] == "contour")
+                vs.SetFPat(handle, 0)
+                vs.SetClass(handle, CLASS_SOURCE_LINE)
+        if len(created) != review["usable_count"]:
+            raise core.TerrainError("Nicht alle Quelldaten wurden erzeugt.")
+        vs.DSelectAll()
+        for handle in created:
+            vs.SetSelect(handle)
+        vs.NameUndoEvent("PD Gelände-Quelldaten vorbereiten")
+        vs.ReDrawAll()
+        return target_name, tuple(created)
+    except Exception:
+        for handle in created:
+            if handle:
+                vs.DelObject(handle)
+        if layer:
+            vs.DelObject(layer)
+        raise
+    finally:
+        if previous_layer:
+            vs.Layer(previous_layer)
+        if previous_class and vs.ActiveClass() != previous_class:
+            vs.NameClass(previous_class)
+
+
+def site_models():
+    result = []
+
+    def collect(handle):
+        if vs.DTM6_IsDTM6Object(handle):
+            result.append((handle, str(vs.GetName(handle) or "").strip()))
+    vs.ForEachObject(collect, "ALL")
+    return tuple(sorted(result, key=lambda row: (row[1].casefold(), str(row[0]))))
+
+
+def model_by_name(name):
+    handle = vs.GetObject(str(name or ""))
+    if not handle or not vs.DTM6_IsDTM6Object(handle):
+        raise core.TerrainError("Geländemodell nicht gefunden: " + str(name))
+    if not vs.DTM6_IsObjectReady(handle):
+        vs.ResetObject(handle)
+    if not vs.DTM6_IsObjectReady(handle):
+        raise core.TerrainError("Das Geländemodell ist noch nicht auswertbar: " + str(name))
+    return handle
+
+
+def model_metadata(handle):
+    value = _read_record(handle, MODEL_RECORD, MODEL_FIELD)
+    return value if value and value.get("schema") == core.SCHEMA else None
+
+
+def register_model(handle, variant_name, role, reference_name="", priority=0,
+                   managed_variant=False):
+    if not handle or not vs.DTM6_IsDTM6Object(handle):
+        raise core.TerrainError("Nur ein natives Vectorworks-Geländemodell kann registriert werden.")
+    model_name = str(vs.GetName(handle) or "").strip()
+    if not model_name:
+        raise core.TerrainError("Das Geländemodell muss zuerst einen eindeutigen Namen erhalten.")
+    data = {
+        "schema": core.SCHEMA,
+        "id": str(uuid.uuid4()),
+        "variant_name": str(variant_name or model_name).strip(),
+        "role": "bestand" if str(role).casefold() == "bestand" else "soll",
+        "model_name": model_name,
+        "reference_name": str(reference_name or ""),
+        "priority": int(priority),
+        "managed_variant": bool(managed_variant),
+    }
+    _write_record(handle, MODEL_RECORD, MODEL_FIELD, data)
+    vs.NameUndoEvent("PD Geländemodell registrieren")
+    return data
+
+
+def duplicate_variant(source_name, new_model_name, variant_name):
+    source = model_by_name(source_name)
+    name = str(new_model_name or "").strip()
+    if not name or vs.GetObject(name):
+        raise core.TerrainError("Der neue Geländemodellname fehlt oder ist bereits vergeben.")
+    duplicate = vs.HDuplicate(source, 0.0, 0.0)
+    if not duplicate or not vs.DTM6_IsDTM6Object(duplicate):
+        if duplicate:
+            vs.DelObject(duplicate)
+        raise core.TerrainError("Vectorworks konnte keine unabhängige Geländemodellkopie erzeugen.")
+    try:
+        vs.SetName(duplicate, name)
+        if vs.GetObject(name) != duplicate:
+            raise core.TerrainError("Die Geländemodellkopie konnte nicht eindeutig benannt werden.")
+        data = register_model(duplicate, variant_name or name, "soll", source_name, 0, True)
+        vs.NameUndoEvent("PD Sollvariante duplizieren")
+        return duplicate, data
+    except Exception:
+        vs.DelObject(duplicate)
+        raise
+
+
+def delete_managed_variant(model_name):
+    handle = model_by_name(model_name)
+    data = model_metadata(handle)
+    if not data or not data.get("managed_variant") or data.get("role") != "soll":
+        raise core.TerrainError("Nur eine vom Modul erzeugte Sollkopie darf hier gelöscht werden.")
+    vs.DelObject(handle)
+    vs.NameUndoEvent("PD Sollvariante löschen")
+
+
+def sampler(handle, tin_type=2):
+    factor = units_to_meters()
+
+    def elevation(x_m, y_m):
+        try:
+            return site_model.elevation(handle, (x_m / factor, y_m / factor), tin_type) * factor
+        except site_model.SiteModelError:
+            return None
+    return elevation
+
+
+def _create_2d_polygon(points, factor, closed, class_name):
+    vs.BeginPoly()
+    try:
+        for x, y in points:
+            vs.AddPoint((x / factor, y / factor))
+    finally:
+        vs.EndPoly()
+    handle = vs.LNewObj()
+    if not handle or vs.GetTypeN(handle) not in (TYPE_POLYGON, TYPE_POLYLINE):
+        raise core.TerrainError("2D-Geometrie konnte nicht erzeugt werden.")
+    vs.SetPolyClosed(handle, bool(closed))
+    vs.SetClass(handle, class_name)
+    vs.SetFPat(handle, 0)
+    return handle
+
+
+def _create_line(first, second, factor, class_name):
+    vs.MoveTo((first[0] / factor, first[1] / factor))
+    vs.LineTo((second[0] / factor, second[1] / factor))
+    handle = vs.LNewObj()
+    if not handle:
+        raise core.TerrainError("Linie konnte nicht erzeugt werden.")
+    vs.SetClass(handle, class_name)
+    return handle
+
+
+def _create_poly3d(points, factor, layer_z, closed, class_name):
+    vs.BeginPoly3D()
+    try:
+        for x, y, z in points:
+            vs.Add3DPt((x / factor, y / factor, z / factor - layer_z))
+    finally:
+        vs.EndPoly3D()
+    handle = vs.LNewObj()
+    if not handle or vs.GetTypeN(handle) != TYPE_POLYGON_3D:
+        raise core.TerrainError("3D-Geometrie konnte nicht erzeugt werden.")
+    vs.SetPolyClosed(handle, bool(closed))
+    vs.SetClass(handle, class_name)
+    vs.SetFPat(handle, 0)
+    return handle
+
+
+def create_excavation_output(result, name, hatch_spacing_m=1.0, short_ratio=0.5,
+                             create_modifier=True):
+    factor = units_to_meters()
+    previous_class = str(vs.ActiveClass() or "")
+    _ensure_class(CLASS_PIT, (0, 0, 0))
+    _ensure_class(CLASS_SLOPE, (25000, 25000, 25000))
+    _ensure_class(CLASS_HATCH, (22000, 22000, 22000))
+    _ensure_class(CLASS_CONFLICT, (65535, 0, 0))
+    group = None
+    group_opened = False
+    modifier_created = False
+    try:
+        vs.BeginGroup()
+        group_opened = True
+        try:
+            base_name = str(name or "PD-GB-Baugrube").strip() or "PD-GB-Baugrube"
+            lower_2d = _create_2d_polygon(
+                tuple(value[:2] for value in result["lower_edge"]), factor, True, CLASS_PIT)
+            vs.SetName(lower_2d, _unique_name(base_name + "-Unterkante-2D"))
+            upper_2d = _create_2d_polygon(
+                tuple(value[:2] for value in result["upper_edge"]), factor, True,
+                CLASS_SLOPE if result["status"] == "valid" else CLASS_CONFLICT)
+            vs.SetName(upper_2d, _unique_name(base_name + "-Oberkante-2D"))
+            for hatch in core.hatch_lines(result["lower_edge"], result["upper_edge"],
+                                           hatch_spacing_m, short_ratio):
+                _create_line(hatch["start"], hatch["end"], factor, CLASS_HATCH)
+            layer_z = _layer_z_units(vs.ActLayer(), factor)
+            pad = _create_poly3d(result["lower_edge"], factor, layer_z, True, CLASS_PIT)
+            vs.SetName(pad, _unique_name(base_name + "-Unterkante-3D"))
+            if create_modifier:
+                before = str(vs.GetClass(pad) or "")
+                vs.SetPadAttrs(pad)
+                modifier_created = bool(vs.GetClass(pad) and vs.GetClass(pad) != before)
+                if not modifier_created:
+                    raise core.TerrainError("Vectorworks hat den nativen Sohlen-Modifikator nicht übernommen.")
+            upper_3d = _create_poly3d(
+                result["upper_edge"], factor, layer_z, True,
+                CLASS_SLOPE if result["status"] == "valid" else CLASS_CONFLICT)
+            vs.SetName(upper_3d, _unique_name(base_name + "-Oberkante-3D"))
+            for conflict in result["conflicts"]:
+                index = max(0, min(len(result["lower_edge"]) - 1, int(conflict["edge"]) - 1))
+                _create_line(result["lower_edge"][index], conflict["point"], factor, CLASS_CONFLICT)
+        finally:
+            if group_opened:
+                vs.EndGroup()
+                group_opened = False
+                group = vs.LNewObj()
+        if not group or vs.GetTypeN(group) != 11:
+            raise core.TerrainError("Baugruben-Ausgabegruppe konnte nicht erzeugt werden.")
+        vs.SetClass(group, CLASS_PIT)
+        vs.SetName(group, _unique_name(name or "PD-GB-Baugrube"))
+        _write_record(group, OUTPUT_RECORD, OUTPUT_FIELD, {
+            "schema": core.SCHEMA, "kind": "excavation", "result": result,
+            "hatch_spacing_m": float(hatch_spacing_m), "short_ratio": float(short_ratio),
+            "modifier_created": modifier_created,
+        })
+        vs.NameUndoEvent("PD Baugrube und Böschung anlegen")
+        vs.ReDrawAll()
+        return group
+    except Exception:
+        if group:
+            vs.DelObject(group)
+        raise
+    finally:
+        if previous_class and vs.ActiveClass() != previous_class:
+            vs.NameClass(previous_class)
+
+
+def create_comparison_output(result, boundary, reference_name, comparison_name,
+                             decimals=2, label_text_size_pt=8.0, label_limit=5000):
+    factor = units_to_meters()
+    _ensure_class(CLASS_GRID, (25000, 25000, 25000))
+    _ensure_class(CLASS_CUT, (65535, 0, 0))
+    _ensure_class(CLASS_FILL, (0, 25000, 65535))
+    _ensure_class(CLASS_TEXT, (0, 0, 0))
+    _ensure_class(CLASS_NO_DATA, (35000, 35000, 35000))
+    group = None
+    group_opened = False
+    try:
+        vs.BeginGroup()
+        group_opened = True
+        try:
+            _create_2d_polygon(boundary, factor, True, CLASS_GRID)
+            for first, second in core.zero_segments(result):
+                _create_line(first, second, factor, CLASS_GRID)
+            display = tuple((cell, cell["delta_m"]) for cell in result["cells"]) + \
+                tuple((cell, None) for cell in result.get("no_data", ()))
+            stride = max(1, int(math.ceil(len(display) / max(1, int(label_limit)))))
+            for index, (cell, value) in enumerate(display):
+                if index % stride:
+                    continue
+                text = ("keine Daten" if value is None else
+                        ("+" if value > 0.0 else "") + ("%.*f" % (int(decimals), value)))
+                vs.CreateText(text)
+                handle = vs.LNewObj()
+                if not handle:
+                    raise core.TerrainError("Rasterbeschriftung konnte nicht erzeugt werden.")
+                vs.TextOrigin((cell["x_m"] / factor, cell["y_m"] / factor))
+                vs.SetTextJust(handle, 2)
+                vs.SetTextVerticalAlign(handle, 3)
+                vs.SetTextSize(handle, 0, len(text), float(label_text_size_pt))
+                text_class = (CLASS_NO_DATA if value is None else CLASS_FILL if value > 0.0
+                              else CLASS_CUT if value < 0.0 else CLASS_TEXT)
+                vs.SetClass(handle, text_class)
+        finally:
+            if group_opened:
+                vs.EndGroup()
+                group_opened = False
+                group = vs.LNewObj()
+        if not group or vs.GetTypeN(group) != 11:
+            raise core.TerrainError("Rasterplan-Gruppe konnte nicht erzeugt werden.")
+        name = _unique_name("PD-GB-Vergleich-%s-%s" % (reference_name, comparison_name))
+        vs.SetName(group, name)
+        vs.SetClass(group, CLASS_GRID)
+        audit = {key: value for key, value in result.items() if key not in ("cells", "no_data")}
+        _write_record(group, OUTPUT_RECORD, OUTPUT_FIELD, {
+            "schema": core.SCHEMA, "kind": "comparison", "reference": reference_name,
+            "comparison": comparison_name, "boundary": boundary, "result": audit,
+            "label_text_size_pt": float(label_text_size_pt),
+        })
+        vs.NameUndoEvent("PD Gelände vergleichen und Rasterplan anlegen")
+        vs.ReDrawAll()
+        return group
+    except Exception:
+        if group:
+            vs.DelObject(group)
+        raise
+
+
+def output_data(handle):
+    return _read_record(handle, OUTPUT_RECORD, OUTPUT_FIELD)

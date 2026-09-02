@@ -1,0 +1,21 @@
+# PD Winkelstuetzmauer - Hoehenkatalog;;;
+# Im Mauertool tabellarisch bearbeitbar. Eine Zeile je Mauerwinkel.;;;
+# Farbe als #RRGGBB oder R,G,B - leer = automatisch;;;
+# Hoehe_cm;Fusslaenge_cm;Farbe;Bemerkung
+40;30;#78D66F;Regelelement
+55;30;#6FD686;Regelelement
+60;40;#6FD6A6;Regelelement
+80;50;#6FD6C5;Regelelement
+105;60;#6FC8D6;Regelelement
+130;70;#6FA9D6;Regelelement
+155;85;#6F89D6;Regelelement
+180;100;#756FD6;Regelelement
+205;110;#946FD6;Regelelement
+230;125;#B46FD6;Regelelement
+255;150;#D36FD6;Regelelement
+280;150;#D66FBA;Regelelement
+305;160;#D66F9B;Regelelement
+330;180;#D66F7B;Regelelement
+355;190;#D6836F;Regelelement
+380;200;#D6A26F;Regelelement
+405;220;#D6C26F;Regelelement
