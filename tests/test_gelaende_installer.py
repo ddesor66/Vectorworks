@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 os.environ["PD_GELAENDE_QUELLDATEN_KEIN_AUTOSTART"] = "1"
 os.environ["PD_GELAENDE_INSTALLER_KEIN_AUTOSTART"] = "1"
@@ -200,6 +201,16 @@ class DesktopTest(unittest.TestCase):
         code, ausgabe = self._main(["--ziel", os.path.join(self.heim, "weg")])
         self.assertEqual(code, 1)
         self.assertIn("existiert nicht", ausgabe)
+
+    def test_ohne_programmbetrieb_wird_nicht_gewartet(self):
+        with mock.patch("builtins.input", side_effect=AssertionError("darf nicht warten")):
+            self.setup.warten()
+
+    def test_als_programm_wartet_auf_bestaetigung(self):
+        with mock.patch.object(self.setup, "als_programm", return_value=True), \
+                mock.patch("builtins.input", return_value="") as eingabe:
+            self.setup.warten()
+        self.assertEqual(eingabe.call_count, 1)
 
     def test_main_zeigt_gefundene_ordner_ohne_zu_schreiben(self):
         code, ausgabe = self._main(["--zeigen"])

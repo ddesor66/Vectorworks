@@ -9,6 +9,11 @@ Schreiben gegen eine SHA-256-Prüfsumme.
 | `PD_Gelaende_Quelldaten_Installer.py` | Inhalt in ein Python-Skript der Vectorworks-Skript-Palette einfügen und ausführen |
 | `PD_Gelaende_Quelldaten_Setup.py` | außerhalb von Vectorworks: `python3 PD_Gelaende_Quelldaten_Setup.py` |
 
+Zusätzlich baut GitHub Actions aus dem Setup ein eigenständiges Windows-Programm
+`PD_Gelaende_Quelldaten_Setup.exe` (Workflow `Gelände-Quelldaten Setup.exe bauen`,
+Download unter `Actions > Artifacts`). Die EXE ist nicht signiert; SmartScreen meldet
+beim ersten Start einen unbekannten Herausgeber.
+
 Installiert werden in den Benutzer-Plug-ins-Ordner:
 
 - `pd_gelaende_quelldaten.py` – das Werkzeug,

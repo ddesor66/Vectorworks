@@ -31,6 +31,34 @@ Gesucht wird unter Windows in `%APPDATA%\Nemetschek\Vectorworks\<Jahr>\Plug-ins`
 unter macOS in `~/Library/Application Support/Vectorworks/<Jahr>/Plug-ins`, jeweils
 für 2026 bis 2023 mit Vorrang für den neuesten Jahrgang.
 
+**Variante C – Windows-Programm** (`PD_Gelaende_Quelldaten_Setup.exe`)
+
+Für Kolleginnen und Kollegen ohne Python: Das Setup wird als eigenständiges
+Windows-Programm gebaut. Der Bau läuft in GitHub Actions auf einem Windows-Runner
+(`.github/workflows/gelaende-installer-exe.yml`) und startet bei jeder Änderung an
+Skript, Vorlagen oder Installern; er lässt sich unter `Actions` auch von Hand auslösen.
+
+1. Im Repository auf `Actions > Gelände-Quelldaten Setup.exe bauen` den letzten Lauf öffnen.
+2. Unter `Artifacts` das Paket `PD_Gelaende_Quelldaten_Setup-exe` herunterladen und entpacken.
+3. `PD_Gelaende_Quelldaten_Setup.exe` doppelklicken. Das Fenster bleibt bis zur
+   Bestätigung offen und nennt Zielpfad und nächste Schritte.
+
+Der Lauf prüft das gebaute Programm selbst: `--zeigen`, eine vollständige
+Testinstallation in einen leeren Ordner und die SHA-256-Summe der EXE liegen dem
+Artefakt bei.
+
+Auf einem Windows-Rechner geht derselbe Bau auch von Hand:
+
+    pip install "pyinstaller>=6,<7"
+    python tools/build_gelaende_installer.py
+    pyinstaller --onefile --console --name PD_Gelaende_Quelldaten_Setup installer/PD_Gelaende_Quelldaten_Setup.py
+
+Die EXE ist **nicht signiert**. Windows SmartScreen meldet deshalb beim ersten Start
+einen unbekannten Herausgeber (`Weitere Informationen > Trotzdem ausführen`), und
+manche Virenscanner schlagen bei frisch gebauten PyInstaller-Programmen an. Für eine
+breite Verteilung im Büro ist ein Code-Signing-Zertifikat der saubere Weg – ohne
+Signatur bleibt der Warnhinweis bestehen.
+
 **Einmalig danach – der Menübefehl.** Vectorworks-Plug-ins (`.vsm`) sind Binärdateien,
 die nur der Plug-in-Manager erzeugen kann; dieser Schritt lässt sich nicht skripten:
 

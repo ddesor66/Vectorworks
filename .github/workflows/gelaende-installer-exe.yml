@@ -1,0 +1,79 @@
+name: Gelände-Quelldaten Setup.exe bauen
+
+# Baut aus installer/PD_Gelaende_Quelldaten_Setup.py ein eigenständiges
+# Windows-Programm. Der Lauf startet bei jeder Änderung an Skript, Vorlagen
+# oder Installern und lässt sich zusätzlich von Hand auslösen.
+on:
+  push:
+    branches:
+      - main
+      - "claude/**"
+    paths:
+      - "pd_gelaende_quelldaten.py"
+      - "installer/**"
+      - "tools/**"
+      - ".github/workflows/gelaende-installer-exe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Quellstand holen
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: PyInstaller installieren
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pyinstaller>=6,<7"
+
+      - name: Installer neu bauen
+        run: python tools/build_gelaende_installer.py
+
+      - name: Prüfungen ausführen
+        run: |
+          python -m unittest tests.test_gelaende_quelldaten
+          python -m unittest tests.test_gelaende_installer
+
+      - name: Setup.exe bauen
+        run: >
+          pyinstaller --onefile --console --noconfirm --clean
+          --name PD_Gelaende_Quelldaten_Setup
+          --distpath dist --workpath build --specpath build
+          installer/PD_Gelaende_Quelldaten_Setup.py
+
+      - name: Programm prüfen
+        run: |
+          dist\PD_Gelaende_Quelldaten_Setup.exe --zeigen
+          if ($LASTEXITCODE -ne 0) { throw "Das gebaute Programm meldet Fehler $LASTEXITCODE." }
+          $ziel = Join-Path $env:RUNNER_TEMP "Plug-ins"
+          New-Item -ItemType Directory -Force -Path $ziel | Out-Null
+          dist\PD_Gelaende_Quelldaten_Setup.exe --ziel "$ziel"
+          if ($LASTEXITCODE -ne 0) { throw "Die Testinstallation meldet Fehler $LASTEXITCODE." }
+          if (-not (Test-Path (Join-Path $ziel "pd_gelaende_quelldaten.py"))) {
+            throw "Die Testinstallation hat das Werkzeug nicht geschrieben."
+          }
+          if (-not (Test-Path (Join-Path $ziel "PD_Gelaende_Quelldaten_Menuebefehl.txt"))) {
+            throw "Die Testinstallation hat den Loader-Text nicht geschrieben."
+          }
+          Get-FileHash dist\PD_Gelaende_Quelldaten_Setup.exe -Algorithm SHA256 |
+            Format-List | Out-File -Encoding utf8 dist\PD_Gelaende_Quelldaten_Setup.exe.sha256.txt
+          Get-Content dist\PD_Gelaende_Quelldaten_Setup.exe.sha256.txt
+
+      - name: Programm bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: PD_Gelaende_Quelldaten_Setup-exe
+          path: |
+            dist/PD_Gelaende_Quelldaten_Setup.exe
+            dist/PD_Gelaende_Quelldaten_Setup.exe.sha256.txt
+          if-no-files-found: error
+          retention-days: 90

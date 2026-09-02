@@ -706,6 +706,21 @@ def bericht(ergebnis):
     ))
 
 
+def als_programm():
+    """True, wenn dieses Setup als gebautes Programm (EXE) läuft."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def warten():
+    """Nach einem Doppelklick das Fenster offen halten, bis quittiert wurde."""
+    if not als_programm():
+        return
+    try:
+        input("\nZum Schließen die Eingabetaste drücken … ")
+    except (EOFError, KeyboardInterrupt, OSError):
+        pass
+
+
 def main(argumente=None):
     zerleger = argparse.ArgumentParser(
         description="Installiert das Vectorworks-Skript Gelände-Quelldaten "
@@ -723,12 +738,15 @@ def main(argumente=None):
                 print("  " + pfad)
             if not gefunden:
                 print("  (keiner)")
+            warten()
             return 0
         ergebnis = installieren(zielordner(werte.ziel))
     except InstallationsFehler as fehler:
         print("Installation abgebrochen.\n\n%s" % fehler)
+        warten()
         return 1
     print(bericht(ergebnis))
+    warten()
     return 0
 
 
