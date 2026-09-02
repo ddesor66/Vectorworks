@@ -30,11 +30,18 @@ def _preview_sources(options):
     if not str(options.get("model_class") or "").strip():
         raise core.TerrainError("Der gewünschte Geländemodell-Klassenname fehlt.")
     selected = adapter.selected_handles()
+    vectorworks_selection_count = adapter.selected_object_count()
     boundaries = (adapter.selected_boundaries(selected)
                   if options.get("use_selected_boundary", False) else ())
     boundary_handle, boundary = boundaries[0] if boundaries else (None, None)
     all_active_layer = options.get("all_active_layer", False)
     handles = adapter.active_layer_handles() if all_active_layer else selected
+    recovered_complete_layer = False
+    if (not all_active_layer and vectorworks_selection_count > len(handles)):
+        active_handles = adapter.active_layer_handles()
+        if len(active_handles) == vectorworks_selection_count:
+            handles = active_handles
+            recovered_complete_layer = True
     if not handles:
         raise core.TerrainError(
             "Auf der aktiven Ebene wurden keine Objekte gefunden." if all_active_layer else
@@ -57,12 +64,16 @@ def _preview_sources(options):
         message += "\nErfassungsbereich: gesamte aktive Ebene einschließlich Gruppen"
     else:
         message += "\nErfassungsbereich: markierte Objekte"
+    message += "\nVectorworks-Auswahlzähler: %d" % vectorworks_selection_count
+    if recovered_complete_layer:
+        message += " (vollständig über aktive Ebene wiederhergestellt)"
     message += ("\nModellbegrenzung: %s" %
                 ("markiertes Polygon" if boundary else "keine"))
     if unsupported:
         message += "\nNicht unterstützt nach Typ: " + _count_labels(unsupported, "type_name")
     if review["excluded"]:
         message += "\nAusgeschlossen nach Grund: " + _count_labels(review["excluded"], "reason")
+    message += "\nQuellgeometrien nach Art: " + _count_labels(sources, "kind")
     if review["problems"]:
         message += "\n\n" + "\n".join(problem["message"] for problem in review["problems"][:8])
         message += ("\n\nRäumlich lesbare markierte Objekte bleiben trotz Höhen- oder "
@@ -77,7 +88,8 @@ def _preview_sources(options):
     layer_name, created = adapter.create_source_layer(review, options["layer_name"])
     model_class = adapter.ensure_class(options["model_class"])
     adapter.alert(
-        "%d geprüfte Quelldaten wurden auf der Ebene „%s“ angelegt und markiert.\n\n"
+        "%d geprüfte 3D-Quellobjekte wurden auf der aktiven Ebene „%s“ angelegt, "
+        "sichtbar eingefärbt und markiert.\n\n"
         "Nächster nativer Vectorworks-Schritt: Landschaft > Geländemodell > "
         "Geländemodell aus Ausgangsdaten. Dieser Befehl ist über die geprüfte Python-API "
         "nicht belastbar automatisierbar.\n\n"

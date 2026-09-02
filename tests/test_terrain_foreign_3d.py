@@ -36,10 +36,23 @@ class FakeVS(types.ModuleType):
                 return values[index] if index < len(values) else None
         return None
 
+    def HDuplicate(self, handle, _dx, _dy):
+        return getattr(self, "duplicates", {}).get(handle)
+
+    def ConvertTo3DPolys(self, handle):
+        return getattr(self, "conversions", {}).get(handle)
+
+    def DelObject(self, handle):
+        self.deleted = getattr(self, "deleted", []) + [handle]
+
     def ForEachObject(self, callback, criteria):
         self.criteria = criteria
         for handle in getattr(self, "selection", ()):
             callback(handle)
+
+    def Count(self, criteria):
+        self.count_criteria = criteria
+        return getattr(self, "selection_count", len(getattr(self, "selection", ())))
 
     def Selected(self, handle):
         return handle in getattr(self, "selected_members", ())
@@ -120,6 +133,13 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual(6059, len(handles))
         self.assertEqual(6059, len(set(handles)))
 
+    def test_vectorworks_selection_counter_is_available_for_recovery(self):
+        fake = FakeVS()
+        fake.selection_count = 6059
+        adapter = load_adapter(fake)
+        self.assertEqual(6059, adapter.selected_object_count())
+        self.assertEqual("(SEL=TRUE)", fake.count_criteria)
+
     def test_imported_arc_uses_direct_geometry_fallback(self):
         fake = FakeVS()
         fake.types["arc"] = 6
@@ -158,6 +178,15 @@ class Foreign3DTests(unittest.TestCase):
         element = adapter._source_element("text", 1.0, 0.1)
         self.assertEqual(((12.0, 34.0, 5.5),), element["points"])
 
+    def test_numeric_text_at_layer_base_uses_text_as_elevation(self):
+        fake = FakeVS()
+        fake.types["text"] = 10
+        fake.points["text"] = ((12.0, 34.0, 0.0),)
+        fake.GetText = lambda _handle: "102,65"
+        adapter = load_adapter(fake)
+        element = adapter._source_element("text", 1.0, 0.1)
+        self.assertEqual(((12.0, 34.0, 102.65),), element["points"])
+
     def test_nurbs_keeps_individual_vertex_heights(self):
         fake = FakeVS()
         fake.types["curve"] = 111
@@ -194,6 +223,21 @@ class Foreign3DTests(unittest.TestCase):
         elements = adapter._source_elements("group", 1.0, 0.1)
         self.assertEqual(3, len(elements))
         self.assertEqual(["point", "point", "point"], [item["kind"] for item in elements])
+
+    def test_symbol_is_expanded_to_complete_converted_3d_geometry(self):
+        fake = FakeVS()
+        fake.types.update(symbol=15, converted=11, face=25)
+        fake.duplicates = {"symbol": "symbol-copy"}
+        fake.conversions = {"symbol-copy": "converted"}
+        fake.children["converted"] = ["face"]
+        fake.points["face"] = ((0.0, 0.0, 1.0), (4.0, 0.0, 2.0),
+                               (4.0, 3.0, 3.0))
+        fake.closed = {"face"}
+        adapter = load_adapter(fake)
+        elements = adapter._source_elements("symbol", 1.0, 0.1)
+        self.assertEqual(1, len(elements))
+        self.assertEqual(fake.points["face"], elements[0]["points"])
+        self.assertEqual(["converted"], fake.deleted)
 
     def test_unknown_spatial_object_becomes_support_point(self):
         fake = FakeVS()

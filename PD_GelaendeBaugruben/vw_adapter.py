@@ -4,6 +4,7 @@ from __future__ import absolute_import
 
 import json
 import math
+import re
 import uuid
 
 import vs
@@ -41,6 +42,9 @@ OUTPUT_RECORD = "PD_GB_Ausgabe"
 OUTPUT_FIELD = "Daten"
 CLASS_SOURCE_POINT = "PD-GB-Quelldaten-Punkt"
 CLASS_SOURCE_LINE = "PD-GB-Quelldaten-Bruchkante"
+COLOR_SOURCE_POINT = (0, 50000, 0)
+COLOR_SOURCE_LINE = (0, 35000, 55000)
+TEXT_NUMBER = re.compile(r"(?<![0-9.,])[-+]?\d+(?:[.,]\d+)?(?![0-9.,])")
 CLASS_PIT = "PD-GB-Baugrube"
 CLASS_SLOPE = "PD-GB-Boeschung"
 CLASS_HATCH = "PD-GB-Boeschungsschraffur"
@@ -132,6 +136,14 @@ def selected_handles():
     return tuple(result)
 
 
+def selected_object_count():
+    """Return Vectorworks' own selection count for consistency diagnostics."""
+    try:
+        return max(0, int(vs.Count("(SEL=TRUE)") or 0))
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
 def active_layer_handles():
     """Return every object on the active layer, including nested containers."""
     result = []
@@ -211,6 +223,22 @@ def _sample_circular_arc(handle, tolerance_doc):
         return ()
 
 
+def _numeric_text_height_m(handle):
+    """Read one unambiguous elevation from a text such as '102.65' or 'H=102,65'."""
+    try:
+        value = str(vs.GetText(handle) or "").strip()
+    except (AttributeError, TypeError):
+        return None
+    matches = TEXT_NUMBER.findall(value)
+    if len(matches) != 1:
+        return None
+    try:
+        height = float(matches[0].replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    return height if math.isfinite(height) and abs(height) <= 100000.0 else None
+
+
 def _source_element(handle, factor, chord_tolerance_m):
     object_type = int(vs.GetTypeN(handle) or 0)
     identifier = _identifier(handle)
@@ -272,6 +300,11 @@ def _source_element(handle, factor, chord_tolerance_m):
             x_value, y_value = float(origin[0]), float(origin[1])
         except (AttributeError, TypeError, ValueError, IndexError):
             x_value, y_value = float(center[0]), float(center[1])
+        text_height = _numeric_text_height_m(handle)
+        layer_height_m = layer_z * factor
+        if (text_height is not None and
+                (not has_3d_center or abs(z_value - layer_height_m) <= 1e-9)):
+            z_value = text_height
         return {"id": identifier, "kind": "point",
                 "points": ((x_value * factor, y_value * factor, z_value),),
                 "class": class_name, "layer": layer_name}
@@ -340,6 +373,54 @@ def _contained_handles(handle):
         child = vs.NextObj(child)
 
 
+def _converted_3d_elements(handle, factor):
+    """Read full 3D polygon geometry from a temporary converted duplicate."""
+    duplicate = None
+    converted = None
+    result = []
+    identifier = _identifier(handle)
+    class_name, layer_name = _context(handle)
+
+    def candidates(root):
+        yield root
+        if int(vs.GetTypeN(root) or 0) == TYPE_GROUP:
+            for child in _contained_handles(root):
+                for nested in candidates(child):
+                    yield nested
+
+    try:
+        duplicate = vs.HDuplicate(handle, 0.0, 0.0)
+        if not duplicate:
+            return ()
+        converted = vs.ConvertTo3DPolys(duplicate)
+        if not converted:
+            return ()
+        for candidate in candidates(converted):
+            if int(vs.GetTypeN(candidate) or 0) != TYPE_POLYGON_3D:
+                continue
+            points = tuple((float(x) * factor, float(y) * factor, float(z) * factor)
+                           for x, y, z in (vs.GetPolyPt3D(candidate, index)
+                           for index in range(int(vs.GetVertNum(candidate) or 0))))
+            if len(points) < 2:
+                continue
+            result.append({
+                "id": "%s / 3D-Geometrie %d" % (identifier, len(result) + 1),
+                "kind": "contour" if vs.IsPolyClosed(candidate) else "breakline",
+                "points": points, "class": class_name, "layer": layer_name,
+            })
+        return tuple(result)
+    except Exception:
+        return ()
+    finally:
+        try:
+            if converted:
+                vs.DelObject(converted)
+            elif duplicate:
+                vs.DelObject(duplicate)
+        except Exception:
+            pass
+
+
 def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
     """Expand containers and vertex collections into normalized source elements."""
     object_type = int(vs.GetTypeN(handle) or 0)
@@ -375,8 +456,24 @@ def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
             return tuple(result)
         fallback = _source_element(handle, factor, chord_tolerance_m)
         return (fallback,) if fallback else ()
+    # Symbol instances, solids, rectangles, ovals, dimensions and other
+    # imported spatial types must contribute their actual polygon geometry,
+    # not merely one generic centre point.
+    direct_types = {
+        TYPE_LINE, TYPE_ARC, TYPE_FREEHAND, TYPE_LOCUS_3D, TYPE_TEXT,
+        TYPE_POLYGON, TYPE_POLYLINE, TYPE_POLYGON_3D, TYPE_LOCUS_2D,
+        TYPE_PARAMETRIC,
+    }
+    if object_type not in direct_types:
+        converted = _converted_3d_elements(handle, factor)
+        if converted:
+            return converted
     element = _source_element(handle, factor, chord_tolerance_m)
-    return (element,) if element else ()
+    if element:
+        return (element,)
+    if object_type == TYPE_PARAMETRIC:
+        return _converted_3d_elements(handle, factor)
+    return ()
 
 
 def selected_boundary(handles=None):
@@ -506,6 +603,7 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
     previous_class = str(vs.ActiveClass() or "")
     layer = None
     created = []
+    completed = False
     _ensure_class(CLASS_SOURCE_POINT, (0, 45000, 0))
     _ensure_class(CLASS_SOURCE_LINE, (0, 25000, 50000))
     try:
@@ -524,6 +622,7 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
                 if not handle or vs.GetTypeN(handle) != TYPE_LOCUS_3D:
                     raise core.TerrainError("3D-Quellpunkt konnte nicht erzeugt werden.")
                 vs.SetClass(handle, CLASS_SOURCE_POINT)
+                vs.SetPenFore(handle, COLOR_SOURCE_POINT)
             else:
                 vs.BeginPoly3D()
                 try:
@@ -539,6 +638,8 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
                 vs.SetPolyClosed(handle, element["kind"] == "contour")
                 vs.SetFPat(handle, 0)
                 vs.SetClass(handle, CLASS_SOURCE_LINE)
+                vs.SetPenFore(handle, COLOR_SOURCE_LINE)
+                vs.SetLW(handle, 20)
         if len(created) != review["usable_count"]:
             raise core.TerrainError("Nicht alle Quelldaten wurden erzeugt.")
         vs.DSelectAll()
@@ -546,6 +647,7 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
             vs.SetSelect(handle)
         vs.NameUndoEvent("PD Gelände-Quelldaten vorbereiten")
         vs.ReDrawAll()
+        completed = True
         return target_name, tuple(created)
     except Exception:
         for handle in created:
@@ -555,7 +657,7 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
             vs.DelObject(layer)
         raise
     finally:
-        if previous_layer:
+        if not completed and previous_layer:
             vs.Layer(previous_layer)
         if previous_class and vs.ActiveClass() != previous_class:
             vs.NameClass(previous_class)
