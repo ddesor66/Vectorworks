@@ -73,8 +73,8 @@ def _preview_sources(options):
     if all_active_layer:
         message += "\nErfassungsbereich: gesamte aktive Ebene einschließlich Gruppen"
     elif recovered_layer_scope:
-        message += ("\nErfassungsbereich: vollständige Ebenen der markierten Objekte "
-                    "(Vectorworks-Auswahlbegrenzung umgangen)")
+        message += ("\nErfassungsbereich: sämtliche Einzelobjekte tief in den Ebenen der "
+                    "Markierung (Vectorworks-Auswahlbegrenzung umgangen)")
     else:
         message += "\nErfassungsbereich: markierte Objekte"
     message += "\nVectorworks-Auswahlzähler: %d" % vectorworks_selection_count

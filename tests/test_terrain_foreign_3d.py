@@ -61,9 +61,7 @@ class FakeVS(types.ModuleType):
     def ForEachObjectInLayer(self, callback, obj_options, traversal_options, layer_options):
         self.layer_search_options = (obj_options, traversal_options, layer_options)
         values = (getattr(self, "active_layer_objects", ())
-                  if (obj_options, traversal_options, layer_options) == (0, 0, 0)
-                  else getattr(self, "all_document_top_level", ())
-                  if (obj_options, traversal_options, layer_options) == (0, 0, 1)
+                  if (obj_options, traversal_options, layer_options) == (0, 2, 0)
                   else getattr(self, "all_document_objects", ())
                   if (obj_options, traversal_options, layer_options) == (0, 2, 1)
                   else getattr(self, "all_layer_selection", ()))
@@ -122,17 +120,19 @@ class Foreign3DTests(unittest.TestCase):
         adapter = load_adapter(fake)
         handles = adapter.active_layer_handles()
         self.assertEqual(6059, len(handles))
-        self.assertEqual((0, 0, 0), fake.layer_search_options)
+        self.assertEqual((0, 2, 0), fake.layer_search_options)
 
-    def test_full_layers_of_truncated_selection_are_recovered_shallowly(self):
+    def test_full_layers_of_truncated_selection_recover_deep_leaf_objects(self):
         fake = FakeVS()
-        fake.layers.update({"selected": "import", "line": "import",
-                            "text": "import", "other": "other-layer"})
-        fake.all_document_top_level = ("selected", "line", "text", "other")
+        fake.types.update(selected=2, group=11, line=2, text=10, other=2)
+        fake.layers.update({"selected": "import", "group": "import",
+                            "line": "import", "text": "import",
+                            "other": "other-layer"})
+        fake.all_document_objects = ("selected", "group", "line", "text", "other")
         adapter = load_adapter(fake)
         handles = adapter.object_layer_handles(("selected",))
         self.assertEqual(("selected", "line", "text"), handles)
-        self.assertEqual((0, 0, 1), fake.layer_search_options)
+        self.assertEqual((0, 2, 1), fake.layer_search_options)
 
     def test_individual_selection_flags_recover_selection_iterator_limit(self):
         fake = FakeVS()

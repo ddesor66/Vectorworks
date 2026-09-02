@@ -145,19 +145,23 @@ def selected_object_count():
 
 
 def active_layer_handles():
-    """Return every object on the active layer, including nested containers."""
+    """Return every leaf source on the active layer, including group members."""
     result = []
     seen = set()
 
     def collect(handle):
-        if handle and handle not in seen:
+        try:
+            is_group = int(vs.GetTypeN(handle) or 0) == TYPE_GROUP
+        except (KeyError, TypeError, ValueError):
+            is_group = False
+        if handle and not is_group and handle not in seen:
             seen.add(handle)
             result.append(handle)
     try:
-        # objOptions 0 = all objects; traversal 0 = top-level objects only;
-        # groups are expanded exactly once by _source_elements;
+        # objOptions 0 = all objects; traversal 2 = deep container members.
+        # Group shells are omitted so members are processed exactly once;
         # layerOptions 0 = active layer only.
-        vs.ForEachObjectInLayer(collect, 0, 0, 0)
+        vs.ForEachObjectInLayer(collect, 0, 2, 0)
     except (AttributeError, TypeError) as error:
         raise core.TerrainError(
             "Die Objekte der aktiven Ebene konnten nicht vollständig gelesen werden.") from error
@@ -165,7 +169,7 @@ def active_layer_handles():
 
 
 def object_layer_handles(handles):
-    """Return all top-level objects on every layer represented by ``handles``."""
+    """Return all leaf sources on every layer represented by ``handles``."""
     layers = set()
     for handle in tuple(handles or ()):
         try:
@@ -184,13 +188,17 @@ def object_layer_handles(handles):
             layer = vs.GetLayer(handle)
         except (AttributeError, TypeError):
             layer = None
-        if layer in layers and handle and handle not in seen:
+        try:
+            is_group = int(vs.GetTypeN(handle) or 0) == TYPE_GROUP
+        except (KeyError, TypeError, ValueError):
+            is_group = False
+        if layer in layers and handle and not is_group and handle not in seen:
             seen.add(handle)
             result.append(handle)
     try:
-        # Full document, top-level only. Container contents are expanded later,
-        # avoiding duplicate sources from both the parent and its members.
-        vs.ForEachObjectInLayer(collect, 0, 0, 1)
+        # Full document and deep container traversal. Group shells are filtered
+        # out, leaving every contained text, line and 3D polygon exactly once.
+        vs.ForEachObjectInLayer(collect, 0, 2, 1)
     except (AttributeError, TypeError) as error:
         raise core.TerrainError(
             "Die Ebenen der markierten Objekte konnten nicht vollständig gelesen werden.") from error
