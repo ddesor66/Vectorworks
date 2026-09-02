@@ -16,8 +16,9 @@ Diese Prüfungen benötigen die echte Vectorworks-Laufzeit und werden nicht durc
 - [ ] Gleiches XY/gleiches Z wird als Dublette ausgeschlossen; gleiches XY/abweichendes Z blockiert die Ausgabe.
 - [ ] Ausschlussmuster für Dach/Baum/Vegetation sowie optionale Begrenzung prüfen.
 - [ ] Bogen mit zwei deutlich verschiedenen Sehnentoleranzen prüfen; Punktanzahl und Laufzeit müssen plausibel reagieren.
-- [ ] Erzeugte Quelle markieren und mit `Landschaft > Geländemodell > Geländemodell aus Ausgangsdaten` ein natives DGM erzeugen.
-- [ ] Name, Klasse, Äquidistanz, Einheiten und Beschnitt nach dem Hinweisdialog einstellen; DGM aktualisieren und auf Fehler prüfen.
+- [ ] Nach der Quelldatenprüfung öffnet sich automatisch der native Dialog `Geländemodell aus Ausgangsdaten`; Einstellungen bestätigen und ein natives DGM erzeugen.
+- [ ] Das neue DGM wird danach automatisch erkannt, benannt, der vorgesehenen Klasse zugewiesen, sichtbar geschaltet, einzeln markiert und in das Zeichenfenster eingepasst.
+- [ ] Nativen Dialog testweise abbrechen; kein neues DGM entsteht, die geprüfte Quellenebene bleibt erhalten.
 
 ## C. Varianten
 
@@ -65,4 +66,3 @@ Diese Prüfungen benötigen die echte Vectorworks-Laufzeit und werden nicht durc
 | Testdatei | |
 | Ergebnis A–F | |
 | Abweichungen/Screenshots | |
-

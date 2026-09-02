@@ -21,13 +21,34 @@ class FakeVS(types.ModuleType):
         self.selected_members = set()
         self.deselected_handles = []
         self.entity_matrices = {}
+        self.names = {}
+        self.layer_names = {}
+        self.class_objects = {}
+        self.active_class = "Import"
+        self.menu_calls = []
+        self.shown_classes = []
+        self.shown_layers = []
+        self.redraw_count = 0
 
     def GetTypeN(self, handle): return self.types[handle]
     def GetObjectUuid(self, handle): return handle
-    def GetName(self, handle): return ""
-    def GetClass(self, handle): return "Import"
+    def GetObject(self, name):
+        for handle, object_name in self.names.items():
+            if object_name == name:
+                return handle
+        return self.class_objects.get(name)
+    def GetName(self, handle): return self.names.get(handle, "")
+    def SetName(self, handle, name): self.names[handle] = name
+    def GetClass(self, handle): return self.classes.get(handle, "Import")
     def GetLayer(self, handle): return self.layers.get(handle)
-    def GetLName(self, handle): return ""
+    def GetLName(self, handle): return self.layer_names.get(handle, "")
+    def ActiveClass(self): return self.active_class
+    def NameClass(self, name):
+        self.active_class = name
+        self.class_objects.setdefault(name, name)
+    def ShowClass(self): self.shown_classes.append(self.active_class)
+    def Layer(self, name): self.active_layer_name = name
+    def ShowLayer(self): self.shown_layers.append(getattr(self, "active_layer_name", ""))
     def Get3DCntr(self, handle): return self.points[handle][0]
     def GetEntityMatrix(self, handle):
         return self.entity_matrices.get(handle, (False, (0.0, 0.0, 0.0), 0, 0, 0))
@@ -96,6 +117,18 @@ class FakeVS(types.ModuleType):
         self.deselected_handles.append(handle)
         self.selected_members.discard(handle)
     def SetSelect(self, handle): self.selected_members.add(handle)
+
+    def DTM6_IsDTM6Object(self, handle):
+        return handle in getattr(self, "site_model_handles", ())
+
+    def DoMenuTextByName(self, name, chunk_index):
+        self.menu_calls.append((name, chunk_index))
+        if name == "DTM6 Menu" and getattr(self, "created_site_model", None):
+            handle = self.created_site_model
+            self.site_model_handles.add(handle)
+            self.selection = tuple(getattr(self, "selection", ())) + (handle,)
+
+    def ReDrawAll(self): self.redraw_count += 1
 
     def ConvertTo3DPolys(self, handle):
         return getattr(self, "conversions", {}).get(handle)
@@ -348,6 +381,47 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual(
             {"group", "text", "line", "source", "control"},
             set(fake.deselected_handles))
+
+    def test_native_site_model_is_detected_named_revealed_and_selected(self):
+        fake = FakeVS()
+        fake.site_model_handles = {"existing-model"}
+        fake.selection = ("existing-model",)
+        fake.names["existing-model"] = "Vorhandenes DGM"
+        fake.created_site_model = "new-model"
+        fake.names["new-model"] = "Geländemodell-1"
+        fake.types.update({"existing-model": 86, "new-model": 86})
+        fake.layer_order = ["model-layer"]
+        fake.layer_objects["model-layer"] = ["existing-model", "new-model"]
+        fake.layers["existing-model"] = "model-layer"
+        fake.layers["new-model"] = "model-layer"
+        fake.layer_names["model-layer"] = "PD-GB-Quelldaten"
+        adapter = load_adapter(fake)
+
+        result = adapter.create_site_model_from_selected_sources(
+            "DGM Bestand", "PD-GB-Gelaendemodell")
+
+        self.assertEqual("new-model", result["handle"])
+        self.assertEqual("DGM Bestand", result["name"])
+        self.assertEqual("PD-GB-Gelaendemodell", result["class"])
+        self.assertEqual("PD-GB-Quelldaten", result["layer"])
+        self.assertEqual("DGM Bestand", fake.names["new-model"])
+        self.assertEqual("PD-GB-Gelaendemodell", fake.classes["new-model"])
+        self.assertEqual(["PD-GB-Gelaendemodell"], fake.shown_classes)
+        self.assertEqual(["PD-GB-Quelldaten"], fake.shown_layers)
+        self.assertEqual({"new-model"}, fake.selected_members)
+        self.assertEqual(
+            [("DTM6 Menu", 1), ("Fit to Objects", 0)], fake.menu_calls)
+        self.assertEqual(1, fake.redraw_count)
+
+    def test_cancelled_native_site_model_dialog_returns_no_result(self):
+        fake = FakeVS()
+        fake.site_model_handles = set()
+        fake.selection = ()
+        adapter = load_adapter(fake)
+
+        self.assertIsNone(adapter.create_site_model_from_selected_sources(
+            "DGM Bestand", "PD-GB-Gelaendemodell"))
+        self.assertEqual([("DTM6 Menu", 1)], fake.menu_calls)
 
     def test_nurbs_keeps_individual_vertex_heights(self):
         fake = FakeVS()

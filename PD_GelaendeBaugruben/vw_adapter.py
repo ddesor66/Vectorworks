@@ -1022,6 +1022,75 @@ def site_models():
     return tuple(sorted(result, key=lambda row: (row[1].casefold(), str(row[0]))))
 
 
+def create_site_model_from_selected_sources(model_name, model_class):
+    """Run Vectorworks' native source-data command and reveal its new model.
+
+    The command itself remains native so Vectorworks owns the triangulation and
+    presents its normal settings dialog.  Once that modal command returns, the
+    newly created site-model PIO is found independently of names, assigned the
+    requested class/name, made visible and selected for an unambiguous result.
+    """
+    existing_ids = set(_identifier(handle) for handle, _name in site_models())
+    try:
+        # Universal workspace command name and first chunk item:
+        # "Geländemodell aus Ausgangsdaten" in the German Landmark workspace.
+        vs.DoMenuTextByName("DTM6 Menu", 1)
+    except (AttributeError, TypeError) as error:
+        raise core.TerrainError(
+            "Der native Befehl „Geländemodell aus Ausgangsdaten“ konnte nicht "
+            "gestartet werden: %s" % error)
+
+    created = tuple(
+        handle for handle, _name in site_models()
+        if _identifier(handle) not in existing_ids)
+    if not created:
+        return None
+    handle = created[-1]
+
+    desired_name = str(model_name or "").strip() or "DGM Bestand"
+    named_object = vs.GetObject(desired_name)
+    if named_object and _identifier(named_object) != _identifier(handle):
+        desired_name = _unique_name(desired_name)
+    if str(vs.GetName(handle) or "").strip() != desired_name:
+        vs.SetName(handle, desired_name)
+    actual_name = str(vs.GetName(handle) or "").strip()
+    if actual_name != desired_name:
+        raise core.TerrainError(
+            "Das erzeugte Geländemodell konnte nicht eindeutig benannt werden.")
+
+    desired_class = ensure_class(model_class)
+    vs.SetClass(handle, desired_class)
+    previous_class = str(vs.ActiveClass() or "")
+    try:
+        vs.NameClass(desired_class)
+        vs.ShowClass()
+    finally:
+        if previous_class and previous_class != desired_class:
+            vs.NameClass(previous_class)
+
+    layer_handle = vs.GetLayer(handle)
+    layer_name = str(vs.GetLName(layer_handle) or "") if layer_handle else ""
+    if layer_name:
+        vs.Layer(layer_name)
+        vs.ShowLayer()
+
+    _deselect_all_document_objects()
+    vs.SetSelect(handle)
+    try:
+        # Make the selected DGM fill the drawing window.  Failure here must not
+        # invalidate a model which Vectorworks has already created correctly.
+        vs.DoMenuTextByName("Fit to Objects", 0)
+    except (AttributeError, TypeError):
+        pass
+    vs.ReDrawAll()
+    return {
+        "handle": handle,
+        "name": actual_name,
+        "class": desired_class,
+        "layer": layer_name,
+    }
+
+
 def model_by_name(name):
     handle = vs.GetObject(str(name or ""))
     if not handle or not vs.DTM6_IsDTM6Object(handle):

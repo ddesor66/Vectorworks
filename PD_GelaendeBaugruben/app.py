@@ -116,27 +116,34 @@ def _preview_sources(options):
     spatial_text_heights = sum(
         text_height_counts.get(label, 0)
         for label in ("object_matrix", "3d_center", "layer_elevation"))
-    adapter.alert(
-        "%d geprüfte 3D-Quellobjekte wurden auf der aktiven Ebene „%s“ angelegt, "
-        "sichtbar eingefärbt und markiert.\n"
-        "Tatsächlich auf der Zielebene gezählt: %d Punkte, %d Bruchkanten; "
-        "%d Objekte markiert.\n"
-        "Davon aus Texten umgesetzt: %d; aus Linien umgesetzt: %d.\n\n"
+    source_summary = (
+        "%d geprüfte 3D-Quellobjekte wurden auf der aktiven Ebene „%s“ angelegt.\n"
+        "Geprüft: %d Punkte, %d Bruchkanten; %d Objekte markiert.\n"
+        "Davon aus Texten umgesetzt: %d; aus Linien umgesetzt: %d.\n"
         "Text-Höhen aus tatsächlicher 3D-Objektlage: %d; "
-        "ersatzweise aus Textinhalt: %d.\n\n"
-        "Sichtbare 1:1-Kontrollkopien auf Ebene „%s“: %d Texte, %d Linien. "
-        "Diese Kontrollkopien sind nicht für den DGM-Befehl markiert.\n\n"
-        "Nächster nativer Vectorworks-Schritt: Landschaft > Geländemodell > "
-        "Geländemodell aus Ausgangsdaten. Dieser Befehl ist über die geprüfte Python-API "
-        "nicht belastbar automatisierbar.\n\n"
-        "Vorgaben für den nativen Dialog:\nName: %s\nKlasse: %s\n"
-        "Höhenlinien-Äquidistanz: %.3f m\nHöheneinheit der Modulauswertung: Meter."
+        "ersatzweise aus Textinhalt: %d.\n"
+        "Kontrollebene „%s“: %d Texte, %d Linien."
         % (len(created), layer_name, verification["points"], verification["lines"],
            verification["selected"], usable_type_counts.get("Text", 0),
            usable_type_counts.get("Linie", 0), spatial_text_heights,
            text_height_counts.get("text_content", 0), verification["control_layer"],
-           verification["control_texts"], verification["control_lines"],
-           options["model_name"], model_class,
+           verification["control_texts"], verification["control_lines"]))
+    result = adapter.create_site_model_from_selected_sources(
+        options["model_name"], model_class)
+    if not result:
+        adapter.alert(
+            source_summary +
+            "\n\nDer native DGM-Dialog wurde abgebrochen oder hat kein neues "
+            "Geländemodell erzeugt. Die geprüften Quellen bleiben erhalten.")
+        return
+    adapter.alert(
+        source_summary +
+        "\n\nGeländemodell „%s“ wurde von Vectorworks erzeugt, auf Ebene „%s“ "
+        "und Klasse „%s“ sichtbar geschaltet, einzeln markiert und in das "
+        "Zeichenfenster eingepasst.\n"
+        "Höhenlinien-Äquidistanz im nativen Dialog: %.3f m; "
+        "Höheneinheit der Modulauswertung: Meter."
+        % (result["name"], result["layer"] or layer_name, result["class"],
            options["contour_interval_m"]))
 
 
