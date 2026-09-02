@@ -21,7 +21,8 @@ def document_symbols():
 
 
 def _check_xyz(actual, expected):
-    if (len(actual) != 3 or not all(math.isfinite(float(v)) for v in actual)
+    if (not isinstance(actual, (tuple, list)) or len(actual) != 3
+            or not all(math.isfinite(float(v)) for v in actual)
             or max(abs(a-b) for a, b in zip(actual, expected)) > 1e-5):
         raise SlopeError("Vectorworks hat eine abweichende 3D-Position erzeugt; Ausgabe abgebrochen.")
 
@@ -33,6 +34,14 @@ def _symbol_xyz(handle):
             not all(math.isfinite(float(component)) for component in value[:3])):
         raise SlopeError(
             "Vectorworks hat die 3D-Position des Punktsymbols noch nicht bereitgestellt.")
+    return tuple(float(component) for component in value[:3])
+
+
+def _native_xyz(value, description):
+    """Validate tuple-returning native geometry readers at the API boundary."""
+    if (not isinstance(value, (tuple, list)) or len(value) < 3 or
+            not all(math.isfinite(float(component)) for component in value[:3])):
+        raise SlopeError("Vectorworks hat %s noch nicht bereitgestellt." % description)
     return tuple(float(component) for component in value[:3])
 
 
@@ -48,7 +57,7 @@ def native_locus(point, factor, layer_z, class_name, color):
     handle = vs.LNewObj()
     if not handle or vs.GetTypeN(handle) != 9:
         raise SlopeError("3D-Höhenpunkt konnte nicht erzeugt werden.")
-    actual = vs.GetLocus3D(handle)
+    actual = _native_xyz(vs.GetLocus3D(handle), "die 3D-Lage des Höhenpunkts")
     _check_xyz(tuple(v*factor for v in actual), tuple(v*factor for v in local))
     _attributes(handle, class_name, color)
     return handle
@@ -70,7 +79,8 @@ def native_polygon(points, factor, layer_z, class_name, color):
         raise SlopeError("Die 3D-Verbindungslinie besitzt falsche Stützpunkte.")
     # GetPolyPt3D uses ZERO-based indices, unlike GetPolylineVertex.
     for index, expected in enumerate(points):
-        x, y, z = vs.GetPolyPt3D(handle, index)
+        x, y, z = _native_xyz(
+            vs.GetPolyPt3D(handle, index), "den 3D-Stützpunkt %d" % (index + 1))
         # Unlike GetLocus3D, GetPolyPt3D already includes the layer elevation.
         _check_xyz((x*factor, y*factor, z*factor), expected)
     _attributes(handle, class_name, color)

@@ -101,6 +101,39 @@ def object_type(handle):
     return int(vs.GetTypeN(handle)) if handle else 0
 
 
+def symbol_location_2d(handle, fallback=None):
+    """Return a finite PIO/symbol insertion point during deferred resets.
+
+    VW 2026 can briefly return ``None`` from GetSymLoc for a newly created
+    parametric object.  A caller that knows the insertion point may supply it
+    as fallback; readers of an established object omit the fallback and get a
+    clear domain error instead of a generic NoneType exception.
+    """
+    try:
+        result = vs.GetSymLoc(handle) if handle else None
+    except Exception:
+        result = None
+    point = _point(result)
+    if point is not None and all(math.isfinite(value) for value in point):
+        return point
+    point = _point(fallback)
+    if point is not None and all(math.isfinite(value) for value in point):
+        return point
+    raise core.SlopeError(
+        "Vectorworks hat die 2D-Einfügeposition des Gefälleobjekts noch nicht bereitgestellt.")
+
+
+def symbol_rotation(handle, fallback=0.0):
+    """Read a finite insertion rotation without leaking native None values."""
+    try:
+        angle = float(vs.GetSymRot(handle))
+    except Exception:
+        angle = float(fallback)
+    if not math.isfinite(angle):
+        raise core.SlopeError("Die Drehung des Gefälleobjekts ist nicht lesbar.")
+    return angle
+
+
 def layer_elevation_units(layer, factor):
     """GetLayerElevation is ALWAYS mm; drawing coordinates use document units."""
     try:
@@ -618,7 +651,8 @@ def _connection_frame(handle):
     """Native child geometry uses local XY; chain records use model metres."""
     if object_type(handle) == 86:
         factor = units_to_meters()
-        return PlanFrame(vs.GetSymRot(handle)), tuple(v*factor for v in vs.GetSymLoc(handle))
+        location = symbol_location_2d(handle)
+        return PlanFrame(symbol_rotation(handle)), tuple(v*factor for v in location)
     return PlanFrame(0.), (0., 0.)
 
 

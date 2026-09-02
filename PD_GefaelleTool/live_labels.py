@@ -85,7 +85,7 @@ def draw(handle, data):
     prefs = owner_data["preferences"]
     scale = max(1., float(vs.GetLScale(vs.GetLayer(handle)) or 1.))
     offset = prefs["offset_mm"] / 1000. * scale / factor
-    angle = vs.GetSymRot(handle)
+    angle = adapter.symbol_rotation(handle)
     frame = PlanFrame(float(owner_data.get("text_angle", 0.))-angle)
     if data["kind"] == "point" and owner_data["role"] == "point":
         point = live.read_point(owner, owner_data)
@@ -104,7 +104,8 @@ def draw(handle, data):
     else:
         raise core.SlopeError("Beschriftung und Bezugsobjekt passen nicht zusammen.")
     texts = [adapter._create_text(value, xy, rotation, cls, prefs) for value, xy, rotation, cls in specs]
-    displacement = live_model.local_xy(vs.GetSymLoc(handle), (0., 0.), angle)
+    displacement = live_model.local_xy(
+        adapter.symbol_location_2d(handle, (0.0, 0.0)), (0., 0.), angle)
     if math.hypot(*displacement)*factor > 1e-6:
         start = anchor[0]-displacement[0], anchor[1]-displacement[1]
         end = label_layout.leader_end(start, [vs.GetBBox(text) for text in texts], .3/1000.*scale/factor)

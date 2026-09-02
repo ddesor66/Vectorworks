@@ -73,7 +73,9 @@ def _configure(handle, local_z):
 
 
 def _sync_position(handle, xy, local_z):
-    x, y = vs.GetSymLoc(handle)
+    # A freshly created Stake can defer both its 2D and 3D insertion tuples.
+    # It was created at ``xy``, therefore that value is the exact fallback.
+    x, y = adapter.symbol_location_2d(handle, xy)
     if math.hypot(float(x)-xy[0], float(y)-xy[1]) > 1e-8:
         vs.HMove(handle, xy[0]-float(x), xy[1]-float(y))
     _configure(handle, local_z)

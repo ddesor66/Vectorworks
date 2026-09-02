@@ -84,3 +84,10 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   3D-Einfügepunkte neuer PIOs ohne `NoneType`-Absturz. Der Schachtdialog wurde
   verkleinert; Zusatztext und gemeinsame Kanalsohle erscheinen wieder in der
   Schachtbeschriftung.
+- Gefälletool 1.17.6: Der in Vectorworks 2026 nach Abschluss einer neu
+  gezeichneten Gefällelinie reproduzierte `NoneType`-Fehler ist behoben.
+  Neben der bereits abgesicherten 3D-Position wird nun auch eine während des
+  ersten PIO-Aufbaus vorübergehend leere 2D-Einfügeposition an allen
+  Erzeugungs-, Beschriftungs- und Höhenfanggrenzen sicher behandelt. Ein
+  vollständiger Ketten-Render-Test bildet genau diese verzögerte native
+  Rückgabe nach.

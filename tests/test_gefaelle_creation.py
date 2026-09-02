@@ -78,6 +78,62 @@ class GefaelleCreationTests(unittest.TestCase):
         self.assertEqual(12.0, result[-1])
         self.assertTrue(all(math.isfinite(value) for value in result[4]))
 
+    def test_missing_initial_pio_2d_location_uses_known_local_origin(self):
+        api = CreationAPI()
+        api.GetSymLoc = lambda _handle: None
+        adapter, render, _grade, _geometry = load_modules(api)
+        adapter.units_to_meters = lambda: 1.0
+        result = render.context(
+            "PIO", {"preferences": {"offset_mm": 2.5}, "text_angle": 0.0})
+        self.assertEqual((0.0, 0.0), result[4])
+        self.assertEqual(12.0, result[-1])
+
+    def test_chain_render_completes_when_initial_2d_location_is_pending(self):
+        api = CreationAPI()
+        api.GetSymLoc = lambda _handle: None
+        adapter, render, _grade, _geometry = load_modules(api)
+        adapter.units_to_meters = lambda: 1.0
+        adapter.layer_elevation_units = lambda _layer, _factor: 0.0
+        lines = []
+        adapter._create_line = lambda first, second, _style: lines.append((first, second))
+        chain = {
+            "points": [
+                {"number": 1, "x_m": 2.0, "y_m": 3.0, "height_m": 100.0},
+                {"number": 2, "x_m": 7.0, "y_m": 3.0, "height_m": 99.9},
+            ],
+            "mode": "manual",
+            "value": 0.0,
+            "level": "Standard",
+            "layer_name": "GEF-Standard",
+        }
+        data = {
+            "preferences": {
+                "offset_mm": 2.5,
+                "classes": {"line": {"name": "GEF-Linie", "color": [0, 0, 0]}},
+            },
+            "output": {"mode": "2d"},
+            "text_angle": 0.0,
+            "separate_labels": True,
+        }
+        render.draw_chain("PIO", data, chain)
+        self.assertEqual([((2.0, 3.0), (7.0, 3.0))], lines)
+
+    def test_missing_initial_stake_2d_location_uses_creation_coordinate(self):
+        api = CreationAPI()
+        api.GetSymLoc = lambda _handle: None
+        adapter, _render, grade, _geometry = load_modules(api)
+        grade._configure = lambda _handle, _z: None
+        grade._sync_position("STAKE", (4.0, 5.0), 8.75)
+        self.assertEqual(["STAKE"], api.reset)
+        self.assertEqual([], api.moves)
+
+    def test_unreadable_established_2d_location_is_a_domain_error(self):
+        api = CreationAPI()
+        api.GetSymLoc = lambda _handle: None
+        adapter, _render, _grade, _geometry = load_modules(api)
+        with self.assertRaisesRegex(Exception, "2D-Einfügeposition"):
+            adapter.symbol_location_2d("PIO")
+
     def test_stake_sync_defers_matrix_check_when_reset_is_pending(self):
         api = CreationAPI()
         adapter, _render, grade, _geometry = load_modules(api)

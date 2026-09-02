@@ -64,7 +64,9 @@ def read_point(handle, data=None):
     if vs.GetName(handle) != live_model.POINT_PREFIX + data["id"]:
         raise core.SlopeError("Punktidentität wurde geändert oder kopiert. Bitte den Höhenpunkt neu aufbauen.")
     factor = adapter.units_to_meters()
-    xy = tuple(v*factor for v in vs.GetSymLoc(handle))
+    stored = data["point"]
+    fallback = stored["x_m"] / factor, stored["y_m"] / factor
+    xy = tuple(v*factor for v in adapter.symbol_location_2d(handle, fallback))
     # Number is immutable in the OIP. Heights accept German decimal commas.
     height = str(vs.GetRField(handle, PLUGIN, "Hoehe_m")).strip().replace(",", ".")
     return live_model.point_value(data["point"]["number"], xy, height, data["id"])
@@ -443,8 +445,9 @@ def reset():
             for peer, peer_data in peers:
                 read_chain(peer, peer_data)
         except (core.SlopeError, ValueError, TypeError) as error:
-            x, y = vs.GetSymLoc(handle)
             factor = adapter.units_to_meters()
+            fallback = old_point["x_m"] / factor, old_point["y_m"] / factor
+            x, y = adapter.symbol_location_2d(handle, fallback)
             vs.HMove(handle, old_point["x_m"]/factor-x, old_point["y_m"]/factor-y)
             _set_point_fields(handle, old_point)
             point = old_point

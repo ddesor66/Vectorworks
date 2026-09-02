@@ -13,9 +13,12 @@ def context(handle, data):
     preferences = data["preferences"]
     scale = float(vs.GetLScale(vs.GetLayer(handle)) or 1.)
     offset = preferences["offset_mm"] / 1000. * max(1., scale) / factor
-    angle = vs.GetSymRot(handle)
+    angle = adapter.symbol_rotation(handle)
     frame = PlanFrame(float(data.get("text_angle", 0.))-angle)
-    origin = vs.GetSymLoc(handle)
+    # CreateCustomObjectN also defers GetSymLoc for some PIO resets.  Every PD
+    # point is drawn around its local origin and every connector is inserted at
+    # (0, 0), so this fallback is exact during the initial construction reset.
+    origin = adapter.symbol_location_2d(handle, (0.0, 0.0))
     # CreateCustomObjectN can trigger this reset before Vectorworks exposes a
     # 3D insertion tuple. PD point/chain PIOs are deliberately created at Z=0.
     location_3d = adapter.symbol_location_3d(handle)
