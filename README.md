@@ -24,6 +24,12 @@ Enthalten sind unter anderem die Module fuer Gefaelle, Kanal, Leitungen, Gelaend
 Baugruben, Mengen- und Massenermittlung, Planpruefung, Rigolen, Treppen,
 Winkelstuetzmauern und SketchUp-Export sowie die zugehoerigen Vectorworks-Einstiegspunkte.
 
+## Einzelskripte
+
+- `pd_gelaende_quelldaten.py`: wandelt alle markierten, im 3D-Raum liegenden Objekte in
+  3D-Punkte und 3D-Polygone um, die das Geländemodell von Vectorworks 2026 als
+  Ausgangsdaten erkennt. Beschreibung: [PD_GELAENDE_QUELLDATEN.md](PD_GELAENDE_QUELLDATEN.md).
+
 ## Entwicklungsstand
 
 Der bisherige Entwicklungsverlauf ist in [DEVELOPMENT_HISTORY.md](DEVELOPMENT_HISTORY.md)
