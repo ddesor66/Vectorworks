@@ -156,6 +156,82 @@ class GefaelleCreationTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "3D-Position des Punktsymbols"):
             geometry._symbol_xyz("SYMBOL")
 
+    def test_3d_chain_never_sends_native_stakes_to_pd_label_creation(self):
+        api = CreationAPI()
+        adapter, _render, grade, _geometry = load_modules(api)
+        live = importlib.import_module("PD_GefaelleTool.live_objects")
+        core = importlib.import_module("PD_GefaelleTool.core")
+
+        names = {}
+        handles = {}
+        payloads = {}
+        resets = []
+        labelled = []
+
+        api.ActLayer = lambda: "SOURCE-LAYER"
+        api.GetLName = lambda layer: layer
+        api.Layer = lambda _name: None
+        api.GetName = lambda handle: names.get(handle, "")
+        api.GetObject = lambda name: handles.get(name)
+        api.AddAssociation = lambda *_args: True
+        api.HMoveForward = lambda *_args: None
+        api.ResetObject = lambda handle: resets.append(handle)
+        api.DSelectAll = lambda: None
+        api.SetSelect = lambda _handle: None
+        api.ReDrawAll = lambda: None
+
+        adapter.chain_records = lambda: ()
+        adapter._activate_layer = lambda _name: True
+        adapter.units_to_meters = lambda: 1.0
+        adapter.write_chain = lambda *_args: None
+        live._find_points = lambda: {}
+        live._display = lambda _chain, preferences: {
+            "preferences": preferences,
+            "output": {"mode": "3d"},
+            "symbols": {},
+            "text_angle": 0.0,
+        }
+
+        serial = [0]
+
+        def new_object(_xy, data, name, created):
+            serial[0] += 1
+            handle = "PD-%d" % serial[0]
+            names[handle] = name
+            handles[name] = handle
+            payloads[handle] = data
+            created.append(handle)
+            return handle
+
+        live._new_object = new_object
+        live._set_point_fields = lambda *_args: None
+        live.data_of = lambda handle: payloads.get(handle)
+        live.read_chain = lambda _handle: chain
+
+        def native_stake(_owner, _data, point, created):
+            created.append("STAKE-%d" % point["number"])
+
+        grade.ensure = native_stake
+
+        def label(owner, data, _created):
+            # This line reproduces the old crash if a native Stake leaks in:
+            # its payload is None and therefore cannot be subscripted.
+            labelled.append((owner, data["role"]))
+
+        live.live_labels.ensure = label
+        chain = core.make_chain(
+            ((0.0, 0.0), (10.0, 0.0)), 100.0, "slope", 1.0,
+            start_number=1, level="Test")
+
+        live.create(chain, {"point_output": {"mode": "3d"}})
+
+        self.assertEqual(["point", "point", "chain"],
+                         [role for _handle, role in labelled])
+        self.assertFalse(any(handle.startswith("STAKE-")
+                             for handle, _role in labelled))
+        self.assertIn("STAKE-1", resets)
+        self.assertIn("STAKE-2", resets)
+
 
 if __name__ == "__main__":
     unittest.main()

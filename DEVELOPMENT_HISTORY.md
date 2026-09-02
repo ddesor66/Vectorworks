@@ -100,3 +100,8 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   Interne Objekt- und Netz-IDs wurden aus allen sichtbaren Tabellen entfernt.
   Der Excel-Pfad erhält zuverlässig die Endung `.xlsx`; die erzeugte Datei wird
   in der Regression als OOXML und zusätzlich mit Microsoft Excel geprüft.
+- Gefälletool 1.17.7: Die transaktional mitgeführten nativen Vectorworks-
+  Vermessungspunkte werden bei der 3D-Erstellung nicht mehr irrtümlich an
+  die Beschriftungsroutine für eigene Gefälle-PIOs übergeben. Damit ist der
+  Abbruch `NoneType object is not subscriptable` beim Abschließen einer neu
+  gezeichneten Gefällelinie beseitigt.

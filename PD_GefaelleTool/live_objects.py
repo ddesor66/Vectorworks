@@ -237,6 +237,10 @@ def create(chain, preferences):
     chain["point_output"] = display["output"]
     previous = str(vs.GetLName(vs.ActLayer()))
     created, changed = [], []
+    # ``created`` also owns the native Stake Objects produced by
+    # ``grade_compat.ensure`` so they can be rolled back transactionally.
+    # Only our own point/chain PIOs may receive PD label objects.
+    label_owners = []
     try:
         if not adapter._activate_layer(chain["layer_name"]):
             raise core.SlopeError("Gefällebene konnte nicht aktiviert werden.")
@@ -258,17 +262,19 @@ def create(chain, preferences):
                 handle = _new_object((point["x_m"]/factor, point["y_m"]/factor), data,
                                      live_model.POINT_PREFIX+identity, created)
                 _set_point_fields(handle, point)
+                label_owners.append(handle)
             grade_compat.ensure(handle, data, point, created)
             references.append(vs.GetName(handle))
         data = dict(display, schema=1, role="chain", chain=chain, points=references)
         connector = _new_object((0., 0.), data, live_model.CHAIN_PREFIX+chain["chain_id"], created)
+        label_owners.append(connector)
         adapter.write_chain(connector, chain)
         for name in references:
             point_handle = vs.GetObject(name)
             if not vs.AddAssociation(point_handle, 5, connector):
                 raise core.SlopeError("Löschverknüpfung konnte nicht angelegt werden.")
             vs.HMoveForward(point_handle, True)
-        for handle in tuple(created):
+        for handle in label_owners:
             live_labels.ensure(handle, data_of(handle), created)
         for handle in created + [h for h, _ in changed]:
             vs.ResetObject(handle)
