@@ -36,12 +36,20 @@ def _preview_sources(options):
     boundary_handle, boundary = boundaries[0] if boundaries else (None, None)
     all_active_layer = options.get("all_active_layer", False)
     handles = adapter.active_layer_handles() if all_active_layer else selected
-    recovered_complete_layer = False
+    recovered_layer_scope = False
     if (not all_active_layer and vectorworks_selection_count > len(handles)):
-        active_handles = adapter.active_layer_handles()
-        if len(active_handles) == vectorworks_selection_count:
-            handles = active_handles
-            recovered_complete_layer = True
+        layer_handles = adapter.object_layer_handles(selected)
+        if layer_handles:
+            handles = layer_handles
+            recovered_layer_scope = True
+    # 1,024 is the repeatedly observed Vectorworks cutoff. The internal count
+    # may incorrectly report the same truncated value, so a large selection at
+    # or above this threshold also requires layer-based recovery.
+    if not all_active_layer and len(selected) >= 1024 and not recovered_layer_scope:
+        layer_handles = adapter.object_layer_handles(selected)
+        if layer_handles:
+            handles = layer_handles
+            recovered_layer_scope = True
     if not handles:
         raise core.TerrainError(
             "Auf der aktiven Ebene wurden keine Objekte gefunden." if all_active_layer else
@@ -56,17 +64,22 @@ def _preview_sources(options):
         "%s: %d\nErkannte Quellgeometrien: %d\n"
         "Verwendbar: %d\nAusgeschlossen: %d\nProbleme: %d\n"
         "Nicht unterstützte Objekte: %d\nVerwendbare Stützpunkte: %d" %
-        ("Geprüfte Objekte der aktiven Ebene" if all_active_layer else "Geprüfte markierte Objekte",
+        ("Geprüfte Objekte der aktiven Ebene" if all_active_layer else
+         "Geprüfte Objekte der Ebenen mit Markierung" if recovered_layer_scope else
+         "Geprüfte markierte Objekte",
          len(handles), review["input_count"],
          review["usable_count"], review["excluded_count"],
          review["problem_count"], len(unsupported), review["vertex_count"]))
     if all_active_layer:
         message += "\nErfassungsbereich: gesamte aktive Ebene einschließlich Gruppen"
+    elif recovered_layer_scope:
+        message += ("\nErfassungsbereich: vollständige Ebenen der markierten Objekte "
+                    "(Vectorworks-Auswahlbegrenzung umgangen)")
     else:
         message += "\nErfassungsbereich: markierte Objekte"
     message += "\nVectorworks-Auswahlzähler: %d" % vectorworks_selection_count
-    if recovered_complete_layer:
-        message += " (vollständig über aktive Ebene wiederhergestellt)"
+    if recovered_layer_scope:
+        message += " (Auswahlbegrenzung durch Ebenenerfassung ersetzt)"
     message += ("\nModellbegrenzung: %s" %
                 ("markiertes Polygon" if boundary else "keine"))
     if unsupported:

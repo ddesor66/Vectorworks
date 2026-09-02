@@ -154,12 +154,46 @@ def active_layer_handles():
             seen.add(handle)
             result.append(handle)
     try:
-        # objOptions 0 = all objects; traversal 2 = groups deeply;
+        # objOptions 0 = all objects; traversal 0 = top-level objects only;
+        # groups are expanded exactly once by _source_elements;
         # layerOptions 0 = active layer only.
-        vs.ForEachObjectInLayer(collect, 0, 2, 0)
+        vs.ForEachObjectInLayer(collect, 0, 0, 0)
     except (AttributeError, TypeError) as error:
         raise core.TerrainError(
             "Die Objekte der aktiven Ebene konnten nicht vollständig gelesen werden.") from error
+    return tuple(result)
+
+
+def object_layer_handles(handles):
+    """Return all top-level objects on every layer represented by ``handles``."""
+    layers = set()
+    for handle in tuple(handles or ()):
+        try:
+            layer = vs.GetLayer(handle)
+        except (AttributeError, TypeError):
+            layer = None
+        if layer:
+            layers.add(layer)
+    if not layers:
+        return ()
+    result = []
+    seen = set()
+
+    def collect(handle):
+        try:
+            layer = vs.GetLayer(handle)
+        except (AttributeError, TypeError):
+            layer = None
+        if layer in layers and handle and handle not in seen:
+            seen.add(handle)
+            result.append(handle)
+    try:
+        # Full document, top-level only. Container contents are expanded later,
+        # avoiding duplicate sources from both the parent and its members.
+        vs.ForEachObjectInLayer(collect, 0, 0, 1)
+    except (AttributeError, TypeError) as error:
+        raise core.TerrainError(
+            "Die Ebenen der markierten Objekte konnten nicht vollständig gelesen werden.") from error
     return tuple(result)
 
 
