@@ -19,6 +19,9 @@ class FakeVS(types.ModuleType):
     def GetLName(self, handle): return ""
     def Get3DCntr(self, handle): return self.points[handle][0]
     def GetTextOrigin(self, handle): return self.points[handle][0][:2]
+    def GetLocPt(self, handle): return self.points[handle][0][:2]
+    def GetSegPt1(self, handle): return self.points[handle][0][:2]
+    def GetSegPt2(self, handle): return self.points[handle][1][:2]
     def GetVertNum(self, handle): return len(self.points[handle])
     def GetPolyPt3D(self, handle, index): return self.points[handle][index]
     def GetMeshVertsCnt(self, handle): return len(self.points[handle])
@@ -31,6 +34,14 @@ class FakeVS(types.ModuleType):
                 return values[index] if index < len(values) else None
         return None
 
+    def ForEachObject(self, callback, criteria):
+        self.criteria = criteria
+        for handle in getattr(self, "selection", ()):
+            callback(handle)
+
+    def Selected(self, handle):
+        return False
+
 
 def load_adapter(fake):
     sys.modules["vs"] = fake
@@ -40,6 +51,29 @@ def load_adapter(fake):
 
 
 class Foreign3DTests(unittest.TestCase):
+    def test_selection_criterion_is_not_rejected_by_second_selection_check(self):
+        fake = FakeVS()
+        fake.selection = tuple("object-%d" % index for index in range(6059))
+        adapter = load_adapter(fake)
+        self.assertEqual(6059, len(adapter.selected_handles()))
+        self.assertEqual("(SEL=TRUE)", fake.criteria)
+
+    def test_imported_line_without_3d_center_uses_layer_height_fallback(self):
+        fake = FakeVS()
+        fake.types["line"] = 2
+        fake.points["line"] = ((1.0, 2.0), (3.0, 4.0))
+        adapter = load_adapter(fake)
+        element = adapter._source_element("line", 1.0, 0.1)
+        self.assertEqual(((1.0, 2.0, 0.0), (3.0, 4.0, 0.0)), element["points"])
+
+    def test_2d_locus_is_available_at_layer_height(self):
+        fake = FakeVS()
+        fake.types["locus"] = 17
+        fake.points["locus"] = ((7.0, 8.0),)
+        adapter = load_adapter(fake)
+        element = adapter._source_element("locus", 1.0, 0.1)
+        self.assertEqual(((7.0, 8.0, 0.0),), element["points"])
+
     def test_text_uses_actual_3d_location(self):
         fake = FakeVS()
         fake.types["text"] = 10

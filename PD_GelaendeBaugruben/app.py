@@ -10,6 +10,14 @@ from . import ui
 from . import vw_adapter as adapter
 
 
+def _count_labels(values, key):
+    counts = {}
+    for value in values:
+        label = str(value.get(key) or "Unbekannt")
+        counts[label] = counts.get(label, 0) + 1
+    return ", ".join("%s: %d" % item for item in sorted(counts.items()))
+
+
 def _model_names():
     return tuple(name for _handle, name in adapter.site_models() if name)
 
@@ -28,11 +36,16 @@ def _preview_sources(options):
         options["excluded_classes"], options["excluded_layers"])
     message = (
         "Quelldatenprüfung\n\n"
-        "Markierte geeignete Elemente: %d\n"
+        "Markierte Objekte: %d\nErkannte Quellen: %d\n"
         "Verwendbar: %d\nAusgeschlossen: %d\nProbleme: %d\n"
         "Nicht unterstützte Objekte: %d\nVerwendbare Stützpunkte: %d" %
-        (review["input_count"], review["usable_count"], review["excluded_count"],
+        (review["input_count"] + len(unsupported), review["input_count"],
+         review["usable_count"], review["excluded_count"],
          review["problem_count"], len(unsupported), review["vertex_count"]))
+    if unsupported:
+        message += "\nNicht unterstützt nach Typ: " + _count_labels(unsupported, "type_name")
+    if review["excluded"]:
+        message += "\nAusgeschlossen nach Grund: " + _count_labels(review["excluded"], "reason")
     if review["problems"]:
         message += "\n\n" + "\n".join(problem["message"] for problem in review["problems"][:8])
         message += ("\n\nDiese problematischen Objekte werden übersprungen; "

@@ -15,6 +15,7 @@ from . import core
 
 TYPE_LINE = 2
 TYPE_ARC = 6
+TYPE_FREEHAND = 8
 TYPE_LOCUS_3D = 9
 TYPE_TEXT = 10
 TYPE_POLYGON = 5
@@ -22,9 +23,18 @@ TYPE_POLYLINE = 21
 TYPE_POLYGON_3D = 25
 TYPE_GROUP = 11
 TYPE_SYMBOL = 15
+TYPE_LOCUS_2D = 17
 TYPE_MESH = 40
 TYPE_PARAMETRIC = 86
 TYPE_NURBS_CURVE = 111
+OBJECT_TYPE_NAMES = {
+    2: "Linie", 3: "Rechteck", 4: "Oval", 5: "Polygon", 6: "Bogen",
+    8: "Freihandlinie", 9: "3D-Punkt", 10: "Text", 11: "Gruppe",
+    13: "Abgerundetes Rechteck", 15: "Symbol", 17: "2D-Punkt",
+    21: "Polylinie", 24: "Extrusionskörper", 25: "3D-Polygon",
+    40: "Mesh", 63: "Bemaßung", 86: "Plug-in-Objekt",
+    111: "NURBS-Kurve", 113: "NURBS-Fläche",
+}
 MODEL_RECORD = "PD_GB_Modell"
 MODEL_FIELD = "Daten"
 OUTPUT_RECORD = "PD_GB_Ausgabe"
@@ -79,8 +89,10 @@ def selected_handles():
     result = []
 
     def collect(handle):
-        if vs.Selected(handle):
-            result.append(handle)
+        # The SEL criterion is authoritative. Calling Selected(handle) again
+        # drops many imported/highlighted objects although Vectorworks counts
+        # them in the current selection (observed with large DWG surveys).
+        result.append(handle)
     vs.ForEachObject(collect, "(SEL=TRUE)")
     return tuple(result)
 
@@ -99,6 +111,11 @@ def object_label(handle):
     name = str(vs.GetName(handle) or "").strip()
     class_name, layer_name = _context(handle)
     return name or "%s / %s" % (layer_name or "Ebene ?", class_name or "Klasse ?")
+
+
+def object_type_name(value):
+    number = int(value or 0)
+    return OBJECT_TYPE_NAMES.get(number, "Objekttyp %d" % number)
 
 
 def _sample_2d_path(handle, tolerance_doc):
@@ -148,11 +165,24 @@ def _source_element(handle, factor, chord_tolerance_m):
                     "points": ((x * factor, y * factor, (z + layer_z) * factor),),
                     "class": class_name, "layer": layer_name}
         return None
+    # Imported 2D and layer-plane geometry often has no 3D centre although its
+    # layer elevation is a valid terrain height. Do not reject it for that.
     try:
         center = vs.Get3DCntr(handle)
+        if not isinstance(center, (tuple, list)) or len(center) < 3:
+            raise ValueError("kein 3D-Mittelpunkt")
         z_value = (float(center[2]) + layer_z) * factor
     except (TypeError, ValueError, IndexError):
-        return None
+        center = (0.0, 0.0, 0.0)
+        z_value = layer_z * factor
+    if object_type == TYPE_LOCUS_2D:
+        try:
+            x_value, y_value = vs.GetLocPt(handle)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        return {"id": identifier, "kind": "point",
+                "points": ((float(x_value) * factor, float(y_value) * factor, z_value),),
+                "class": class_name, "layer": layer_name}
     if object_type == TYPE_TEXT:
         try:
             origin = vs.GetTextOrigin(handle)
@@ -175,7 +205,7 @@ def _source_element(handle, factor, chord_tolerance_m):
         return {"id": identifier,
                 "kind": "contour" if vs.IsPolyClosed(handle) else "breakline",
                 "points": points, "class": class_name, "layer": layer_name}
-    if object_type == TYPE_ARC:
+    if object_type in (TYPE_ARC, TYPE_FREEHAND):
         points_2d = _sample_2d_path(handle, chord_tolerance_m / factor)
         if points_2d:
             return {"id": identifier, "kind": "curve",
@@ -280,7 +310,9 @@ def extract_selected_sources(chord_tolerance_m=core.DEFAULT_CHORD_TOLERANCE_M,
         if elements:
             result.extend(elements)
         else:
-            unsupported.append(dict(id=_identifier(handle), type=int(vs.GetTypeN(handle) or 0)))
+            object_type = int(vs.GetTypeN(handle) or 0)
+            unsupported.append(dict(id=_identifier(handle), type=object_type,
+                                    type_name=object_type_name(object_type)))
     return tuple(result), tuple(unsupported)
 
 
