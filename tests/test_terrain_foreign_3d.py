@@ -42,6 +42,11 @@ class FakeVS(types.ModuleType):
     def Selected(self, handle):
         return False
 
+    def ForEachObjectInLayer(self, callback, obj_options, traversal_options, layer_options):
+        self.layer_search_options = (obj_options, traversal_options, layer_options)
+        for handle in getattr(self, "all_layer_selection", ()):
+            callback(handle)
+
     def FSActLayer(self):
         return getattr(self, "active_selection", [None])[0]
 
@@ -76,6 +81,16 @@ class Foreign3DTests(unittest.TestCase):
         handles = adapter.selected_handles()
         self.assertEqual(6059, len(handles))
         self.assertEqual(6059, len(set(handles)))
+
+    def test_deep_all_layer_selection_recovers_full_document_selection(self):
+        fake = FakeVS()
+        fake.selection = tuple("object-%d" % index for index in range(95))
+        fake.active_selection = tuple("object-%d" % index for index in range(1024))
+        fake.all_layer_selection = tuple("object-%d" % index for index in range(6059))
+        adapter = load_adapter(fake)
+        handles = adapter.selected_handles()
+        self.assertEqual(6059, len(handles))
+        self.assertEqual((2, 2, 1), fake.layer_search_options)
 
     def test_imported_arc_uses_direct_geometry_fallback(self):
         fake = FakeVS()

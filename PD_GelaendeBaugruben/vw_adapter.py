@@ -109,6 +109,13 @@ def selected_handles():
             handle = vs.NextSObj(handle)
     except (AttributeError, TypeError):
         pass
+    # Authoritative full-document fallback: selected objects only (2), deep
+    # container traversal (2), all layers (1). This reaches selections spanning
+    # design layers and imported containers that the two faster paths omit.
+    try:
+        vs.ForEachObjectInLayer(collect, 2, 2, 1)
+    except (AttributeError, TypeError):
+        pass
     return tuple(result)
 
 
