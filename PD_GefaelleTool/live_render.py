@@ -16,7 +16,10 @@ def context(handle, data):
     angle = vs.GetSymRot(handle)
     frame = PlanFrame(float(data.get("text_angle", 0.))-angle)
     origin = vs.GetSymLoc(handle)
-    z = vs.GetSymLoc3D(handle)[2]
+    # CreateCustomObjectN can trigger this reset before Vectorworks exposes a
+    # 3D insertion tuple. PD point/chain PIOs are deliberately created at Z=0.
+    location_3d = adapter.symbol_location_3d(handle)
+    z = location_3d[2] if location_3d is not None else 0.0
     layer_z = adapter.layer_elevation_units(vs.GetLayer(handle), factor) + z
     return factor, offset, angle, frame, origin, layer_z
 

@@ -1054,7 +1054,12 @@ def shaft_label(shaft, endpoint_rows, preferences):
             lines.append(station)
         return "\n".join(lines)
     depth = format_number(shaft["kd_m"] - shaft["ks_m"], preferences["length_decimals"])
-    lines = [shaft["name"], "Bauart: %s" % shaft["construction_label"]]
+    lines = [shaft["name"]]
+    if shaft.get("note"):
+        # The freely editable supplementary designation belongs immediately
+        # below the shaft name (for example "Drosselschacht 4,0 l/s").
+        lines.extend(str(shaft["note"]).splitlines())
+    lines.append("Bauart: %s" % shaft["construction_label"])
     if shaft["structure_type"] != "special":
         diameter = format_number(shaft["diameter_m"], preferences["length_decimals"])
         lines.append("D.= %s m" % diameter)
@@ -1077,6 +1082,11 @@ def shaft_label(shaft, endpoint_rows, preferences):
                              (connection_plan_name(
                                  row["role"], row["tag"], counts[row["role"]]),
                               height(row["height"])))
+        else:
+            # Equal connections are intentionally not named individually, but
+            # their common channel invert must remain visible in the label.
+            common = rows[0]["height"] if rows else shaft["ks_m"]
+            lines.append("KS = %s m" % height(common))
     else:
         shown_heights = {
             round(value, preferences["height_decimals"])
@@ -1088,5 +1098,8 @@ def shaft_label(shaft, endpoint_rows, preferences):
             if outgoing:
                 lines.append("Ablauf | KS = %s m" %
                              " / ".join(height(value) for value in outgoing))
+        else:
+            values = incoming + outgoing
+            lines.append("KS = %s m" % height(values[0] if values else shaft["ks_m"]))
     lines.append("Tiefe = %s m" % depth)
     return "\n".join(lines)

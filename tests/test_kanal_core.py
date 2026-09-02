@@ -13,7 +13,7 @@ def shaft(identity, name, x_m, ks_m, material="concrete", construction_label=Non
         "id": identity,
         "kind": "RW",
         "name": name,
-        "note": "Dieser Alttest darf nicht in der Zeichnung erscheinen.",
+        "note": "",
         "x_m": x_m,
         "y_m": 0.0,
         "kd_m": ks_m + 1.5,
@@ -125,13 +125,23 @@ class ShaftLabelTests(unittest.TestCase):
         with self.assertRaises(core.SewerError):
             shaft("s3", "RW.003", 10.0, 98.0, "PP", "PP\nungültig")
 
-    def test_equal_height_connections_are_omitted(self):
+    def test_equal_height_connections_show_one_common_invert(self):
         value = shaft("s1", "RW.001", 0.0, 100.0)
         label = core.shaft_label(
             value, (("in", 100.0), ("out", 100.0)), preferences())
         self.assertNotIn("Zulauf", label)
         self.assertNotIn("Ablauf", label)
-        self.assertEqual(5, len(label.splitlines()))
+        self.assertIn("KS = 100,00 m", label)
+        self.assertEqual(6, len(label.splitlines()))
+
+    def test_supplementary_text_is_directly_below_shaft_name(self):
+        value = core.validate_shaft(dict(
+            shaft("s1", "RW.001", 0.0, 100.0),
+            note="Drosselschacht 4,0 l/s"), allow_hidden=True)
+        lines = core.shaft_label(value, (), preferences()).splitlines()
+        self.assertEqual("RW.001", lines[0])
+        self.assertEqual("Drosselschacht 4,0 l/s", lines[1])
+        self.assertEqual("Bauart: B", lines[2])
 
     def test_holding_connection_station_is_part_of_normal_shaft_label(self):
         value = core.validate_shaft(dict(

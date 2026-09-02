@@ -12,6 +12,7 @@ class DialogAPI(object):
         self.next_dialog = 100
         self.controls = {}
         self.text = {}
+        self.edit_widths = {}
         self.boolean = {}
         self.choices = {}
         self.choice_calls = []
@@ -46,9 +47,9 @@ class DialogAPI(object):
         return self._dialog()
 
     def CreateEditText(self, dialog, item, value, width):
-        del width
         self._control(dialog, item)
         self.text[(dialog, item)] = str(value)
+        self.edit_widths[(dialog, item)] = int(width)
 
     def CreateStaticText(self, dialog, item, value, width):
         del width
@@ -253,6 +254,51 @@ class KanalDialogTests(unittest.TestCase):
         choice = ui.shaft_dialog(current, settings, (100.2, 100.1), (100.0,))
         self.assertFalse(choice["inlet_changed"])
         self.assertFalse(choice["outlet_changed"])
+
+    def test_shaft_dialog_preserves_note_and_uses_compact_text_fields(self):
+        api = DialogAPI()
+        api.on_run = lambda _dialog, handler: handler(1, 0)
+        ui = load_ui(api)
+        core = importlib.import_module("PD_KanalTool.core")
+        current = core.validate_shaft(dict(
+            shaft("s1", "RW.001", 0.0, 100.0), note="RW33"),
+            allow_hidden=True)
+        choice = ui.shaft_dialog(
+            current,
+            importlib.import_module("PD_KanalTool.settings").validate({}),
+            (100.0,), (100.0,))
+        self.assertEqual("RW33", choice["shaft"]["note"])
+        dialog = api.next_dialog
+        self.assertEqual(24, api.edit_widths[(dialog, 33)])
+        self.assertEqual(24, api.edit_widths[(dialog, 43)])
+
+    def test_shaft_dialog_fits_inside_768_pixel_screen(self):
+        api = DialogAPI()
+        api.on_run = lambda _dialog, handler: handler(1, 0)
+        sizes = {}
+        positions = {}
+        api.GetScreen = lambda: (0, 0, 1366, 768)
+        api.SetLayoutDialogSize = lambda dialog, width, height: sizes.update(
+            {dialog: (int(width), int(height))})
+        api.GetLayoutDialogSize = lambda dialog: sizes.get(dialog, (900, 900))
+        api.SetLayoutDialogPosition = lambda dialog, x, y: positions.update(
+            {dialog: (int(x), int(y))})
+        ui = load_ui(api)
+        core = importlib.import_module("PD_KanalTool.core")
+        current = core.validate_shaft(
+            shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True)
+        self.assertIsNotNone(ui.shaft_dialog(
+            current,
+            importlib.import_module("PD_KanalTool.settings").validate({}),
+            (100.0,), (100.0,)))
+        dialog = api.next_dialog
+        width, height = sizes[dialog]
+        x, y = positions[dialog]
+        self.assertLessEqual(width, 1342)
+        self.assertLessEqual(height, 720)
+        self.assertGreaterEqual(x, 12)
+        self.assertGreaterEqual(y, 12)
+        self.assertLessEqual(y + height, 756)
 
     def test_preferences_use_three_compact_tabs_and_return_update_scope(self):
         api = DialogAPI()

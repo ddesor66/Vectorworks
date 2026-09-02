@@ -397,27 +397,48 @@ def _set_sheet_page_size(layer, width, height, units_to_meters=None):
         raise core.SewerError("Dokumenteinheiten für das Schachtblatt sind ungültig.")
     width_units = width * 0.0254 / factor
     height_units = height * 0.0254 / factor
+    # Repaginate the sheet first and make SetDrawingRect the final authority.
+    # In VW 2026/Windows TBB_GetPageArea can report the printer medium in
+    # portrait order even though the active sheet drawing rectangle was set
+    # to the requested landscape order.  Retrying with swapped selectors left
+    # the layer in portrait and then deleted the otherwise valid preview.
+    vs.SetObjectVariableReal(layer, LAYER_SHEET_WIDTH, width_units)
+    vs.SetObjectVariableReal(layer, LAYER_SHEET_HEIGHT, height_units)
+    vs.SetObjectVariableBoolean(layer, LAYER_REPAGINATE, True)
     vs.SetDrawingRect(width, height)
-    actual_width = actual_height = 0.0
-    # Width/height ordering differs in some localized 2026 builds.  The first
-    # assignment follows the documented/forum-confirmed selector order; the
-    # second is a safe native retry only when the host still reports portrait.
-    for sheet_width, sheet_height in (
-            (width_units, height_units), (height_units, width_units)):
-        vs.SetObjectVariableReal(layer, LAYER_SHEET_WIDTH, sheet_width)
-        vs.SetObjectVariableReal(layer, LAYER_SHEET_HEIGHT, sheet_height)
-        vs.SetObjectVariableBoolean(layer, LAYER_REPAGINATE, True)
-        actual = vs.TBB_GetPageArea(layer)
-        if not isinstance(actual, (tuple, list)) or len(actual) < 2:
-            raise core.SewerError("Schachtblatt-Seitengröße konnte nicht gelesen werden.")
-        actual_width, actual_height = float(actual[0]), float(actual[1])
-        if (abs(actual_width - width) <= 0.01 and
-                abs(actual_height - height) <= 0.01):
-            return actual_width, actual_height
+    actual = vs.TBB_GetPageArea(layer)
+    if not isinstance(actual, (tuple, list)) or len(actual) < 2:
+        raise core.SewerError("Schachtblatt-Seitengröße konnte nicht gelesen werden.")
+    actual_width, actual_height = float(actual[0]), float(actual[1])
+    exact_medium = (abs(actual_width - width) <= 0.01 and
+                    abs(actual_height - height) <= 0.01)
+    same_a4_medium = (abs(actual_width - height) <= 0.01 and
+                      abs(actual_height - width) <= 0.01)
+    drawing_rect = vs.GetDrawingSizeRectN(layer)
+    try:
+        top_left, bottom_right = drawing_rect
+        rect_width = abs(float(bottom_right[0]) - float(top_left[0]))
+        rect_height = abs(float(bottom_right[1]) - float(top_left[1]))
+        rect_width_inches = rect_width * factor / 0.0254
+        rect_height_inches = rect_height * factor / 0.0254
+    except (TypeError, ValueError, IndexError):
+        raise core.SewerError(
+            "Zeichenrahmen des Schachtblatts konnte nicht gelesen werden.")
+    landscape_rect = (math.isfinite(rect_width_inches) and
+                      math.isfinite(rect_height_inches) and
+                      abs(rect_width_inches - width) <= 0.01 and
+                      abs(rect_height_inches - height) <= 0.01)
+    if (exact_medium or same_a4_medium) and landscape_rect:
+        # Some Windows printer drivers report the same physical A4 medium in
+        # portrait order. GetDrawingSizeRectN independently proves that the
+        # Vectorworks sheet drawing rectangle used by the renderer is A4 wide.
+        return width, height
     raise core.SewerError(
-        "Vectorworks hat für das Schachtblatt %.4f × %.4f Zoll statt "
-        "DIN A4 quer (%.4f × %.4f Zoll) eingestellt." %
-        (actual_width, actual_height, width, height))
+        "Vectorworks hat für das Schachtblatt %.4f × %.4f Zoll und einen "
+        "Zeichenrahmen %.4f × %.4f Zoll statt DIN A4 quer "
+        "(%.4f × %.4f Zoll) eingestellt." %
+        (actual_width, actual_height, rect_width_inches, rect_height_inches,
+         width, height))
 
 
 def _create_sheet_layer(name, shaft, connections, config, preferences):

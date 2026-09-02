@@ -74,3 +74,13 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   Rohraußendurchmesser, Rohrwandstärke, hohler 3D-Geometrie und erweiterten
   Mengentabellen wurde konfliktfrei mit den Bedienungs-, Beschriftungs-,
   Schachtblatt-, Ketten- und Fließrichtungsänderungen zusammengeführt.
+- Kanaltool 1.1.3: Nach der Freigabe 1.1.2 wurden vier gemeldete
+  Laufzeitregressionen isoliert abgesichert. Beim Teilen für Kanalstutzen wird
+  die abhängige Haltungsbeschriftung vor der alten Haltung gelöscht und bei
+  einer abgewiesenen Löschung wiederhergestellt. Die Schachtblatterzeugung
+  akzeptiert die von Vectorworks 2026 unter Windows in Hochformatreihenfolge
+  gemeldeten Maße desselben A4-Druckmediums, behält aber den Zeichenrahmen in
+  DIN A4 quer. Das Gefälletool behandelt vorübergehend noch nicht verfügbare
+  3D-Einfügepunkte neuer PIOs ohne `NoneType`-Absturz. Der Schachtdialog wurde
+  verkleinert; Zusatztext und gemeinsame Kanalsohle erscheinen wieder in der
+  Schachtbeschriftung.

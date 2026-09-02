@@ -1,4 +1,4 @@
-# PD Kanaltool 1.1.2
+# PD Kanaltool 1.1.3
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und
@@ -165,12 +165,13 @@ Material, Zu-/Ablauf, Anschlusshöhe und Richtung werden unmittelbar aus den
 aktuellen Haltungsdaten abgeleitet. Auch zwei Anschlüsse mit gleicher Höhe
 bleiben getrennte Einträge. Bei unterschiedlichen Höhen stehen die
 Anschlusshöhen zusätzlich direkt an den jeweiligen Anschlussrichtungen. Das
-Schacht-Informationsfeld ist bewusst kompakt und führt ausschließlich
-Schachtname, Bauart, `D.=`, `KD`, jeden Zu- und Ablauf sowie die Tiefe. Die
-Anschlusszeilen enthalten Kennung, Zu-/Ablauf, Höhe und Material; der
-Rohrdurchmesser und der Richtungswinkel bleiben den Schachtblättern
-vorbehalten. Separate Anschlusshöhen am Schacht stehen leserichtig parallel
-zur jeweiligen Haltung.
+Schacht-Informationsfeld ist bewusst kompakt und führt Schachtname, den
+optionalen Zusatztext unmittelbar darunter, Bauart, `D.=`, `KD`, die
+Kanalsohle und die Tiefe. Bei gleicher Höhe aller Anschlüsse erscheint genau
+eine gemeinsame Zeile `KS`; nur bei unterschiedlichen Höhen werden Zu- und
+Abläufe einzeln benannt. Rohrmaterial, Rohrdurchmesser und Richtungswinkel
+bleiben den Schachtblättern vorbehalten. Separate Anschlusshöhen am Schacht
+stehen leserichtig parallel zur jeweiligen Haltung.
 
 Bei runden Kanalschächten wird ausdrücklich zwischen `PP-Schacht` und
 `Betonschacht` gewählt. Der eingegebene Durchmesser ist der lichte

@@ -103,10 +103,35 @@ def object_type(handle):
 
 def layer_elevation_units(layer, factor):
     """GetLayerElevation is ALWAYS mm; drawing coordinates use document units."""
-    value = float(vs.GetLayerElevation(layer)[0]) / 1000.0 / factor
+    try:
+        result = vs.GetLayerElevation(layer)
+        value = float(result[0]) / 1000.0 / factor
+    except (TypeError, ValueError, IndexError) as error:
+        raise core.SlopeError("Ebenenhöhe konnte nicht gelesen werden.") from error
     if not math.isfinite(value):
         raise core.SlopeError("Ebenenhöhe konnte nicht gelesen werden.")
     return value
+
+
+def symbol_location_3d(handle):
+    """Read a symbol/PIO insertion point without assuming reset completion.
+
+    Vectorworks can temporarily return ``None`` from GetSymLoc3D while a new
+    parametric object or Stake Object is still completing its first reset.
+    That is not an invalid user coordinate.  Callers either know the initial
+    Z value (new PD PIOs are inserted at Z=0) or can defer verification until
+    the next native reset.
+    """
+    if not handle:
+        return None
+    result = vs.GetSymLoc3D(handle)
+    if not isinstance(result, (tuple, list)) or len(result) < 3:
+        return None
+    try:
+        location = tuple(float(result[index]) for index in range(3))
+    except (TypeError, ValueError):
+        return None
+    return location if all(math.isfinite(value) for value in location) else None
 
 
 def alert(message):

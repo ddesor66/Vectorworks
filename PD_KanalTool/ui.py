@@ -34,20 +34,30 @@ def _right_side_position(dialog, preferred_size=None):
     like workflow while the persistent command buttons remain in the OIP.
     """
     try:
-        if preferred_size:
-            vs.SetLayoutDialogSize(dialog, int(preferred_size[0]), int(preferred_size[1]))
-        size = vs.GetLayoutDialogSize(dialog)
         screen = vs.GetScreen()
-        if (not isinstance(size, (tuple, list)) or len(size) != 2 or
-                not isinstance(screen, (tuple, list)) or len(screen) != 4):
+        if not isinstance(screen, (tuple, list)) or len(screen) != 4:
             return
-        width, height = max(320, int(size[0])), max(240, int(size[1]))
         left, top, right, bottom = (int(value) for value in screen)
         screen_width = max(1, right - left)
+        screen_height = max(1, bottom - top)
+        max_width = max(320, screen_width - 24)
+        max_height = max(240, screen_height - 48)
+        if preferred_size:
+            vs.SetLayoutDialogSize(
+                dialog,
+                min(max_width, int(preferred_size[0])),
+                min(max_height, int(preferred_size[1])))
+        size = vs.GetLayoutDialogSize(dialog)
+        if not isinstance(size, (tuple, list)) or len(size) != 2:
+            return
+        width = min(max_width, max(320, int(size[0])))
+        height = min(max_height, max(240, int(size[1])))
+        if (width, height) != (int(size[0]), int(size[1])):
+            vs.SetLayoutDialogSize(dialog, width, height)
         # Reserve the normal width of Vectorworks' docked right palettes.
         palette_width = max(280, min(420, int(screen_width * 0.22)))
         x = max(left + 12, right - palette_width - width - 12)
-        y = max(top + 42, min(top + 72, bottom - height - 24))
+        y = max(top + 12, min(top + 42, bottom - height - 12))
         vs.SetLayoutDialogPosition(dialog, x, y)
     except (AttributeError, TypeError, ValueError):
         # Layout and screen queries are presentation-only. A missing value
@@ -658,10 +668,10 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
     vs.CreateEditText(dialog, 29, str(current["cover_rotation_deg"]).replace(".", ","), 24)
     vs.CreateCheckBox(dialog, 30, "2D-Symbol aus Dokument oder Bibliothek verwenden")
     vs.CreateResourcePopup(dialog, 31, 42)
-    vs.CreateStaticText(dialog, 32, "Bauart in der Beschriftung (B, PP oder freier Text):", -1)
-    vs.CreateEditText(dialog, 33, current["construction_label"], 42)
-    vs.CreateStaticText(dialog, 42, "Zusatztext unter dem Schachtnamen:", -1)
-    vs.CreateEditText(dialog, 43, current.get("note", ""), 42)
+    vs.CreateStaticText(dialog, 32, "Bauarttext (B, PP oder frei):", -1)
+    vs.CreateEditText(dialog, 33, current["construction_label"], 24)
+    vs.CreateStaticText(dialog, 42, "Zusatztext unter Schachtname:", -1)
+    vs.CreateEditText(dialog, 43, current.get("note", ""), 24)
     vs.CreateCheckBox(dialog, 36, "Zu- und Ablauf mit gleicher Höhe")
     vs.CreateStaticText(
         dialog, 37,
@@ -836,7 +846,7 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
                 result["value"] = None
                 return -1
         return item
-    return result["value"] if _run(dialog, handler) == 1 else None
+    return result["value"] if _run(dialog, handler, (520, 760)) == 1 else None
 
 
 def downstream_height_dialog(delta_m, pipe_count):

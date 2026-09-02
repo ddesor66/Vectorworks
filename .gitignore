@@ -11,6 +11,7 @@ PD_Netzwerklizenz.json
 **/PD_Netzwerklizenz.json
 *.vwx
 *.bak
+.install-backups/
 
 # Lokale Einstellungen und Exporte
 .env

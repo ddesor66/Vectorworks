@@ -450,18 +450,15 @@ def connect_selected_shafts(handles, options, preferences):
 
 
 def _delete_with_labels(handle, data, verify=False):
-    """Delete a replaced owner without risking loss of the intact original.
+    """Delete an owner and its dependent labels in Vectorworks-safe order.
 
-    The owner is deleted and verified before its dependent labels.  If
-    Vectorworks refuses the owner deletion, callers can safely discard their
-    newly created replacements while the complete old object stays visible.
+    Vectorworks refuses to delete a channel owner while its kind-4 label PIO
+    still exists.  Labels therefore have to disappear first.  For verified
+    replacement transactions, a rejected owner deletion recreates the label
+    before the caller rolls the newly created replacement objects back.
     """
     owner_name = _name(handle)
     label_names = tuple(str(name) for name in data.get("labels", ()))
-    vs.DelObject(handle)
-    if verify and owner_name and vs.GetObject(owner_name):
-        raise core.SewerError(
-            "Die ersetzte Kanalhaltung konnte nicht gelöscht werden: %s" % owner_name)
     for name in label_names:
         label = vs.GetObject(name)
         if label:
@@ -472,6 +469,27 @@ def _delete_with_labels(handle, data, verify=False):
             raise core.SewerError(
                 "Die alte Kanalbeschriftung konnte nicht gelöscht werden: %s"
                 % ", ".join(remaining))
+
+    vs.DelObject(handle)
+    if verify and owner_name and vs.GetObject(owner_name):
+        restoration_errors = []
+        if is_sewer_data(data):
+            restored = []
+            try:
+                ensure_label(handle, data, restored)
+                for restored_handle in restored:
+                    vs.ResetObject(restored_handle)
+            except Exception:
+                for restored_handle in reversed(restored):
+                    if restored_handle:
+                        vs.DelObject(restored_handle)
+                restoration_errors.append("Beschriftung")
+        if restoration_errors:
+            raise core.SewerError(
+                "Die alte Haltung blieb erhalten; Wiederherstellung fehlgeschlagen: %s."
+                % ", ".join(restoration_errors))
+        raise core.SewerError(
+            "Die ersetzte Kanalhaltung konnte nicht gelöscht werden: %s" % owner_name)
 
 
 def _associate_pipe(handle, pipe):
@@ -643,10 +661,10 @@ def split_selected(handle, point_m, preferences):
         # parametric holding and its labels no longer overlap the replacements.
         _delete_with_labels(handle, data, verify=True)
     except Exception:
-        # If only an old label resisted deletion, the old owner is already
-        # gone. Keep the complete replacement instead of losing both old and
-        # new geometry. All earlier failures leave the old owner intact and
-        # therefore roll the replacement back completely.
+        # A verified deletion failure keeps or restores the complete old
+        # owner, so the new objects can be discarded without losing geometry.
+        # If the native host removed the owner before a later error, preserve
+        # the complete replacement instead of losing both versions.
         if not old_owner_name or vs.GetObject(old_owner_name):
             for existing_handle, snapshot in snapshots.items():
                 _live().write_data(existing_handle, snapshot)

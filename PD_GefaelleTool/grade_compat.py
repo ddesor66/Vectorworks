@@ -82,11 +82,20 @@ def _sync_position(handle, xy, local_z):
     # Z Value is the normal Stake contract.  Move3DObj is a verified fallback
     # for installations where the compiled PIO applies the field on a deferred
     # reset; it also keeps the insertion matrix correct for 3D snapping.
-    z = float(vs.GetSymLoc3D(handle)[2])
+    location = adapter.symbol_location_3d(handle)
+    if location is None:
+        # The Z Value field is the authoritative Stake contract. A freshly
+        # created native PIO may not expose its 3D matrix until Vectorworks has
+        # completed the requested reset; verify it on a later synchronization.
+        return
+    z = location[2]
     if abs(z-local_z) > 1e-7:
         vs.Move3DObj(handle, 0., 0., local_z-z)
         vs.ResetObject(handle)
-        z = float(vs.GetSymLoc3D(handle)[2])
+        location = adapter.symbol_location_3d(handle)
+        if location is None:
+            return
+        z = location[2]
     if abs(z-local_z) > 1e-5:
         raise core.SlopeError(
             "Der Vectorworks-Höhenfangpunkt konnte nicht auf die PD-Höhe gesetzt werden.")

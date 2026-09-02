@@ -26,6 +26,16 @@ def _check_xyz(actual, expected):
         raise SlopeError("Vectorworks hat eine abweichende 3D-Position erzeugt; Ausgabe abgebrochen.")
 
 
+def _symbol_xyz(handle):
+    """Read a stable 3D symbol position after a native reset."""
+    value = vs.GetSymLoc3D(handle)
+    if (not isinstance(value, (tuple, list)) or len(value) < 3 or
+            not all(math.isfinite(float(component)) for component in value[:3])):
+        raise SlopeError(
+            "Vectorworks hat die 3D-Position des Punktsymbols noch nicht bereitgestellt.")
+    return tuple(float(component) for component in value[:3])
+
+
 def _attributes(handle, class_name, color):
     vs.SetClass(handle, class_name)
     vs.SetPenFore(handle, tuple(color))
@@ -125,10 +135,10 @@ def marker(point, symbol_name, options, factor, layer_z):
         if abs(vs.GetObjectVariableReal(handle, selector) - options["scale"]) > 1e-8:
             raise SlopeError("Die Symbolskalierung wurde nicht übernommen.")
     if options["mode"] == "3d":
-        x, y, z = vs.GetSymLoc3D(handle)
+        x, y, z = _symbol_xyz(handle)
         target = (point["x_m"]/factor, point["y_m"]/factor, point["height_m"]/factor-layer_z)
         vs.Move3DObj(handle, target[0]-x, target[1]-y, target[2]-z)
-        _check_xyz(tuple(v*factor for v in vs.GetSymLoc3D(handle)), tuple(v*factor for v in target))
+        _check_xyz(tuple(v*factor for v in _symbol_xyz(handle)), tuple(v*factor for v in target))
     vs.SetClass(handle, options["point_class"])
     return handle
 
