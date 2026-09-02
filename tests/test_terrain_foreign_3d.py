@@ -18,6 +18,9 @@ class FakeVS(types.ModuleType):
         self.pen_colors = {}
         self.fill_colors = {}
         self.line_weights = {}
+        self.selected_members = set()
+        self.deselected_handles = []
+        self.entity_matrices = {}
 
     def GetTypeN(self, handle): return self.types[handle]
     def GetObjectUuid(self, handle): return handle
@@ -26,6 +29,8 @@ class FakeVS(types.ModuleType):
     def GetLayer(self, handle): return self.layers.get(handle)
     def GetLName(self, handle): return ""
     def Get3DCntr(self, handle): return self.points[handle][0]
+    def GetEntityMatrix(self, handle):
+        return self.entity_matrices.get(handle, (False, (0.0, 0.0, 0.0), 0, 0, 0))
     def GetTextOrigin(self, handle): return self.points[handle][0][:2]
     def GetLocPt(self, handle): return self.points[handle][0][:2]
     def GetSegPt1(self, handle): return self.points[handle][0][:2]
@@ -87,6 +92,10 @@ class FakeVS(types.ModuleType):
     def SetPenFore(self, handle, color): self.pen_colors[handle] = color
     def SetFillFore(self, handle, color): self.fill_colors[handle] = color
     def SetLW(self, handle, weight): self.line_weights[handle] = weight
+    def SetDSelect(self, handle):
+        self.deselected_handles.append(handle)
+        self.selected_members.discard(handle)
+    def SetSelect(self, handle): self.selected_members.add(handle)
 
     def ConvertTo3DPolys(self, handle):
         return getattr(self, "conversions", {}).get(handle)
@@ -269,6 +278,18 @@ class Foreign3DTests(unittest.TestCase):
         adapter = load_adapter(fake)
         element = adapter._source_element("text", 1.0, 0.1)
         self.assertEqual(((12.0, 34.0, 102.65),), element["points"])
+        self.assertEqual("text_content", element["height_source"])
+
+    def test_text_entity_matrix_z_precedes_center_and_numeric_content(self):
+        fake = FakeVS()
+        fake.types["text"] = 10
+        fake.points["text"] = ((12.0, 34.0, 0.0),)
+        fake.entity_matrices["text"] = (True, (12.0, 34.0, 102.65), 0.0, 0.0, 0.0)
+        fake.GetText = lambda _handle: "999.99"
+        adapter = load_adapter(fake)
+        element = adapter._source_element("text", 1.0, 0.1)
+        self.assertEqual(((12.0, 34.0, 102.65),), element["points"])
+        self.assertEqual("object_matrix", element["height_source"])
 
     def test_extracted_text_and_line_keep_native_type_provenance(self):
         fake = FakeVS()
@@ -306,6 +327,27 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual(adapter.COLOR_CONTROL_TEXT, fake.pen_colors["text-control"])
         self.assertEqual(adapter.COLOR_CONTROL_LINE, fake.pen_colors["line-control"])
         self.assertEqual(40, fake.line_weights["line-control"])
+        self.assertFalse(fake.Selected("text-control"))
+        self.assertFalse(fake.Selected("line-control"))
+
+    def test_document_wide_deselect_ignores_active_layer_restrictions(self):
+        fake = FakeVS()
+        fake.types.update(group=11, text=10, line=2, source=9, control=10)
+        fake.layer_order = ["original-layer", "source-layer", "control-layer"]
+        fake.layer_objects.update({
+            "original-layer": ["group", "line"],
+            "source-layer": ["source"],
+            "control-layer": ["control"],
+        })
+        fake.children["group"] = ["text"]
+        fake.selected_members.update({"group", "text", "line", "source", "control"})
+        adapter = load_adapter(fake)
+        count = adapter._deselect_all_document_objects()
+        self.assertEqual(5, count)
+        self.assertEqual(set(), fake.selected_members)
+        self.assertEqual(
+            {"group", "text", "line", "source", "control"},
+            set(fake.deselected_handles))
 
     def test_nurbs_keeps_individual_vertex_heights(self):
         fake = FakeVS()

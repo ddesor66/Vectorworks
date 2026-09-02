@@ -234,7 +234,8 @@ def review_sources(elements, xy_tolerance_m=DEFAULT_XY_TOLERANCE_M,
                            layer_name=str(raw.get("layer") or ""),
                            source_type=raw.get("source_type"),
                            source_type_name=str(raw.get("source_type_name") or ""),
-                           source_handle=raw.get("source_handle")))
+                           source_handle=raw.get("source_handle"),
+                           height_source=str(raw.get("height_source") or "")))
         for point in points:
             cell = (int(math.floor(point[0] / xy_tolerance)),
                     int(math.floor(point[1] / xy_tolerance)))

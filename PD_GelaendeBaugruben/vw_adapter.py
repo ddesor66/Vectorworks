@@ -397,6 +397,24 @@ def _numeric_text_height_m(handle):
     return height if math.isfinite(height) and abs(height) <= 100000.0 else None
 
 
+def _planar_object_z_units(handle):
+    """Read the actual Z offset of planar geometry from its entity matrix."""
+    try:
+        matrix = vs.GetEntityMatrix(handle)
+    except (AttributeError, TypeError):
+        return None
+    if not isinstance(matrix, (tuple, list)) or len(matrix) < 2 or not matrix[0]:
+        return None
+    offset = matrix[1]
+    if not isinstance(offset, (tuple, list)) or len(offset) < 3:
+        return None
+    try:
+        value = float(offset[2])
+    except (TypeError, ValueError, IndexError):
+        return None
+    return value if math.isfinite(value) else None
+
+
 def _source_element(handle, factor, chord_tolerance_m):
     object_type = int(vs.GetTypeN(handle) or 0)
     identifier = _identifier(handle)
@@ -458,14 +476,26 @@ def _source_element(handle, factor, chord_tolerance_m):
             x_value, y_value = float(origin[0]), float(origin[1])
         except (AttributeError, TypeError, ValueError, IndexError):
             x_value, y_value = float(center[0]), float(center[1])
-        text_height = _numeric_text_height_m(handle)
-        layer_height_m = layer_z * factor
-        if (text_height is not None and
-                (not has_3d_center or abs(z_value - layer_height_m) <= 1e-9)):
-            z_value = text_height
+        # Imported text is planar geometry. Its real Z position is stored in
+        # the entity matrix; Get3DCntr can collapse it to a 2D/bounding-box
+        # centre. Only fall back to a numeric label when no spatial Z exists.
+        planar_z = _planar_object_z_units(handle)
+        if planar_z is not None:
+            z_value = (planar_z + layer_z) * factor
+            height_source = "object_matrix"
+        elif has_3d_center and abs(z_value - layer_z * factor) > 1e-9:
+            height_source = "3d_center"
+        else:
+            text_height = _numeric_text_height_m(handle)
+            if text_height is not None:
+                z_value = text_height
+                height_source = "text_content"
+            else:
+                height_source = "layer_elevation"
         return {"id": identifier, "kind": "point",
                 "points": ((x_value * factor, y_value * factor, z_value),),
-                "class": class_name, "layer": layer_name}
+                "class": class_name, "layer": layer_name,
+                "height_source": height_source}
     if object_type == TYPE_LINE:
         first, second = vs.GetSegPt1(handle), vs.GetSegPt2(handle)
         points = ((float(first[0]) * factor, float(first[1]) * factor, z_value),
@@ -790,6 +820,9 @@ def _create_control_copies(review, control_layer):
                 "%s konnte nicht auf die Kontrollebene kopiert werden."
                 % object_type_name(object_type))
         created.append(duplicate)
+        # Duplicating a selected source can copy its selection state. Do not
+        # leave a 2D control object selected for the native DGM command.
+        vs.SetDSelect(duplicate)
         if int(vs.GetTypeN(duplicate) or 0) != object_type:
             raise core.TerrainError(
                 "Die Kontrollkopie hat nicht mehr den ursprünglichen Objekttyp %s."
@@ -813,6 +846,32 @@ def _create_control_copies(review, control_layer):
             vs.SetPenFore(duplicate, COLOR_CONTROL_LINE)
             vs.SetLW(duplicate, 40)
     return tuple(created), counts
+
+
+def _deselect_all_document_objects():
+    """Deselect every placed object independently of the layer options."""
+    deselected = 0
+
+    def deselect_chain(handle, ancestry=()):
+        nonlocal deselected
+        seen = set()
+        while handle and handle not in seen:
+            seen.add(handle)
+            vs.SetDSelect(handle)
+            deselected += 1
+            if int(vs.GetTypeN(handle) or 0) == TYPE_GROUP:
+                identity = _identifier(handle)
+                if identity not in ancestry:
+                    child = vs.FInGroup(handle)
+                    if child:
+                        deselect_chain(child, ancestry + (identity,))
+            handle = vs.NextObj(handle)
+
+    for document_layer in _document_layers():
+        first = vs.FInLayer(document_layer)
+        if first:
+            deselect_chain(first)
+    return deselected
 
 
 def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
@@ -875,18 +934,16 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
             raise core.TerrainError("Die Kontrollebene konnte nicht angelegt werden.")
         control_created, control_counts = _create_control_copies(review, control_layer)
         # The native DGM command must receive only the normalized 3D sources.
-        # Return to that layer and keep visual text/line copies unselected.
+        # DSelectAll only affects the active layer under common layer options,
+        # so remove every stale source/control selection explicitly first.
         vs.Layer(target_name)
-        vs.DSelectAll()
+        _deselect_all_document_objects()
         layer_value = _criterion_literal(target_name)
         layer_criterion = "(L='%s')" % layer_value
-        try:
-            # Native criteria selection avoids losing objects in a long
-            # Python SetSelect loop and is the selection used by the DGM step.
-            vs.SelectObj(layer_criterion)
-        except (AttributeError, TypeError):
-            for handle in created:
-                vs.SetSelect(handle)
+        # Select the verified handles themselves. This bypasses both the
+        # criteria callback limit and any stale cross-layer selection state.
+        for handle in created:
+            vs.SetSelect(handle)
         expected_points = sum(1 for value in review["usable"]
                               if value["kind"] == "point")
         expected_lines = review["usable_count"] - expected_points
@@ -912,9 +969,21 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
             raise core.TerrainError(
                 "Die Ausgabe wurde erzeugt, aber nur %d von %d Quellobjekten tatsächlich markiert."
                 % (actual_selected, len(created)))
+        handle_selected = sum(1 for handle in created if vs.Selected(handle))
+        if handle_selected != len(created):
+            raise core.TerrainError(
+                "Nur %d von %d erzeugten 3D-Quellen sind direkt markiert."
+                % (handle_selected, len(created)))
+        control_selected = sum(1 for handle in control_created if vs.Selected(handle))
+        document_selected = selected_object_count()
+        if control_selected or document_selected != len(created):
+            raise core.TerrainError(
+                "Die DGM-Auswahl ist nicht eindeutig: %d Quellen erwartet, "
+                "%d Dokumentobjekte und %d Kontrollkopien sind markiert."
+                % (len(created), document_selected, control_selected))
         verification = {
             "points": actual_points, "lines": actual_lines,
-            "selected": actual_selected, "selection_verified": selection_verified,
+            "selected": document_selected, "selection_verified": selection_verified,
             "control_layer": control_name,
             "control_texts": control_counts["texts"],
             "control_lines": control_counts["lines"],
