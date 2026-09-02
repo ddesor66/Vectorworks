@@ -135,6 +135,7 @@ def selected_handles():
         if handle and handle not in seen:
             seen.add(handle)
             result.append(handle)
+        return False
     vs.ForEachObject(collect, "(SEL=TRUE)")
     # Some imported DWG selections are only partially returned by criteria.
     # Merge Vectorworks' selected-object chain on the active layer as a second,
@@ -164,6 +165,7 @@ def selected_handles():
                 collect(handle)
         except (AttributeError, TypeError):
             pass
+        return False
     try:
         vs.ForEachObjectInLayer(collect_if_selected, 0, 2, 1)
     except (AttributeError, TypeError):
@@ -225,6 +227,7 @@ def active_layer_handles():
         if handle and not is_group and handle not in seen:
             seen.add(handle)
             result.append(handle)
+        return False
     try:
         # objOptions 0 = all objects; traversal 2 = deep container members.
         # Group shells are omitted so members are processed exactly once;
@@ -277,6 +280,7 @@ def object_layer_handles(handles):
         if layer in layers and handle and not is_group and handle not in seen:
             seen.add(handle)
             result.append(handle)
+        return False
     try:
         # Full document and deep container traversal. Group shells are filtered
         # out, leaving every contained text, line and 3D polygon exactly once.
