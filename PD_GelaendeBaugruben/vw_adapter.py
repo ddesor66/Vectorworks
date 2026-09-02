@@ -397,22 +397,114 @@ def _numeric_text_height_m(handle):
     return height if math.isfinite(height) and abs(height) <= 100000.0 else None
 
 
-def _planar_object_z_units(handle):
-    """Read the actual Z offset of planar geometry from its entity matrix."""
+def _entity_matrix(handle):
+    """Return one validated planar-object transform in document units.
+
+    Vectorworks stores imported layer/screen-plane geometry in local object
+    coordinates. ``GetSegPt*`` and ``GetPolyPt`` can therefore return values
+    relative to the object's own plane while the entity matrix contains the
+    real document position and orientation. Text has no ``GetTextOrigin``
+    function in the Vectorworks 2026 Python API; its matrix offset is the
+    insertion point.
+    """
     try:
         matrix = vs.GetEntityMatrix(handle)
-    except (AttributeError, TypeError):
+    except (AttributeError, TypeError, ValueError):
         return None
-    if not isinstance(matrix, (tuple, list)) or len(matrix) < 2 or not matrix[0]:
+    if not isinstance(matrix, (tuple, list)) or len(matrix) < 5 or not matrix[0]:
         return None
     offset = matrix[1]
     if not isinstance(offset, (tuple, list)) or len(offset) < 3:
         return None
     try:
-        value = float(offset[2])
+        values = (float(offset[0]), float(offset[1]), float(offset[2]),
+                  float(matrix[2]), float(matrix[3]), float(matrix[4]))
     except (TypeError, ValueError, IndexError):
         return None
-    return value if math.isfinite(value) else None
+    if not all(math.isfinite(value) for value in values):
+        return None
+    return values
+
+
+def _transform_planar_point(handle, point, layer_z=0.0):
+    """Transform one local planar point to document XYZ coordinates."""
+    try:
+        x_value = float(point[0])
+        y_value = float(point[1])
+        z_value = float(point[2]) if len(point) > 2 else 0.0
+    except (TypeError, ValueError, IndexError):
+        return None
+    matrix = _entity_matrix(handle)
+    if matrix is None:
+        return (x_value, y_value, z_value + float(layer_z))
+    offset_x, offset_y, offset_z, rotate_x, rotate_y, rotate_z = matrix
+    angle_x = math.radians(rotate_x)
+    angle_y = math.radians(rotate_y)
+    angle_z = math.radians(rotate_z)
+    cosine, sine = math.cos(angle_x), math.sin(angle_x)
+    y_value, z_value = (y_value * cosine - z_value * sine,
+                        y_value * sine + z_value * cosine)
+    cosine, sine = math.cos(angle_y), math.sin(angle_y)
+    x_value, z_value = (x_value * cosine + z_value * sine,
+                        -x_value * sine + z_value * cosine)
+    cosine, sine = math.cos(angle_z), math.sin(angle_z)
+    x_value, y_value = (x_value * cosine - y_value * sine,
+                        x_value * sine + y_value * cosine)
+    return (x_value + offset_x, y_value + offset_y,
+            z_value + offset_z + float(layer_z))
+
+
+def _planar_points(handle, points, layer_z, factor):
+    """Transform and scale a sequence of local 2D/3D points."""
+    result = []
+    for point in points:
+        transformed = _transform_planar_point(handle, point, layer_z)
+        if transformed is None:
+            return ()
+        result.append(tuple(value * factor for value in transformed))
+    return tuple(result)
+
+
+def _planar_height_at_xy(handle, x_value, y_value, layer_z=0.0):
+    """Evaluate the entity plane at one document XY coordinate.
+
+    Vectorworks returns line, locus, text-centre and polygon coordinates in
+    document XY even when the entity plane is tilted.  The matrix angles
+    describe that plane; applying the full matrix a second time corrupts XY.
+    """
+    matrix = _entity_matrix(handle)
+    if matrix is None:
+        return float(layer_z)
+    offset_x, offset_y, offset_z, rotate_x, rotate_y, rotate_z = matrix
+    # Rotate the local plane normal (0, 0, 1) by X, then Y, then Z.
+    angle_x = math.radians(rotate_x)
+    angle_y = math.radians(rotate_y)
+    angle_z = math.radians(rotate_z)
+    normal_x = math.sin(angle_y) * math.cos(angle_x)
+    normal_y = -math.sin(angle_x)
+    normal_z = math.cos(angle_y) * math.cos(angle_x)
+    cosine, sine = math.cos(angle_z), math.sin(angle_z)
+    normal_x, normal_y = (normal_x * cosine - normal_y * sine,
+                          normal_x * sine + normal_y * cosine)
+    if abs(normal_z) <= 1e-9:
+        return offset_z + float(layer_z)
+    return (offset_z - (
+        normal_x * (float(x_value) - offset_x) +
+        normal_y * (float(y_value) - offset_y)) / normal_z +
+        float(layer_z))
+
+
+def _document_xy_planar_points(handle, points, layer_z, factor):
+    """Attach the entity-plane Z to document-XY planar coordinates."""
+    result = []
+    for point in points:
+        try:
+            x_value, y_value = float(point[0]), float(point[1])
+        except (TypeError, ValueError, IndexError):
+            return ()
+        z_value = _planar_height_at_xy(handle, x_value, y_value, layer_z)
+        result.append((x_value * factor, y_value * factor, z_value * factor))
+    return tuple(result)
 
 
 def _source_element(handle, factor, chord_tolerance_m):
@@ -450,8 +542,82 @@ def _source_element(handle, factor, chord_tolerance_m):
                         "class": class_name, "layer": layer_name}
             except (AttributeError, TypeError, ValueError):
                 pass
-    # Imported 2D and layer-plane geometry often has no 3D centre although its
-    # layer elevation is a valid terrain height. Do not reject it for that.
+    # Imported planar objects must be transformed before they can be used as
+    # DGM input. Calling Get3DCntr on these types both loses their real XY
+    # position and raises a Vectorworks modal error for many DWG entities.
+    if object_type == TYPE_LOCUS_2D:
+        try:
+            x_value, y_value = vs.GetLocPt(handle)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        points = _document_xy_planar_points(
+            handle, ((float(x_value), float(y_value), 0.0),), layer_z, factor)
+        return {"id": identifier, "kind": "point",
+                "points": points,
+                "class": class_name, "layer": layer_name}
+    if object_type == TYPE_TEXT:
+        matrix = _entity_matrix(handle)
+        try:
+            center = vs.HCenter(handle)
+            x_world, y_world = float(center[0]), float(center[1])
+        except (AttributeError, TypeError, ValueError, IndexError):
+            return None
+        z_world = _planar_height_at_xy(handle, x_world, y_world, layer_z)
+        # Only a real entity-matrix Z is authoritative. At the base plane,
+        # an unambiguous numeric survey label remains the best elevation.
+        if matrix is not None and abs(z_world - layer_z) > 1e-9:
+            z_value = z_world * factor
+            height_source = "object_matrix"
+        else:
+            text_height = _numeric_text_height_m(handle)
+            if text_height is not None:
+                z_value = text_height
+                height_source = "text_content"
+            else:
+                z_value = z_world * factor
+                height_source = "layer_elevation"
+        return {"id": identifier, "kind": "point",
+                "points": ((x_world * factor, y_world * factor, z_value),),
+                "class": class_name, "layer": layer_name,
+                "height_source": height_source}
+    if object_type == TYPE_LINE:
+        first, second = vs.GetSegPt1(handle), vs.GetSegPt2(handle)
+        points = _document_xy_planar_points(
+            handle,
+            ((float(first[0]), float(first[1]), 0.0),
+             (float(second[0]), float(second[1]), 0.0)),
+            layer_z, factor)
+        return {"id": identifier, "kind": "breakline", "points": points,
+                "class": class_name, "layer": layer_name}
+    if object_type in (TYPE_POLYGON, TYPE_POLYLINE):
+        points = _document_xy_planar_points(
+            handle,
+            tuple((float(x), float(y), 0.0)
+                  for x, y in (vs.GetPolyPt(handle, index)
+                               for index in range(
+                                   1, int(vs.GetVertNum(handle) or 0) + 1))),
+            layer_z, factor)
+        return {"id": identifier,
+                "kind": "contour" if vs.IsPolyClosed(handle) else "breakline",
+                "points": points, "class": class_name, "layer": layer_name}
+    if object_type in (TYPE_ARC, TYPE_FREEHAND):
+        points_2d = _sample_2d_path(handle, chord_tolerance_m / factor)
+        if not points_2d and object_type == TYPE_ARC:
+            points_2d = _sample_circular_arc(handle, chord_tolerance_m / factor)
+        if points_2d:
+            transformed_points = (
+                _planar_points(
+                    handle, tuple((x, y, 0.0) for x, y in points_2d),
+                    layer_z, factor)
+                if object_type == TYPE_ARC else
+                _document_xy_planar_points(
+                    handle, tuple((x, y, 0.0) for x, y in points_2d),
+                    layer_z, factor))
+            return {"id": identifier, "kind": "curve",
+                    "points": transformed_points,
+                    "class": class_name, "layer": layer_name}
+    # Spatial types without a dedicated converter still contribute their 3D
+    # centre. This is deliberately after all planar branches above.
     has_3d_center = False
     try:
         center = vs.Get3DCntr(handle)
@@ -462,62 +628,6 @@ def _source_element(handle, factor, chord_tolerance_m):
     except (TypeError, ValueError, IndexError):
         center = (0.0, 0.0, 0.0)
         z_value = layer_z * factor
-    if object_type == TYPE_LOCUS_2D:
-        try:
-            x_value, y_value = vs.GetLocPt(handle)
-        except (AttributeError, TypeError, ValueError):
-            return None
-        return {"id": identifier, "kind": "point",
-                "points": ((float(x_value) * factor, float(y_value) * factor, z_value),),
-                "class": class_name, "layer": layer_name}
-    if object_type == TYPE_TEXT:
-        try:
-            origin = vs.GetTextOrigin(handle)
-            x_value, y_value = float(origin[0]), float(origin[1])
-        except (AttributeError, TypeError, ValueError, IndexError):
-            x_value, y_value = float(center[0]), float(center[1])
-        # Imported text is planar geometry. Its real Z position is stored in
-        # the entity matrix; Get3DCntr can collapse it to a 2D/bounding-box
-        # centre. Only fall back to a numeric label when no spatial Z exists.
-        planar_z = _planar_object_z_units(handle)
-        if planar_z is not None:
-            z_value = (planar_z + layer_z) * factor
-            height_source = "object_matrix"
-        elif has_3d_center and abs(z_value - layer_z * factor) > 1e-9:
-            height_source = "3d_center"
-        else:
-            text_height = _numeric_text_height_m(handle)
-            if text_height is not None:
-                z_value = text_height
-                height_source = "text_content"
-            else:
-                height_source = "layer_elevation"
-        return {"id": identifier, "kind": "point",
-                "points": ((x_value * factor, y_value * factor, z_value),),
-                "class": class_name, "layer": layer_name,
-                "height_source": height_source}
-    if object_type == TYPE_LINE:
-        first, second = vs.GetSegPt1(handle), vs.GetSegPt2(handle)
-        points = ((float(first[0]) * factor, float(first[1]) * factor, z_value),
-                  (float(second[0]) * factor, float(second[1]) * factor, z_value))
-        return {"id": identifier, "kind": "breakline", "points": points,
-                "class": class_name, "layer": layer_name}
-    if object_type in (TYPE_POLYGON, TYPE_POLYLINE):
-        points = tuple((float(x) * factor, float(y) * factor, z_value)
-                       for x, y in (vs.GetPolyPt(handle, index)
-                                    for index in range(
-                                        1, int(vs.GetVertNum(handle) or 0) + 1)))
-        return {"id": identifier,
-                "kind": "contour" if vs.IsPolyClosed(handle) else "breakline",
-                "points": points, "class": class_name, "layer": layer_name}
-    if object_type in (TYPE_ARC, TYPE_FREEHAND):
-        points_2d = _sample_2d_path(handle, chord_tolerance_m / factor)
-        if not points_2d and object_type == TYPE_ARC:
-            points_2d = _sample_circular_arc(handle, chord_tolerance_m / factor)
-        if points_2d:
-            return {"id": identifier, "kind": "curve",
-                    "points": tuple((x * factor, y * factor, z_value) for x, y in points_2d),
-                    "class": class_name, "layer": layer_name}
     # Any remaining selected object that Vectorworks locates in 3D still
     # contributes a terrain support point instead of being discarded solely
     # because its imported object type has no dedicated converter.
@@ -612,6 +722,14 @@ def _converted_3d_elements(handle, factor):
 def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
     """Expand containers and vertex collections into normalized source elements."""
     object_type = int(vs.GetTypeN(handle) or 0)
+    if object_type == TYPE_LINE:
+        # Imported DWG lines are inconsistent: GetSegPt* may return either
+        # document XY or a second, georeferenced coordinate space in the same
+        # drawing. Vectorworks' native conversion resolves both variants to
+        # their actual 3D endpoints. Work only on a temporary duplicate.
+        converted = _converted_3d_elements(handle, factor)
+        if converted:
+            return _with_source_type(converted, object_type, handle)
     if object_type == TYPE_MESH:
         values = _mesh_source_elements(handle, factor)
         if values:
@@ -888,6 +1006,16 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
     created = []
     control_created = []
     completed = False
+    # Native site-model triangulation becomes numerically unstable at typical
+    # German survey coordinates (millions of metres from Vectorworks' internal
+    # origin). Build the source geometry in internal-origin coordinates;
+    # Vectorworks' document georeference presents those values at world XY.
+    all_points = tuple(
+        point for element in review["usable"] for point in element["points"])
+    anchor_x = (min(point[0] for point in all_points) +
+                max(point[0] for point in all_points)) * 0.5
+    anchor_y = (min(point[1] for point in all_points) +
+                max(point[1] for point in all_points)) * 0.5
     _ensure_class(CLASS_SOURCE_POINT, (0, 45000, 0))
     _ensure_class(CLASS_SOURCE_LINE, (0, 25000, 50000))
     _ensure_class(CLASS_CONTROL_TEXT, COLOR_CONTROL_TEXT)
@@ -901,7 +1029,9 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
         for element in review["usable"]:
             if element["kind"] == "point":
                 x, y, z = element["points"][0]
-                vs.Locus3D((x / factor, y / factor, z / factor - layer_z))
+                vs.Locus3D(((x - anchor_x) / factor,
+                            (y - anchor_y) / factor,
+                            z / factor - layer_z))
                 handle = vs.LNewObj()
                 if handle:
                     created.append(handle)
@@ -913,7 +1043,9 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
                 vs.BeginPoly3D()
                 try:
                     for x, y, z in element["points"]:
-                        vs.Add3DPt((x / factor, y / factor, z / factor - layer_z))
+                        vs.Add3DPt(((x - anchor_x) / factor,
+                                    (y - anchor_y) / factor,
+                                    z / factor - layer_z))
                 finally:
                     vs.EndPoly3D()
                 handle = vs.LNewObj()
@@ -988,6 +1120,8 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
             "control_texts": control_counts["texts"],
             "control_lines": control_counts["lines"],
             "control_total": len(control_created),
+            "xy_anchor_m": (anchor_x, anchor_y),
+            "xy_normalized": True,
         }
         vs.NameUndoEvent("PD Gelände-Quelldaten vorbereiten")
         vs.ReDrawAll()
@@ -1022,7 +1156,8 @@ def site_models():
     return tuple(sorted(result, key=lambda row: (row[1].casefold(), str(row[0]))))
 
 
-def create_site_model_from_selected_sources(model_name, model_class):
+def create_site_model_from_selected_sources(model_name, model_class,
+                                            xy_anchor_m=None):
     """Run Vectorworks' native source-data command and reveal its new model.
 
     The command itself remains native so Vectorworks owns the triangulation and
@@ -1047,6 +1182,13 @@ def create_site_model_from_selected_sources(model_name, model_class):
         return None
     handle = created[-1]
 
+    anchor = tuple(xy_anchor_m or (0.0, 0.0))
+    # Vectorworks' Python geometry coordinates are relative to its internal
+    # origin, while the OIP and document rulers expose the georeferenced user
+    # coordinates.  The local source values therefore already appear at their
+    # correct world position.  Applying the anchor as an object translation
+    # would add the georeference twice.
+
     desired_name = str(model_name or "").strip() or "DGM Bestand"
     named_object = vs.GetObject(desired_name)
     if named_object and _identifier(named_object) != _identifier(handle):
@@ -1060,25 +1202,82 @@ def create_site_model_from_selected_sources(model_name, model_class):
 
     desired_class = ensure_class(model_class)
     vs.SetClass(handle, desired_class)
+    if str(vs.GetClass(handle) or "") != desired_class:
+        raise core.TerrainError(
+            "Die Klasse des erzeugten Geländemodells konnte nicht gesetzt werden.")
     previous_class = str(vs.ActiveClass() or "")
     try:
         vs.NameClass(desired_class)
-        vs.ShowClass()
+        # Vectorworks 2026 requires the class name even when that class is
+        # already active.  Calling ShowClass without it only writes an error to
+        # ErrorOut.txt and misleadingly lets the Python script continue.
+        vs.ShowClass(desired_class)
     finally:
         if previous_class and previous_class != desired_class:
             vs.NameClass(previous_class)
+
+    # A visible class is still suppressed when the document is set to
+    # "Active class only".  This is common in imported survey drawings and
+    # was the reason a completely valid, selected DGM appeared as an empty
+    # drawing window.  Focus the result with permissive view options and also
+    # reveal classes used by the PIO's generated display geometry.
+    try:
+        vs.SetClassOptions(5)
+    except (AttributeError, TypeError):
+        pass
+
+    seen_objects = set()
+    shown_classes = {desired_class}
+
+    def reveal_object_classes(candidate):
+        while candidate and candidate not in seen_objects:
+            seen_objects.add(candidate)
+            try:
+                class_name = str(vs.GetClass(candidate) or "")
+                if class_name and class_name not in shown_classes:
+                    vs.ShowClass(class_name)
+                    shown_classes.add(class_name)
+            except (AttributeError, TypeError):
+                pass
+            try:
+                child = vs.FInGroup(candidate)
+            except (AttributeError, TypeError):
+                child = None
+            if child:
+                reveal_object_classes(child)
+            try:
+                candidate = vs.NextObj(candidate)
+            except (AttributeError, TypeError):
+                candidate = None
+
+    reveal_object_classes(handle)
 
     layer_handle = vs.GetLayer(handle)
     layer_name = str(vs.GetLName(layer_handle) or "") if layer_handle else ""
     if layer_name:
         vs.Layer(layer_name)
         vs.ShowLayer()
+        try:
+            vs.SetLayerOptions(5)
+        except (AttributeError, TypeError):
+            pass
 
     _deselect_all_document_objects()
     vs.SetSelect(handle)
+    vs.SetSelect(handle)
+    if not vs.Selected(handle):
+        raise core.TerrainError(
+            "Das erzeugte Geländemodell ist vorhanden, konnte aber nicht markiert werden.")
+    if not vs.DTM6_IsObjectReady(handle):
+        vs.ResetObject(handle)
+    if not vs.DTM6_IsObjectReady(handle):
+        raise core.TerrainError(
+            "Das erzeugte Geländemodell ist vorhanden, aber noch nicht auswertbar.")
+    vs.ReDrawAll()
     try:
-        # Make the selected DGM fill the drawing window.  Failure here must not
-        # invalidate a model which Vectorworks has already created correctly.
+        # A freshly returned DTM has no reliable bounding box until its PIO is
+        # ready and the document has redrawn. Only then can Vectorworks zoom
+        # to the selected model.
         vs.DoMenuTextByName("Fit to Objects", 0)
     except (AttributeError, TypeError):
         pass
@@ -1088,6 +1287,9 @@ def create_site_model_from_selected_sources(model_name, model_class):
         "name": actual_name,
         "class": desired_class,
         "layer": layer_name,
+        "ready": True,
+        "selected": True,
+        "xy_anchor_m": anchor,
     }
 
 

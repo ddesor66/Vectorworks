@@ -13,12 +13,19 @@ Diese Prüfungen benötigen die echte Vectorworks-Laufzeit und werden nicht durc
 
 - [ ] Eine Testauswahl mit 3D-Loci, Vermessungspunkten, offener 3D-Bruchkante, geschlossener 3D-Höhenlinie, Linie, Bogen und Polylinie prüfen.
 - [ ] Originalobjekte vor/nach dem Lauf über UUID, Lage, Klasse und Ebene vergleichen; keine Änderung oder Löschung.
-- [ ] Gleiches XY/gleiches Z wird als Dublette ausgeschlossen; gleiches XY/abweichendes Z blockiert die Ausgabe.
+- [ ] Gleiches XY/gleiches Z und gleiches XY/abweichendes Z werden als Hinweise protokolliert, im vollständigen Erfassungsmodus jedoch ohne Programmabbruch übernommen.
 - [ ] Ausschlussmuster für Dach/Baum/Vegetation sowie optionale Begrenzung prüfen.
 - [ ] Bogen mit zwei deutlich verschiedenen Sehnentoleranzen prüfen; Punktanzahl und Laufzeit müssen plausibel reagieren.
 - [ ] Nach der Quelldatenprüfung öffnet sich automatisch der native Dialog `Geländemodell aus Ausgangsdaten`; Einstellungen bestätigen und ein natives DGM erzeugen.
 - [ ] Das neue DGM wird danach automatisch erkannt, benannt, der vorgesehenen Klasse zugewiesen, sichtbar geschaltet, einzeln markiert und in das Zeichenfenster eingepasst.
 - [ ] Nativen Dialog testweise abbrechen; kein neues DGM entsteht, die geprüfte Quellenebene bleibt erhalten.
+
+Live-Referenztest vom 03.09.2026 in Vectorworks Landschaft 2026 mit `tesr Gel..vwx`:
+
+- [x] Vollständige aktive Importebene: 878 Objekte geprüft, 877 Quellgeometrien verwendbar, ein nicht unterstütztes Plug-in-Objekt protokolliert.
+- [x] 600 Texte an ihrer tatsächlichen 3D-Objekthöhe, 276 Linien und ein Bogen verarbeitet; 600 3D-Punkte und 277 Bruchkanten erzeugt und markiert.
+- [x] Native DGM-Höhen 99,522 bis 114,772 m; 952 Modellpunkte und 1.892 Dreiecke von Vectorworks verarbeitet.
+- [x] `DGM Bestand-6` liegt bei X 3.463.348,503 / Y 5.547.900,413, besitzt eine projizierte Fläche von rund 24.454 m² und wird mit plausibler langgestreckter Kontur und Höhenlinien dargestellt.
 
 ## C. Varianten
 

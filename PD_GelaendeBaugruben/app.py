@@ -129,7 +129,7 @@ def _preview_sources(options):
            text_height_counts.get("text_content", 0), verification["control_layer"],
            verification["control_texts"], verification["control_lines"]))
     result = adapter.create_site_model_from_selected_sources(
-        options["model_name"], model_class)
+        options["model_name"], model_class, verification.get("xy_anchor_m"))
     if not result:
         adapter.alert(
             source_summary +
@@ -141,6 +141,8 @@ def _preview_sources(options):
         "\n\nGeländemodell „%s“ wurde von Vectorworks erzeugt, auf Ebene „%s“ "
         "und Klasse „%s“ sichtbar geschaltet, einzeln markiert und in das "
         "Zeichenfenster eingepasst.\n"
+        "Die Triangulation wurde zur Vermeidung von Koordinatenverzerrungen "
+        "am internen Nullpunkt berechnet; die Dokument-Georeferenz bleibt erhalten.\n"
         "Höhenlinien-Äquidistanz im nativen Dialog: %.3f m; "
         "Höheneinheit der Modulauswertung: Meter."
         % (result["name"], result["layer"] or layer_name, result["class"],

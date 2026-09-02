@@ -105,3 +105,14 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   die Beschriftungsroutine für eigene Gefälle-PIOs übergeben. Damit ist der
   Abbruch `NoneType object is not subscriptable` beim Abschließen einer neu
   gezeichneten Gefällelinie beseitigt.
+- Gelände- und Baugrubenmodul 1.0.18: Fremdzeichnungen werden ohne die
+  beobachtete 1.024-Objekt-Grenze über native Ebenen- und Objektlisten gelesen.
+  Importierte Linien werden auf temporären Kopien von Vectorworks selbst in
+  echte 3D-Polygone umgewandelt; Texte verwenden Dokument-XY und die reale
+  Z-Höhe ihrer Objektmatrix. Höhen- und Dublettenhinweise brechen die Ausgabe
+  nicht mehr ab. Für Vermessungskoordinaten im Millionenbereich werden die
+  DGM-Quellen am internen Nullpunkt erzeugt, sodass das native Geländemodell
+  ohne kilometerweite Konturverzerrungen trianguliert, aber georeferenziert
+  angezeigt wird. Ein Live-Test in Vectorworks Landschaft 2026 verarbeitete
+  600 Texte, 276 Linien und einen Bogen zu 600 Punkten, 277 Bruchkanten,
+  952 Modellpunkten und 1.892 Dreiecken.

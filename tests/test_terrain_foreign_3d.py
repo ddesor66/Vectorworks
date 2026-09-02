@@ -31,6 +31,7 @@ class FakeVS(types.ModuleType):
         self.redraw_count = 0
 
     def GetTypeN(self, handle): return self.types[handle]
+    def GetUnits(self): return (None, None, None, 0.0254)
     def GetObjectUuid(self, handle): return handle
     def GetObject(self, name):
         for handle, object_name in self.names.items():
@@ -46,13 +47,14 @@ class FakeVS(types.ModuleType):
     def NameClass(self, name):
         self.active_class = name
         self.class_objects.setdefault(name, name)
-    def ShowClass(self): self.shown_classes.append(self.active_class)
+    def ShowClass(self, name): self.shown_classes.append(name)
     def Layer(self, name): self.active_layer_name = name
     def ShowLayer(self): self.shown_layers.append(getattr(self, "active_layer_name", ""))
     def Get3DCntr(self, handle): return self.points[handle][0]
     def GetEntityMatrix(self, handle):
         return self.entity_matrices.get(handle, (False, (0.0, 0.0, 0.0), 0, 0, 0))
     def GetTextOrigin(self, handle): return self.points[handle][0][:2]
+    def HCenter(self, handle): return self.points[handle][0][:2]
     def GetLocPt(self, handle): return self.points[handle][0][:2]
     def GetSegPt1(self, handle): return self.points[handle][0][:2]
     def GetSegPt2(self, handle): return self.points[handle][1][:2]
@@ -120,6 +122,12 @@ class FakeVS(types.ModuleType):
 
     def DTM6_IsDTM6Object(self, handle):
         return handle in getattr(self, "site_model_handles", ())
+
+    def DTM6_IsObjectReady(self, handle):
+        return handle in getattr(self, "ready_site_models", self.site_model_handles)
+
+    def ResetObject(self, handle):
+        self.reset_objects = getattr(self, "reset_objects", []) + [handle]
 
     def DoMenuTextByName(self, name, chunk_index):
         self.menu_calls.append((name, chunk_index))
@@ -287,6 +295,23 @@ class Foreign3DTests(unittest.TestCase):
         element = adapter._source_element("line", 1.0, 0.1)
         self.assertEqual(((1.0, 2.0, 0.0), (3.0, 4.0, 0.0)), element["points"])
 
+    def test_imported_line_prefers_native_temporary_3d_conversion(self):
+        fake = FakeVS()
+        fake.types.update(line=2, converted_line=25)
+        fake.points["line"] = ((999999.0, 999999.0), (1000000.0, 1000000.0))
+        fake.points["converted_line"] = (
+            (3463348.0, 5547900.0, 100.5),
+            (3463358.0, 5547900.0, 100.7))
+        fake.duplicates = {"line": "line-copy"}
+        fake.conversions = {"line-copy": "converted_line"}
+        adapter = load_adapter(fake)
+        elements = adapter._source_elements("line", 1.0, 0.1)
+        self.assertEqual((fake.points["converted_line"],),
+                         tuple(value["points"] for value in elements))
+        self.assertEqual(("Linie",),
+                         tuple(value["source_type_name"] for value in elements))
+        self.assertEqual(["converted_line"], fake.deleted)
+
     def test_2d_locus_is_available_at_layer_height(self):
         fake = FakeVS()
         fake.types["locus"] = 17
@@ -299,6 +324,9 @@ class Foreign3DTests(unittest.TestCase):
         fake = FakeVS()
         fake.types["text"] = 10
         fake.points["text"] = ((12.0, 34.0, 5.5),)
+        fake.entity_matrices["text"] = (
+            True, (12.0, 34.0, 5.5), 0.0, 0.0, 0.0)
+        fake.GetTextOrigin = lambda _handle: (0.0, 0.0)
         adapter = load_adapter(fake)
         element = adapter._source_element("text", 1.0, 0.1)
         self.assertEqual(((12.0, 34.0, 5.5),), element["points"])
@@ -323,6 +351,32 @@ class Foreign3DTests(unittest.TestCase):
         element = adapter._source_element("text", 1.0, 0.1)
         self.assertEqual(((12.0, 34.0, 102.65),), element["points"])
         self.assertEqual("object_matrix", element["height_source"])
+
+    def test_imported_line_keeps_document_xy_and_evaluates_tilted_plane_z(self):
+        fake = FakeVS()
+        fake.types["line"] = 2
+        fake.points["line"] = ((0.0, 0.0), (2.0, 0.0))
+        fake.entity_matrices["line"] = (
+            True, (0.0, 0.0, 10.0), 0.0, -45.0, 0.0)
+        adapter = load_adapter(fake)
+        element = adapter._source_element("line", 1.0, 0.1)
+        self.assertAlmostEqual(0.0, element["points"][0][0])
+        self.assertAlmostEqual(0.0, element["points"][0][1])
+        self.assertAlmostEqual(10.0, element["points"][0][2])
+        self.assertAlmostEqual(2.0, element["points"][1][0])
+        self.assertAlmostEqual(0.0, element["points"][1][1])
+        self.assertAlmostEqual(12.0, element["points"][1][2])
+
+    def test_imported_polyline_entity_matrix_transforms_every_vertex(self):
+        fake = FakeVS()
+        fake.types["polyline"] = 21
+        fake.points["polyline"] = ((10.0, 20.0), (12.0, 20.0), (12.0, 23.0))
+        fake.entity_matrices["polyline"] = (
+            True, (10.0, 20.0, 5.0), 0.0, 0.0, 0.0)
+        adapter = load_adapter(fake)
+        element = adapter._source_element("polyline", 1.0, 0.1)
+        self.assertEqual(((10.0, 20.0, 5.0), (12.0, 20.0, 5.0),
+                          (12.0, 23.0, 5.0)), element["points"])
 
     def test_extracted_text_and_line_keep_native_type_provenance(self):
         fake = FakeVS()
@@ -385,6 +439,7 @@ class Foreign3DTests(unittest.TestCase):
     def test_native_site_model_is_detected_named_revealed_and_selected(self):
         fake = FakeVS()
         fake.site_model_handles = {"existing-model"}
+        fake.ready_site_models = {"existing-model", "new-model"}
         fake.selection = ("existing-model",)
         fake.names["existing-model"] = "Vorhandenes DGM"
         fake.created_site_model = "new-model"
@@ -398,12 +453,16 @@ class Foreign3DTests(unittest.TestCase):
         adapter = load_adapter(fake)
 
         result = adapter.create_site_model_from_selected_sources(
-            "DGM Bestand", "PD-GB-Gelaendemodell")
+            "DGM Bestand", "PD-GB-Gelaendemodell",
+            (3463300.0, 5547900.0))
 
         self.assertEqual("new-model", result["handle"])
         self.assertEqual("DGM Bestand", result["name"])
         self.assertEqual("PD-GB-Gelaendemodell", result["class"])
         self.assertEqual("PD-GB-Quelldaten", result["layer"])
+        self.assertTrue(result["ready"])
+        self.assertTrue(result["selected"])
+        self.assertEqual((3463300.0, 5547900.0), result["xy_anchor_m"])
         self.assertEqual("DGM Bestand", fake.names["new-model"])
         self.assertEqual("PD-GB-Gelaendemodell", fake.classes["new-model"])
         self.assertEqual(["PD-GB-Gelaendemodell"], fake.shown_classes)
@@ -411,7 +470,7 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual({"new-model"}, fake.selected_members)
         self.assertEqual(
             [("DTM6 Menu", 1), ("Fit to Objects", 0)], fake.menu_calls)
-        self.assertEqual(1, fake.redraw_count)
+        self.assertEqual(2, fake.redraw_count)
 
     def test_cancelled_native_site_model_dialog_returns_no_result(self):
         fake = FakeVS()
