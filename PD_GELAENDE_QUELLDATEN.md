@@ -10,9 +10,50 @@ genau die beiden Objektarten um, die das Geländemodell als Ausgangsdaten akzept
 Die Originalobjekte werden weder verändert noch gelöscht. Die Ausgabe entsteht auf einer
 neuen Konstruktionsebene und ist nach dem Lauf markiert.
 
-## Einbau und Aufruf
+## Installation mit dem fertigen Installer (empfohlen)
 
-1. In Vectorworks `Werkzeuge > Skripte > Skripte verwalten` ein neues **Python-Skript**
+Beide Installer tragen das Werkzeug eingebettet mit, prüfen es beim Schreiben gegen
+eine SHA-256-Prüfsumme und legen es im Benutzer-Plug-ins-Ordner von Vectorworks ab.
+Ein erneuter Lauf aktualisiert eine vorhandene Fassung und meldet die Versionen.
+
+**Variante A – in Vectorworks** (`installer/PD_Gelaende_Quelldaten_Installer.py`)
+
+1. Inhalt der Datei in ein neues Python-Skript der Skript-Palette einfügen und ausführen.
+2. Der Dialog nennt den Zielpfad und die verbleibenden Schritte.
+
+**Variante B – ohne Vectorworks** (`installer/PD_Gelaende_Quelldaten_Setup.py`)
+
+    python3 installer/PD_Gelaende_Quelldaten_Setup.py            # Ordner automatisch suchen
+    python3 installer/PD_Gelaende_Quelldaten_Setup.py --zeigen   # nur anzeigen, nichts schreiben
+    python3 installer/PD_Gelaende_Quelldaten_Setup.py --ziel "<Plug-ins-Ordner>"
+
+Gesucht wird unter Windows in `%APPDATA%\Nemetschek\Vectorworks\<Jahr>\Plug-ins`,
+unter macOS in `~/Library/Application Support/Vectorworks/<Jahr>/Plug-ins`, jeweils
+für 2026 bis 2023 mit Vorrang für den neuesten Jahrgang.
+
+**Einmalig danach – der Menübefehl.** Vectorworks-Plug-ins (`.vsm`) sind Binärdateien,
+die nur der Plug-in-Manager erzeugen kann; dieser Schritt lässt sich nicht skripten:
+
+1. `Extras > Plug-ins > Plug-in-Manager > Neu > Menübefehl`, Name `Gelände-Quelldaten`,
+   Sprache **Python**.
+2. Den Inhalt der mitinstallierten Datei `PD_Gelaende_Quelldaten_Menuebefehl.txt`
+   in den Skripteditor einfügen.
+3. Im Arbeitsbereich-Editor den Befehl in ein Menü ziehen, anschließend Vectorworks neu starten.
+
+Dieser Loader-Text bleibt über alle Updates unverändert – er lädt bei jedem Aufruf die
+installierte Skriptdatei neu. Künftige Updates sind daher nur noch ein Installerlauf.
+Wer keinen Menübefehl möchte, legt stattdessen ein Skript in der Skript-Palette mit
+demselben Loader-Text an.
+
+Die Installer werden aus dem Skript erzeugt:
+
+    python3 tools/build_gelaende_installer.py
+
+## Einbau ohne Installer
+
+Für einen einmaligen Einsatz genügt das Skript selbst:
+
+1. Im Ressourcen-Manager eine Skript-Palette und darin ein neues **Python-Skript**
    anlegen und den Inhalt von `pd_gelaende_quelldaten.py` einfügen.
 2. Die umzuwandelnden Objekte markieren – gern die komplette Importebene.
 3. Das Skript ausführen. Der Abschlussdialog nennt Anzahl, Ebenennamen und die Gründe
@@ -81,3 +122,8 @@ Ebenenbasishöhe `OHNE_HOEHE_UEBERNEHMEN = True` setzen.
 ## Tests
 
     python3 -m unittest tests.test_gelaende_quelldaten
+    python3 -m unittest tests.test_gelaende_installer
+
+Die Installerprüfungen stellen unter anderem sicher, dass die eingecheckten Installer
+zum aktuellen Skriptstand passen, dass ein beschädigter Inhalt nichts schreibt und dass
+der Loader-Text tatsächlich die installierte Fassung startet.

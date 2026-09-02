@@ -25,6 +25,8 @@ import math
 import os
 import re
 
+VERSION = "1.0.0"
+
 # ------------------------------------------------------------- Einstellungen --
 # Alles, was angepasst werden soll, steht hier oben.
 

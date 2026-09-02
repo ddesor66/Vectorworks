@@ -28,7 +28,8 @@ Winkelstuetzmauern und SketchUp-Export sowie die zugehoerigen Vectorworks-Einsti
 
 - `pd_gelaende_quelldaten.py`: wandelt alle markierten, im 3D-Raum liegenden Objekte in
   3D-Punkte und 3D-Polygone um, die das Geländemodell von Vectorworks 2026 als
-  Ausgangsdaten erkennt. Beschreibung: [PD_GELAENDE_QUELLDATEN.md](PD_GELAENDE_QUELLDATEN.md).
+  Ausgangsdaten erkennt. Fertige Installer liegen in `installer/`,
+  Beschreibung: [PD_GELAENDE_QUELLDATEN.md](PD_GELAENDE_QUELLDATEN.md).
 
 ## Entwicklungsstand
 
