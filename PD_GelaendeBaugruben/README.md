@@ -18,7 +18,7 @@ Produktionsmodul für Vectorworks 2026 zum Prüfen von Geländedaten, Verwalten 
 1. Geeignete Objekte markieren. Unterstützt sind 3D-Punkte, tatsächlich in 3D platzierte Texte, Vermessungspunkt-Plug-in-Objekte (auch gebräuchliche fremdsprachige Bezeichnungen), Symbolpunkte, 2D-/3D-Linien, 3D-Polygone/Bruchkanten, NURBS-Kurven, Polygone, Polylinien, abgetastete Bögen, Gruppeninhalte und sämtliche Eckpunkte von Meshes mit gültiger Höhe.
 2. Optional ein geschlossenes 2D-Polygon als Modellbegrenzung mit markieren.
 3. Sehnentoleranz, Dublettentoleranz, Höhentoleranz, Ausschlussmuster, Ziel-Ebene, gewünschten DGM-Namen, DGM-Klasse und Höhenlinien-Äquidistanz einstellen.
-4. `Vorschau` zeigt verwendbare, ausgeschlossene, problematische und nicht unterstützte Objekte. Gleiche XY-Lage mit widersprüchlicher Höhe und Begrenzungskreuzungen blockieren die Ausgabe.
+4. `Vorschau` zeigt verwendbare, ausgeschlossene, problematische und nicht unterstützte Objekte. Gleiche XY-Lagen mit widersprüchlicher Höhe, Begrenzungskreuzungen und nicht unterstützte Fremdobjekte werden protokolliert und übersprungen; sie brechen die Ausgabe der übrigen gültigen Daten nicht ab.
 5. Nach Bestätigung werden geprüfte Kopien auf einer neuen Ebene angelegt und markiert. Originale werden weder geändert noch gelöscht.
 6. Danach den von Vectorworks bereitgestellten Befehl `Landschaft > Geländemodell > Geländemodell aus Ausgangsdaten` ausführen und die im Abschlussdialog genannten Vorgaben verwenden.
 

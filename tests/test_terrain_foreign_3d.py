@@ -68,5 +68,33 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual(["point", "point", "point"], [item["kind"] for item in elements])
 
 
+class ForeignGeometryRecoveryTests(unittest.TestCase):
+    def test_boundary_crossing_is_skipped_without_blocking_valid_sources(self):
+        from PD_GelaendeBaugruben import core
+        elements = (
+            {"id": "valid", "kind": "point", "points": ((1.0, 1.0, 2.0),)},
+            {"id": "crossing", "kind": "breakline",
+             "points": ((1.0, 1.0, 2.0), (20.0, 1.0, 2.0))},
+        )
+        result = core.review_sources(
+            elements, boundary=((0.0, 0.0), (10.0, 0.0),
+                                (10.0, 10.0), (0.0, 10.0)))
+        self.assertEqual(1, result["usable_count"])
+        self.assertEqual(1, result["problem_count"])
+        self.assertEqual(0, result["blocking_count"])
+        self.assertEqual("Modellbegrenzung wird gekreuzt", result["excluded"][0]["reason"])
+
+    def test_conflicting_height_is_skipped_without_stopping_output(self):
+        from PD_GelaendeBaugruben import core
+        elements = (
+            {"id": "first", "kind": "point", "points": ((1.0, 1.0, 2.0),)},
+            {"id": "conflict", "kind": "point", "points": ((1.0, 1.0, 5.0),)},
+        )
+        result = core.review_sources(elements, xy_tolerance_m=0.01, z_tolerance_m=0.01)
+        self.assertEqual(1, result["usable_count"])
+        self.assertEqual(0, result["blocking_count"])
+        self.assertEqual("Widersprüchliche Höhe", result["excluded"][0]["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

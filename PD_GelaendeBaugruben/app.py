@@ -35,6 +35,8 @@ def _preview_sources(options):
          review["problem_count"], len(unsupported), review["vertex_count"]))
     if review["problems"]:
         message += "\n\n" + "\n".join(problem["message"] for problem in review["problems"][:8])
+        message += ("\n\nDiese problematischen Objekte werden übersprungen; "
+                    "alle übrigen verwendbaren Daten werden weiterverarbeitet.")
     if review["blocking_count"]:
         adapter.alert(message + "\n\nDie blockierenden Konflikte müssen zuerst behoben werden.")
         return

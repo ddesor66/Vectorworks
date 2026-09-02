@@ -237,8 +237,9 @@ def review_sources(elements, xy_tolerance_m=DEFAULT_XY_TOLERANCE_M,
             seen_vertices.setdefault(cell, []).append((identifier, point))
         vertices.extend(points)
 
-    blocking = tuple(problem for problem in problems
-                     if problem["code"] in ("same_xy_different_z", "boundary_crossing"))
+    # Invalid foreign geometry is reported and excluded, but must not prevent
+    # the remaining valid terrain sources from being generated.
+    blocking = ()
     return {
         "schema": SCHEMA,
         "input_count": len(source_elements),
