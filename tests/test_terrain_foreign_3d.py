@@ -11,6 +11,8 @@ class FakeVS(types.ModuleType):
         self.points = {}
         self.children = {}
         self.layers = {}
+        self.layer_objects = {}
+        self.layer_order = []
 
     def GetTypeN(self, handle): return self.types[handle]
     def GetObjectUuid(self, handle): return handle
@@ -31,11 +33,32 @@ class FakeVS(types.ModuleType):
     def GetMeshVertex(self, handle, index): return self.points[handle][index]
     def FInGroup(self, handle): return self.children.get(handle, [None])[0]
     def NextObj(self, handle):
-        for values in self.children.values():
+        lists = list(self.children.values()) + list(self.layer_objects.values())
+        active = getattr(self, "active_layer_objects", ())
+        if active:
+            lists.append(active)
+        for values in lists:
             if handle in values:
                 index = values.index(handle) + 1
                 return values[index] if index < len(values) else None
         return None
+
+    def FLayer(self):
+        return self.layer_order[0] if self.layer_order else None
+
+    def NextLayer(self, layer):
+        if layer not in self.layer_order:
+            return None
+        index = self.layer_order.index(layer) + 1
+        return self.layer_order[index] if index < len(self.layer_order) else None
+
+    def FInLayer(self, layer):
+        values = self.layer_objects.get(layer, ())
+        return values[0] if values else None
+
+    def FActLayer(self):
+        values = getattr(self, "active_layer_objects", ())
+        return values[0] if values else None
 
     def HDuplicate(self, handle, _dx, _dy):
         return getattr(self, "duplicates", {}).get(handle)
@@ -53,6 +76,10 @@ class FakeVS(types.ModuleType):
 
     def Count(self, criteria):
         self.count_criteria = criteria
+        return getattr(self, "selection_count", len(getattr(self, "selection", ())))
+
+    def NumSelectedObjects(self):
+        self.num_selected_called = True
         return getattr(self, "selection_count", len(getattr(self, "selection", ())))
 
     def Selected(self, handle):
@@ -120,7 +147,7 @@ class Foreign3DTests(unittest.TestCase):
         adapter = load_adapter(fake)
         handles = adapter.active_layer_handles()
         self.assertEqual(6059, len(handles))
-        self.assertEqual((0, 2, 0), fake.layer_search_options)
+        self.assertFalse(hasattr(fake, "layer_search_options"))
 
     def test_full_layers_of_truncated_selection_recover_deep_leaf_objects(self):
         fake = FakeVS()
@@ -128,11 +155,10 @@ class Foreign3DTests(unittest.TestCase):
         fake.layers.update({"selected": "import", "group": "import",
                             "line": "import", "text": "import",
                             "other": "other-layer"})
-        fake.all_document_objects = ("selected", "group", "line", "text", "other")
+        fake.layer_objects["import"] = ("selected", "group", "line", "text")
         adapter = load_adapter(fake)
         handles = adapter.object_layer_handles(("selected",))
-        self.assertEqual(("selected", "line", "text"), handles)
-        self.assertEqual((0, 2, 1), fake.layer_search_options)
+        self.assertEqual(("selected", "group", "line", "text"), handles)
 
     def test_individual_selection_flags_recover_selection_iterator_limit(self):
         fake = FakeVS()
@@ -146,12 +172,26 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual(6059, len(handles))
         self.assertEqual(6059, len(set(handles)))
 
+    def test_native_layer_lists_recover_text_and_lines_omitted_by_callbacks(self):
+        fake = FakeVS()
+        all_objects = tuple("object-%d" % index for index in range(6059))
+        fake.selection = all_objects[:95]
+        fake.active_selection = all_objects[:1024]
+        fake.all_layer_selection = all_objects[:1024]
+        fake.all_document_objects = all_objects[:2928]
+        fake.layer_order = ["import"]
+        fake.layer_objects["import"] = all_objects
+        fake.selected_members = set(all_objects)
+        adapter = load_adapter(fake)
+        handles = adapter.selected_handles()
+        self.assertEqual(all_objects, handles)
+
     def test_vectorworks_selection_counter_is_available_for_recovery(self):
         fake = FakeVS()
         fake.selection_count = 6059
         adapter = load_adapter(fake)
         self.assertEqual(6059, adapter.selected_object_count())
-        self.assertEqual("(SEL=TRUE)", fake.count_criteria)
+        self.assertTrue(fake.num_selected_called)
 
     def test_layer_criterion_escapes_apostrophes(self):
         fake = FakeVS()
@@ -205,6 +245,18 @@ class Foreign3DTests(unittest.TestCase):
         element = adapter._source_element("text", 1.0, 0.1)
         self.assertEqual(((12.0, 34.0, 102.65),), element["points"])
 
+    def test_extracted_text_and_line_keep_native_type_provenance(self):
+        fake = FakeVS()
+        fake.GetUnits = lambda: (None, None, None, 0.0254)
+        fake.types.update(text=10, line=2)
+        fake.points["text"] = ((12.0, 34.0, 5.5),)
+        fake.points["line"] = ((1.0, 2.0, 4.0), (3.0, 4.0, 4.0))
+        adapter = load_adapter(fake)
+        sources, unsupported = adapter.extract_sources(("text", "line"))
+        self.assertFalse(unsupported)
+        self.assertEqual(("Text", "Linie"),
+                         tuple(value["source_type_name"] for value in sources))
+
     def test_nurbs_keeps_individual_vertex_heights(self):
         fake = FakeVS()
         fake.types["curve"] = 111
@@ -241,6 +293,8 @@ class Foreign3DTests(unittest.TestCase):
         elements = adapter._source_elements("group", 1.0, 0.1)
         self.assertEqual(3, len(elements))
         self.assertEqual(["point", "point", "point"], [item["kind"] for item in elements])
+        self.assertEqual(["Mesh", "Mesh", "Text"],
+                         [item["source_type_name"] for item in elements])
 
     def test_symbol_is_expanded_to_complete_converted_3d_geometry(self):
         fake = FakeVS()

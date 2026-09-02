@@ -231,7 +231,9 @@ def review_sources(elements, xy_tolerance_m=DEFAULT_XY_TOLERANCE_M,
                 continue
         usable.append(dict(id=identifier, kind=kind, points=points,
                            class_name=str(raw.get("class") or ""),
-                           layer_name=str(raw.get("layer") or "")))
+                           layer_name=str(raw.get("layer") or ""),
+                           source_type=raw.get("source_type"),
+                           source_type_name=str(raw.get("source_type_name") or "")))
         for point in points:
             cell = (int(math.floor(point[0] / xy_tolerance)),
                     int(math.floor(point[1] / xy_tolerance)))

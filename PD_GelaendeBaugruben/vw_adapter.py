@@ -89,6 +89,41 @@ def _layer_z_units(handle, factor):
         return 0.0
 
 
+def _walk_object_list(first):
+    """Walk one native Vectorworks object list without callback cutoffs."""
+    result = []
+    seen = set()
+    handle = first
+    while handle and handle not in seen:
+        seen.add(handle)
+        result.append(handle)
+        handle = vs.NextObj(handle)
+    return tuple(result)
+
+
+def _document_layers():
+    """Return every document layer through the native linked layer list."""
+    result = []
+    seen = set()
+    try:
+        layer = vs.FLayer()
+        while layer and layer not in seen:
+            seen.add(layer)
+            result.append(layer)
+            layer = vs.NextLayer(layer)
+    except (AttributeError, TypeError):
+        return ()
+    return tuple(result)
+
+
+def _layer_object_list(layer):
+    """Return top-level objects of one layer through FInLayer/NextObj."""
+    try:
+        return _walk_object_list(vs.FInLayer(layer))
+    except (AttributeError, TypeError):
+        return ()
+
+
 def selected_handles():
     result = []
     seen = set()
@@ -133,11 +168,36 @@ def selected_handles():
         vs.ForEachObjectInLayer(collect_if_selected, 0, 2, 1)
     except (AttributeError, TypeError):
         pass
+    # Do not depend on callback or criteria enumeration for large DWG imports.
+    # FLayer/FInLayer/NextObj expose the native linked lists directly and have
+    # no observed 1,024/2,928-object cutoff. Inspect every top-level object in
+    # every working layer against its actual selection flag.
+    try:
+        for layer in _document_layers():
+            for handle in _layer_object_list(layer):
+                if vs.Selected(handle):
+                    collect(handle)
+    except (AttributeError, TypeError):
+        pass
+    # This also covers an active edit context whose object list is not exposed
+    # as a normal document layer.
+    try:
+        for handle in _walk_object_list(vs.FActLayer()):
+            if vs.Selected(handle):
+                collect(handle)
+    except (AttributeError, TypeError):
+        pass
     return tuple(result)
 
 
 def selected_object_count():
     """Return Vectorworks' own selection count for consistency diagnostics."""
+    try:
+        # Unlike Count((SEL=TRUE)), this native function is documented to
+        # return the selected-object total across all working layers.
+        return max(0, int(vs.NumSelectedObjects() or 0))
+    except (AttributeError, TypeError, ValueError):
+        pass
     try:
         return max(0, int(vs.Count("(SEL=TRUE)") or 0))
     except (AttributeError, TypeError, ValueError):
@@ -145,7 +205,15 @@ def selected_object_count():
 
 
 def active_layer_handles():
-    """Return every leaf source on the active layer, including group members."""
+    """Return every top-level source on the active layer without callbacks."""
+    try:
+        direct = _walk_object_list(vs.FActLayer())
+    except (AttributeError, TypeError):
+        direct = ()
+    if direct:
+        # Keep containers here. _source_elements expands their members once
+        # while retaining the correct parent transformation and context.
+        return direct
     result = []
     seen = set()
 
@@ -169,17 +237,31 @@ def active_layer_handles():
 
 
 def object_layer_handles(handles):
-    """Return all leaf sources on every layer represented by ``handles``."""
-    layers = set()
+    """Return all top-level sources on every layer represented by ``handles``."""
+    layers = []
+    seen_layers = set()
     for handle in tuple(handles or ()):
         try:
             layer = vs.GetLayer(handle)
         except (AttributeError, TypeError):
             layer = None
-        if layer:
-            layers.add(layer)
+        if layer and layer not in seen_layers:
+            seen_layers.add(layer)
+            layers.append(layer)
     if not layers:
         return ()
+    # Primary path: traverse the layer's linked object list directly. This is
+    # the path that includes imported 2D text and line objects omitted by the
+    # callback-based deep traversal in large survey drawings.
+    direct = []
+    direct_seen = set()
+    for layer in layers:
+        for handle in _layer_object_list(layer):
+            if handle and handle not in direct_seen:
+                direct_seen.add(handle)
+                direct.append(handle)
+    if direct:
+        return tuple(direct)
     result = []
     seen = set()
 
@@ -224,6 +306,30 @@ def object_label(handle):
 def object_type_name(value):
     number = int(value or 0)
     return OBJECT_TYPE_NAMES.get(number, "Objekttyp %d" % number)
+
+
+def source_handle_types(handles):
+    """Describe every input handle by its native Vectorworks object type."""
+    result = []
+    for handle in tuple(handles or ()):
+        try:
+            object_type = int(vs.GetTypeN(handle) or 0)
+        except (AttributeError, TypeError, ValueError):
+            object_type = 0
+        result.append({"type": object_type,
+                       "type_name": object_type_name(object_type)})
+    return tuple(result)
+
+
+def _with_source_type(elements, object_type):
+    """Attach the originating native type, including recursively read members."""
+    result = []
+    for raw in tuple(elements or ()):
+        element = dict(raw)
+        element.setdefault("source_type", object_type)
+        element.setdefault("source_type_name", object_type_name(object_type))
+        result.append(element)
+    return tuple(result)
 
 
 def _sample_2d_path(handle, tolerance_doc):
@@ -469,9 +575,9 @@ def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
     if object_type == TYPE_MESH:
         values = _mesh_source_elements(handle, factor)
         if values:
-            return values
+            return _with_source_type(values, object_type)
         fallback = _source_element(handle, factor, chord_tolerance_m)
-        return (fallback,) if fallback else ()
+        return _with_source_type((fallback,) if fallback else (), object_type)
     if object_type == TYPE_NURBS_CURVE:
         identifier = _identifier(handle)
         class_name, layer_name = _context(handle)
@@ -482,10 +588,12 @@ def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
         except (TypeError, ValueError, IndexError):
             points = ()
         if len(points) >= 2:
-            return ({"id": identifier, "kind": "breakline", "points": points,
-                     "class": class_name, "layer": layer_name},)
+            return _with_source_type(({
+                "id": identifier, "kind": "breakline", "points": points,
+                "class": class_name, "layer": layer_name,
+            },), object_type)
         fallback = _source_element(handle, factor, chord_tolerance_m)
-        return (fallback,) if fallback else ()
+        return _with_source_type((fallback,) if fallback else (), object_type)
     if object_type == TYPE_GROUP:
         identity = _identifier(handle)
         if identity in ancestry:
@@ -497,7 +605,7 @@ def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
         if result:
             return tuple(result)
         fallback = _source_element(handle, factor, chord_tolerance_m)
-        return (fallback,) if fallback else ()
+        return _with_source_type((fallback,) if fallback else (), object_type)
     # Symbol instances, solids, rectangles, ovals, dimensions and other
     # imported spatial types must contribute their actual polygon geometry,
     # not merely one generic centre point.
@@ -509,12 +617,12 @@ def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
     if object_type not in direct_types:
         converted = _converted_3d_elements(handle, factor)
         if converted:
-            return converted
+            return _with_source_type(converted, object_type)
     element = _source_element(handle, factor, chord_tolerance_m)
     if element:
-        return (element,)
+        return _with_source_type((element,), object_type)
     if object_type == TYPE_PARAMETRIC:
-        return _converted_3d_elements(handle, factor)
+        return _with_source_type(_converted_3d_elements(handle, factor), object_type)
     return ()
 
 
@@ -562,7 +670,12 @@ def extract_sources(handles, chord_tolerance_m=core.DEFAULT_CHORD_TOLERANCE_M,
                 type_name=object_type_name(object_type), error=str(error)))
             continue
         if elements:
-            result.extend(elements)
+            object_type = int(vs.GetTypeN(handle) or 0)
+            for raw in elements:
+                element = dict(raw)
+                element.setdefault("source_type", object_type)
+                element.setdefault("source_type_name", object_type_name(object_type))
+                result.append(element)
         else:
             object_type = int(vs.GetTypeN(handle) or 0)
             unsupported.append(dict(id=_identifier(handle), type=object_type,

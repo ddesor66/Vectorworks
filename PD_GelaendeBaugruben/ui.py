@@ -111,7 +111,7 @@ def source_options(defaults=None):
     vs.CreateStaticText(dialog, 30,
         "Standardmäßig werden sämtliche markierten 3D-Objekte einschließlich Gruppeninhalten "
         "geprüft. Ab 1.024 Objekten werden wegen der Vectorworks-Auswahlbegrenzung automatisch "
-        "sämtliche tief enthaltenen Einzelobjekte der Markierungsebenen gelesen. Die optionale Ebenenprüfung nimmt "
+        "sämtliche Objekte über die direkte native Ebenenliste gelesen, damit auch Texte und Linien ohne Callback-Verlust ankommen. Die optionale Ebenenprüfung nimmt "
         "zusätzlich unmarkierte Objekte der aktiven Ebene auf. Ohne "
         "aktivierte Begrenzungsoption schneidet keine geschlossene Fremdgeometrie Quelldaten ab.", 70)
     vs.SetFirstLayoutItem(dialog, 10)

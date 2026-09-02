@@ -82,6 +82,8 @@ def _preview_sources(options):
         message += " (Auswahlbegrenzung durch Ebenenerfassung ersetzt)"
     message += ("\nModellbegrenzung: %s" %
                 ("markiertes Polygon" if boundary else "keine"))
+    message += "\nEingelesene Vectorworks-Objekttypen: " + _count_labels(
+        adapter.source_handle_types(handles), "type_name")
     if unsupported:
         message += "\nNicht unterstützt nach Typ: " + _count_labels(unsupported, "type_name")
     if review["excluded"]:
@@ -101,18 +103,24 @@ def _preview_sources(options):
     layer_name, created, verification = adapter.create_source_layer(
         review, options["layer_name"])
     model_class = adapter.ensure_class(options["model_class"])
+    usable_type_counts = {}
+    for value in review["usable"]:
+        label = str(value.get("source_type_name") or "Unbekannt")
+        usable_type_counts[label] = usable_type_counts.get(label, 0) + 1
     adapter.alert(
         "%d geprüfte 3D-Quellobjekte wurden auf der aktiven Ebene „%s“ angelegt, "
         "sichtbar eingefärbt und markiert.\n"
         "Tatsächlich auf der Zielebene gezählt: %d Punkte, %d Bruchkanten; "
-        "%d Objekte markiert.\n\n"
+        "%d Objekte markiert.\n"
+        "Davon aus Texten umgesetzt: %d; aus Linien umgesetzt: %d.\n\n"
         "Nächster nativer Vectorworks-Schritt: Landschaft > Geländemodell > "
         "Geländemodell aus Ausgangsdaten. Dieser Befehl ist über die geprüfte Python-API "
         "nicht belastbar automatisierbar.\n\n"
         "Vorgaben für den nativen Dialog:\nName: %s\nKlasse: %s\n"
         "Höhenlinien-Äquidistanz: %.3f m\nHöheneinheit der Modulauswertung: Meter."
         % (len(created), layer_name, verification["points"], verification["lines"],
-           verification["selected"], options["model_name"], model_class,
+           verification["selected"], usable_type_counts.get("Text", 0),
+           usable_type_counts.get("Linie", 0), options["model_name"], model_class,
            options["contour_interval_m"]))
 
 
