@@ -43,7 +43,7 @@ def _preview_sources(options):
         handles, options["chord_tolerance_m"], boundary_handle)
     review = core.review_sources(
         sources, options["xy_tolerance_m"], options["z_tolerance_m"], boundary,
-        options["excluded_classes"], options["excluded_layers"])
+        options["excluded_classes"], options["excluded_layers"], retain_all=True)
     message = (
         "Quelldatenprüfung\n\n"
         "%s: %d\nErkannte Quellgeometrien: %d\n"
@@ -65,8 +65,9 @@ def _preview_sources(options):
         message += "\nAusgeschlossen nach Grund: " + _count_labels(review["excluded"], "reason")
     if review["problems"]:
         message += "\n\n" + "\n".join(problem["message"] for problem in review["problems"][:8])
-        message += ("\n\nDiese problematischen Objekte werden übersprungen; "
-                    "alle übrigen verwendbaren Daten werden weiterverarbeitet.")
+        message += ("\n\nRäumlich lesbare markierte Objekte bleiben trotz Höhen- oder "
+                    "Dublettenhinweisen erhalten. Nur ausdrücklich gefilterte, außerhalb einer "
+                    "aktivierten Begrenzung liegende oder technisch unlesbare Objekte entfallen.")
     if review["blocking_count"]:
         adapter.alert(message + "\n\nDie blockierenden Konflikte müssen zuerst behoben werden.")
         return

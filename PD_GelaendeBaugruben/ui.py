@@ -97,7 +97,7 @@ def source_options(defaults=None):
     vs.CreateEditReal(dialog, 21, 1, defaults.get("chord_tolerance_m", 0.10), 14)
     vs.CreateEditReal(dialog, 22, 1, defaults.get("xy_tolerance_m", 0.001), 14)
     vs.CreateEditReal(dialog, 23, 1, defaults.get("z_tolerance_m", 0.001), 14)
-    vs.CreateEditText(dialog, 24, defaults.get("excluded_classes", "*Dach*;*Baum*;*Vegetation*"), 44)
+    vs.CreateEditText(dialog, 24, defaults.get("excluded_classes", ""), 44)
     vs.CreateEditText(dialog, 25, defaults.get("excluded_layers", ""), 44)
     vs.CreateEditText(dialog, 26, defaults.get("model_name", "DGM Bestand"), 36)
     vs.CreateEditText(dialog, 27, defaults.get("model_class", "PD-GB-Gelaendemodell"), 36)

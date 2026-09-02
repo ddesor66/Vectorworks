@@ -206,6 +206,19 @@ class Foreign3DTests(unittest.TestCase):
 
 
 class ForeignGeometryRecoveryTests(unittest.TestCase):
+    def test_retain_all_keeps_duplicate_and_conflicting_spatial_sources(self):
+        from PD_GelaendeBaugruben import core
+        elements = (
+            {"id": "first", "kind": "point", "points": ((1.0, 1.0, 2.0),)},
+            {"id": "duplicate", "kind": "point", "points": ((1.0, 1.0, 2.0),)},
+            {"id": "other-height", "kind": "point", "points": ((1.0, 1.0, 5.0),)},
+        )
+        result = core.review_sources(
+            elements, xy_tolerance_m=0.01, z_tolerance_m=0.01, retain_all=True)
+        self.assertEqual(3, result["usable_count"])
+        self.assertEqual(0, result["excluded_count"])
+        self.assertEqual(1, result["problem_count"])
+
     def test_boundary_crossing_is_skipped_without_blocking_valid_sources(self):
         from PD_GelaendeBaugruben import core
         elements = (

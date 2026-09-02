@@ -131,12 +131,12 @@ def _excluded(value, patterns):
 
 def review_sources(elements, xy_tolerance_m=DEFAULT_XY_TOLERANCE_M,
                    z_tolerance_m=DEFAULT_Z_TOLERANCE_M, boundary=None,
-                   excluded_classes=(), excluded_layers=()):
+                   excluded_classes=(), excluded_layers=(), retain_all=False):
     """Validate normalized source elements without changing their geometry.
 
     ``elements`` contain ``id``, ``kind``, ``points`` and optionally class/layer.
-    Point duplicates are removed. Breaklines are retained as complete elements.
-    Same XY with materially different Z is a blocking 2.5D conflict.
+    By default duplicate points are removed. With ``retain_all`` every readable
+    spatial source is preserved while conflicts remain visible in the review.
     """
     xy_tolerance = number(xy_tolerance_m, "XY-Toleranz", 1e-9)
     z_tolerance = number(z_tolerance_m, "Höhentoleranz", 0.0)
@@ -203,16 +203,17 @@ def review_sources(elements, xy_tolerance_m=DEFAULT_XY_TOLERANCE_M,
                 id=identifier, code="same_xy_different_z",
                 message=("Gleiche XY-Lage wie %s, aber %.4f m Höhenunterschied." %
                          (height_conflict[0], abs(height_conflict[2] - height_conflict[1])))))
-            excluded.append(dict(id=identifier, reason="Widersprüchliche Höhe"))
-            continue
+            if not retain_all:
+                excluded.append(dict(id=identifier, reason="Widersprüchliche Höhe"))
+                continue
 
         canonical = tuple((round(p[0] / xy_tolerance), round(p[1] / xy_tolerance),
                            round(p[2] / max(z_tolerance, 1e-9))) for p in points)
         geometry_key = (kind, min(canonical, tuple(reversed(canonical))))
-        if geometry_key in seen_geometry:
+        if geometry_key in seen_geometry and not retain_all:
             excluded.append(dict(id=identifier, reason="Identische Geometrie wie %s" % seen_geometry[geometry_key]))
             continue
-        seen_geometry[geometry_key] = identifier
+        seen_geometry.setdefault(geometry_key, identifier)
 
         if kind == "point":
             point = points[0]
@@ -225,7 +226,7 @@ def review_sources(elements, xy_tolerance_m=DEFAULT_XY_TOLERANCE_M,
                         if (_same_xy(point, prior, xy_tolerance) and
                                 abs(point[2] - prior[2]) <= z_tolerance):
                             duplicate = prior_id
-            if duplicate:
+            if duplicate and not retain_all:
                 excluded.append(dict(id=identifier, reason="Doppelpunkt zu %s" % duplicate))
                 continue
         usable.append(dict(id=identifier, kind=kind, points=points,
@@ -254,6 +255,7 @@ def review_sources(elements, xy_tolerance_m=DEFAULT_XY_TOLERANCE_M,
         "xy_tolerance_m": xy_tolerance,
         "z_tolerance_m": z_tolerance,
         "boundary": clipping,
+        "retain_all": bool(retain_all),
     }
 
 
