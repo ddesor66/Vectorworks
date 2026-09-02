@@ -15,14 +15,14 @@ Produktionsmodul für Vectorworks 2026 zum Prüfen von Geländedaten, Verwalten 
 
 ### 1. Quelldaten wählen und prüfen
 
-1. Geeignete Objekte markieren. Unterstützt sind 3D-Punkte, erkannte Vermessungspunkt-Plug-in-Objekte, 3D-Polygone/Bruchkanten, Linien, Polygone, Polylinien und abgetastete Bögen mit gültiger Höhe.
+1. Geeignete Objekte markieren. Unterstützt sind 3D-Punkte, tatsächlich in 3D platzierte Texte, Vermessungspunkt-Plug-in-Objekte (auch gebräuchliche fremdsprachige Bezeichnungen), Symbolpunkte, 2D-/3D-Linien, 3D-Polygone/Bruchkanten, NURBS-Kurven, Polygone, Polylinien, abgetastete Bögen, Gruppeninhalte und sämtliche Eckpunkte von Meshes mit gültiger Höhe.
 2. Optional ein geschlossenes 2D-Polygon als Modellbegrenzung mit markieren.
 3. Sehnentoleranz, Dublettentoleranz, Höhentoleranz, Ausschlussmuster, Ziel-Ebene, gewünschten DGM-Namen, DGM-Klasse und Höhenlinien-Äquidistanz einstellen.
 4. `Vorschau` zeigt verwendbare, ausgeschlossene, problematische und nicht unterstützte Objekte. Gleiche XY-Lage mit widersprüchlicher Höhe und Begrenzungskreuzungen blockieren die Ausgabe.
 5. Nach Bestätigung werden geprüfte Kopien auf einer neuen Ebene angelegt und markiert. Originale werden weder geändert noch gelöscht.
 6. Danach den von Vectorworks bereitgestellten Befehl `Landschaft > Geländemodell > Geländemodell aus Ausgangsdaten` ausführen und die im Abschlussdialog genannten Vorgaben verwenden.
 
-3D-Polygone und Bruchkanten bleiben als 3D-Polygone erhalten. Kurven werden nur mit der gewählten Sehnentoleranz abgetastet. Punktwolken und Meshes werden nicht pauschal konvertiert, sondern als nicht unterstützt ausgewiesen.
+3D-Polygone, NURBS-Kurven und Bruchkanten bleiben mit ihren individuellen Scheitelhöhen erhalten. 3D-Texte liefern einen Stützpunkt an ihrem Einfügepunkt mit der tatsächlichen Objekthöhe; der Textinhalt wird nicht als ungesicherter Höhenwert interpretiert. Kurven werden nur mit der gewählten Sehnentoleranz abgetastet. Gruppen werden rekursiv gelesen, ohne die Originale aufzulösen. Meshes werden nicht geometrisch verändert; ihre vorhandenen Eckpunkte werden als einzelne 3D-Quellpunkte übernommen. Punktwolken bleiben mangels verifizierter, verlustfreier Python-Konvertierung ausdrücklich ausgeschlossen.
 
 ### 2. Bestands- und Sollmodelle
 
@@ -90,7 +90,7 @@ Darum trennt das Modul strikt:
 
 ## Bekannte Einschränkungen
 
-- Punktwolken und Mesh-Geometrien werden mangels verifizierter, verlustfreier Python-Konvertierung nicht übernommen.
+- Mesh-Eckpunkte werden verlustfrei als 3D-Stützpunkte übernommen; Flächen- und Kantenverbindungen des Meshes werden nicht als Bruchkanten interpretiert. Punktwolken werden mangels verifizierter Python-Konvertierung nicht übernommen.
 - Modellbegrenzungen und Hindernisse sind einfache geschlossene 2D-Polygone/Polylinien ohne Löcher.
 - Böschungsverschneidungen werden an den Eckstrahlen der Sohle gelöst; hochkomplexe freie Böschungsflächen benötigen eine zusätzliche visuelle Fachprüfung.
 - Null-/Verschneidungslinien werden aus dem Differenzraster angenähert, nicht aus einer nicht verfügbaren nativen DGM-Verschneidungsfunktion.

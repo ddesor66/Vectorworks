@@ -16,10 +16,15 @@ from . import core
 TYPE_LINE = 2
 TYPE_ARC = 6
 TYPE_LOCUS_3D = 9
+TYPE_TEXT = 10
 TYPE_POLYGON = 5
 TYPE_POLYLINE = 21
 TYPE_POLYGON_3D = 25
+TYPE_GROUP = 11
+TYPE_SYMBOL = 15
+TYPE_MESH = 40
 TYPE_PARAMETRIC = 86
+TYPE_NURBS_CURVE = 111
 MODEL_RECORD = "PD_GB_Modell"
 MODEL_FIELD = "Daten"
 OUTPUT_RECORD = "PD_GB_Ausgabe"
@@ -124,15 +129,20 @@ def _source_element(handle, factor, chord_tolerance_m):
                 "points": ((x * factor, y * factor, (z + layer_z) * factor),),
                 "class": class_name, "layer": layer_name}
     if object_type == TYPE_POLYGON_3D:
-        points = tuple(tuple(float(value) * factor for value in vs.GetPolyPt3D(handle, index))
-                       for index in range(int(vs.GetVertNum(handle) or 0)))
+        # GetPolyPt3D returns the effective Z including the layer elevation.
+        points = tuple((float(x) * factor, float(y) * factor, float(z) * factor)
+                       for x, y, z in (vs.GetPolyPt3D(handle, index)
+                       for index in range(int(vs.GetVertNum(handle) or 0))))
         return {"id": identifier,
                 "kind": "contour" if vs.IsPolyClosed(handle) else "breakline",
                 "points": points, "class": class_name, "layer": layer_name}
-    if object_type == TYPE_PARAMETRIC:
+    if object_type in (TYPE_PARAMETRIC, TYPE_SYMBOL):
         record = vs.GetParametricRecord(handle)
         plug_in = str(vs.GetName(record) if record else "").casefold()
-        if "stake" in plug_in or "vermessung" in plug_in:
+        if (object_type == TYPE_SYMBOL or "stake" in plug_in or
+                "vermessung" in plug_in or "survey" in plug_in or
+                "hoehe" in plug_in or "höhe" in plug_in or
+                "point" in plug_in or "punkt" in plug_in):
             x, y, z = vs.GetSymLoc3D(handle)
             return {"id": identifier, "kind": "point",
                     "points": ((x * factor, y * factor, (z + layer_z) * factor),),
@@ -143,6 +153,15 @@ def _source_element(handle, factor, chord_tolerance_m):
         z_value = (float(center[2]) + layer_z) * factor
     except (TypeError, ValueError, IndexError):
         return None
+    if object_type == TYPE_TEXT:
+        try:
+            origin = vs.GetTextOrigin(handle)
+            x_value, y_value = float(origin[0]), float(origin[1])
+        except (AttributeError, TypeError, ValueError, IndexError):
+            x_value, y_value = float(center[0]), float(center[1])
+        return {"id": identifier, "kind": "point",
+                "points": ((x_value * factor, y_value * factor, z_value),),
+                "class": class_name, "layer": layer_name}
     if object_type == TYPE_LINE:
         first, second = vs.GetSegPt1(handle), vs.GetSegPt2(handle)
         points = ((float(first[0]) * factor, float(first[1]) * factor, z_value),
@@ -163,6 +182,69 @@ def _source_element(handle, factor, chord_tolerance_m):
                     "points": tuple((x * factor, y * factor, z_value) for x, y in points_2d),
                     "class": class_name, "layer": layer_name}
     return None
+
+
+def _mesh_source_elements(handle, factor):
+    """Expose every mesh vertex as an independent terrain source point."""
+    identifier = _identifier(handle)
+    class_name, layer_name = _context(handle)
+    result = []
+    try:
+        count = int(vs.GetMeshVertsCnt(handle) or 0)
+    except Exception:
+        count = 0
+    for index in range(max(0, count)):
+        try:
+            x, y, z = vs.GetMeshVertex(handle, index)
+            point = (float(x) * factor, float(y) * factor,
+                     float(z) * factor)
+        except (TypeError, ValueError, IndexError):
+            continue
+        result.append({"id": "%s / Meshpunkt %d" % (identifier, index + 1),
+                       "kind": "point", "points": (point,),
+                       "class": class_name, "layer": layer_name})
+    return tuple(result)
+
+
+def _contained_handles(handle):
+    """Iterate direct members of a group without altering the source object."""
+    child = vs.FInGroup(handle)
+    seen = set()
+    while child and child not in seen:
+        seen.add(child)
+        yield child
+        child = vs.NextObj(child)
+
+
+def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
+    """Expand containers and vertex collections into normalized source elements."""
+    object_type = int(vs.GetTypeN(handle) or 0)
+    if object_type == TYPE_MESH:
+        return _mesh_source_elements(handle, factor)
+    if object_type == TYPE_NURBS_CURVE:
+        identifier = _identifier(handle)
+        class_name, layer_name = _context(handle)
+        try:
+            points = tuple(tuple(float(value) * factor
+                                 for value in vs.GetPolyPt3D(handle, index))
+                           for index in range(int(vs.GetVertNum(handle) or 0)))
+        except (TypeError, ValueError, IndexError):
+            points = ()
+        if len(points) >= 2:
+            return ({"id": identifier, "kind": "breakline", "points": points,
+                     "class": class_name, "layer": layer_name},)
+        return ()
+    if object_type == TYPE_GROUP:
+        identity = _identifier(handle)
+        if identity in ancestry:
+            return ()
+        result = []
+        for child in _contained_handles(handle):
+            result.extend(_source_elements(
+                child, factor, chord_tolerance_m, ancestry + (identity,)))
+        return tuple(result)
+    element = _source_element(handle, factor, chord_tolerance_m)
+    return (element,) if element else ()
 
 
 def selected_boundary(handles=None):
@@ -194,9 +276,9 @@ def extract_selected_sources(chord_tolerance_m=core.DEFAULT_CHORD_TOLERANCE_M,
     for handle in selected_handles():
         if handle == ignore_handle:
             continue
-        element = _source_element(handle, factor, chord_tolerance_m)
-        if element:
-            result.append(element)
+        elements = _source_elements(handle, factor, chord_tolerance_m)
+        if elements:
+            result.extend(elements)
         else:
             unsupported.append(dict(id=_identifier(handle), type=int(vs.GetTypeN(handle) or 0)))
     return tuple(result), tuple(unsupported)
