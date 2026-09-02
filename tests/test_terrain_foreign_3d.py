@@ -42,6 +42,16 @@ class FakeVS(types.ModuleType):
     def Selected(self, handle):
         return False
 
+    def FSActLayer(self):
+        return getattr(self, "active_selection", [None])[0]
+
+    def NextSObj(self, handle):
+        values = getattr(self, "active_selection", ())
+        if handle not in values:
+            return None
+        index = values.index(handle) + 1
+        return values[index] if index < len(values) else None
+
 
 def load_adapter(fake):
     sys.modules["vs"] = fake
@@ -57,6 +67,29 @@ class Foreign3DTests(unittest.TestCase):
         adapter = load_adapter(fake)
         self.assertEqual(6059, len(adapter.selected_handles()))
         self.assertEqual("(SEL=TRUE)", fake.criteria)
+
+    def test_active_layer_selection_completes_partial_criteria_result(self):
+        fake = FakeVS()
+        fake.selection = ("object-1", "object-2")
+        fake.active_selection = tuple("object-%d" % index for index in range(1, 6060))
+        adapter = load_adapter(fake)
+        handles = adapter.selected_handles()
+        self.assertEqual(6059, len(handles))
+        self.assertEqual(6059, len(set(handles)))
+
+    def test_imported_arc_uses_direct_geometry_fallback(self):
+        fake = FakeVS()
+        fake.types["arc"] = 6
+        fake.points["arc"] = ((10.0, 0.0),)
+        fake.HLength = lambda _handle: 0.0
+        fake.HCenter = lambda _handle: (0.0, 0.0)
+        fake.GetArc = lambda _handle: (0.0, 90.0)
+        fake.GetSegPt1 = lambda _handle: (10.0, 0.0)
+        adapter = load_adapter(fake)
+        element = adapter._source_element("arc", 1.0, 2.0)
+        self.assertIsNotNone(element)
+        self.assertAlmostEqual(0.0, element["points"][-1][0], places=6)
+        self.assertAlmostEqual(10.0, element["points"][-1][1], places=6)
 
     def test_imported_line_without_3d_center_uses_layer_height_fallback(self):
         fake = FakeVS()

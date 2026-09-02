@@ -14,6 +14,8 @@ def _count_labels(values, key):
     counts = {}
     for value in values:
         label = str(value.get(key) or "Unbekannt")
+        if key == "reason" and label.startswith("Identische Geometrie wie "):
+            label = "Identische Geometrie"
         counts[label] = counts.get(label, 0) + 1
     return ", ".join("%s: %d" % item for item in sorted(counts.items()))
 

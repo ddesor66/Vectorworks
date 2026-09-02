@@ -87,13 +87,28 @@ def _layer_z_units(handle, factor):
 
 def selected_handles():
     result = []
+    seen = set()
 
     def collect(handle):
         # The SEL criterion is authoritative. Calling Selected(handle) again
         # drops many imported/highlighted objects although Vectorworks counts
         # them in the current selection (observed with large DWG surveys).
-        result.append(handle)
+        if handle and handle not in seen:
+            seen.add(handle)
+            result.append(handle)
     vs.ForEachObject(collect, "(SEL=TRUE)")
+    # Some imported DWG selections are only partially returned by criteria.
+    # Merge Vectorworks' selected-object chain on the active layer as a second,
+    # independent source. This is read-only and preserves selection order.
+    try:
+        handle = vs.FSActLayer()
+        visited_chain = set()
+        while handle and handle not in visited_chain:
+            visited_chain.add(handle)
+            collect(handle)
+            handle = vs.NextSObj(handle)
+    except (AttributeError, TypeError):
+        pass
     return tuple(result)
 
 
@@ -133,6 +148,28 @@ def _sample_2d_path(handle, tolerance_doc):
             return ()
         result.append((float(point[0]), float(point[1])))
     return tuple(result)
+
+
+def _sample_circular_arc(handle, tolerance_doc):
+    """Fallback for imported arcs rejected by HLength/PointAlongPoly."""
+    try:
+        center = vs.HCenter(handle)
+        first = vs.GetSegPt1(handle)
+        _start_angle, sweep_angle = vs.GetArc(handle)
+        radius = math.hypot(float(first[0]) - float(center[0]),
+                            float(first[1]) - float(center[1]))
+        sweep = math.radians(float(sweep_angle))
+        if radius <= 0.0 or abs(sweep) <= 1e-12:
+            return ()
+        segments = max(1, min(10000, int(math.ceil(
+            abs(radius * sweep) / max(tolerance_doc, 1e-9)))))
+        start = math.atan2(float(first[1]) - float(center[1]),
+                           float(first[0]) - float(center[0]))
+        return tuple((float(center[0]) + radius * math.cos(start + sweep * index / segments),
+                      float(center[1]) + radius * math.sin(start + sweep * index / segments))
+                     for index in range(segments + 1))
+    except (AttributeError, TypeError, ValueError, IndexError):
+        return ()
 
 
 def _source_element(handle, factor, chord_tolerance_m):
@@ -207,6 +244,8 @@ def _source_element(handle, factor, chord_tolerance_m):
                 "points": points, "class": class_name, "layer": layer_name}
     if object_type in (TYPE_ARC, TYPE_FREEHAND):
         points_2d = _sample_2d_path(handle, chord_tolerance_m / factor)
+        if not points_2d and object_type == TYPE_ARC:
+            points_2d = _sample_circular_arc(handle, chord_tolerance_m / factor)
         if points_2d:
             return {"id": identifier, "kind": "curve",
                     "points": tuple((x * factor, y * factor, z_value) for x, y in points_2d),
