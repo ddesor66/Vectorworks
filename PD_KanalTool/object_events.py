@@ -9,7 +9,6 @@ from . import app, core, live, live_objects, settings
 
 
 EDIT = 2001
-DRAW = 2002
 HOME = 2003
 CONNECT = 2004
 SPLIT = 2005
@@ -18,9 +17,9 @@ SPECIAL = 2007
 DROP = 2008
 TERRAIN = 2009
 SHEETS = 2010
-VALIDATE = 2011
-QUANTITIES = 2012
-SETTINGS = 2013
+CONNECT_SHAFTS = 2014
+MERGE = 2015
+DELETE = 2016
 
 
 def owner(handle):
@@ -42,18 +41,17 @@ def run():
         vs.SetObjPropCharVS(3, chr(1))
         for widget, title in (
                 (EDIT, "Kanalnetz / Kette bearbeiten…"),
-                (DRAW, "Neue Kanalanlage durch Punkte zeichnen…"),
-                (HOME, "Kanaltool öffnen…"),
                 (CONNECT, "Neuen Kanalstrang anschließen…"),
+                (CONNECT_SHAFTS, "Schacht mit weiterem Schacht verbinden…"),
                 (SPLIT, "Schacht in Haltung einsetzen…"),
                 (STUB, "Kanalstutzen herstellen…"),
                 (SPECIAL, "Schacht in Sonderschacht umwandeln…"),
                 (DROP, "Absturz vor Schacht bearbeiten…"),
+                (MERGE, "Zwei Haltungen vereinigen…"),
                 (TERRAIN, "Schachtdeckel an Geländemodell anpassen…"),
                 (SHEETS, "Schachtblätter erstellen…"),
-                (VALIDATE, "Kanalnetz prüfen"),
-                (QUANTITIES, "Massenermittlung / Excel…"),
-                (SETTINGS, "Kanal-Voreinstellungen…")):
+                (DELETE, "Ausgewählte Kanalobjekte löschen…"),
+                (HOME, "Weitere Kanalbefehle…")):
             vs.vsoAppendWidget(12, widget, title, 0)
         return
     if event == 3:
@@ -71,20 +69,35 @@ def run():
         return
     try:
         target, _data = owner(handle)
-        vs.DSelectAll()
-        vs.SetSelect(target)
         if event == 7 or button == EDIT:
-            changed = live.edit_network_chain(target, settings.load())
+            selected = [row_handle for row_handle, _row_data in live.selected_managed()]
+            selected_names = {str(vs.GetName(row_handle) or "") for row_handle in selected}
+            if str(vs.GetName(target) or "") not in selected_names:
+                selected.append(target)
+            changed = live.edit_network_chain(tuple(selected), settings.load())
             if changed:
                 from PD_KanalLeitungMengen import reporting as quantity_reporting
                 quantity_reporting.refresh_existing(force=True)
             vs.vsoSetEventResult(0 if changed else -5)
             return
+        # Multi-object commands keep the current document selection. All
+        # other buttons operate solely on the OIP owner to avoid accidental
+        # edits of unrelated objects.
+        preserve_selection = button in (
+            CONNECT_SHAFTS, MERGE, DELETE, SHEETS, TERRAIN)
+        if not preserve_selection:
+            vs.DSelectAll()
+        selected_names = {
+            str(vs.GetName(row_handle) or "")
+            for row_handle, _row_data in live.selected_managed()}
+        if str(vs.GetName(target) or "") not in selected_names:
+            vs.SetSelect(target)
         actions = {
-            DRAW: "draw", HOME: None, CONNECT: "connect", SPLIT: "split",
+            HOME: None, CONNECT: "connect", CONNECT_SHAFTS: "connect_shafts",
+            SPLIT: "split",
             STUB: "stub", SPECIAL: "special", DROP: "drop",
+            MERGE: "merge", DELETE: "delete",
             TERRAIN: "terrain_covers", SHEETS: "shaft_sheets",
-            VALIDATE: "validate", QUANTITIES: "quantities", SETTINGS: "settings",
         }
         app.run(actions.get(button))
         vs.vsoSetEventResult(0)

@@ -50,9 +50,10 @@ def _edit(preferences, managed):
         if sewer_live.edit(managed[0][0], preferences):
             adapter.alert("Kanalobjekt und angeschlossene Darstellung wurden aktualisiert.")
         return
-    count = sewer_live.batch_edit(managed, preferences)
-    if count:
-        adapter.alert("%d Kanalstrecken gemeinsam aktualisiert." % count)
+    if sewer_live.edit_network_chain(
+            tuple(handle for handle, _data in managed), preferences):
+        adapter.alert(
+            "Kanalkette mit den ausgewählten Haltungen und Schächten wurde aktualisiert.")
 
 
 def _split(preferences, managed):
@@ -159,6 +160,70 @@ def _connect(preferences, managed):
                    "Danach weitere Schacht-, Knick- oder Endpunkte setzen. "
                    "Doppelklick beendet den neuen Kanalstrang."),
         undo_name="PD Kanalstrang an Haltung anschließen")
+
+
+def _connection_shaft_handles(managed, picker=None):
+    """Use up to two selected shafts, then acquire missing shafts graphically."""
+    picker = picker or adapter.pick_shaft
+    handles = []
+    for handle, data in managed:
+        if data.get("role") == "sewer_shaft" and handle not in handles:
+            handles.append(handle)
+    if len(handles) > 2:
+        raise core.SewerError(
+            "Zum Verbinden höchstens zwei Schächte markieren oder die Auswahl aufheben.")
+    prompts = (
+        "ERSTER SCHACHT: Ersten vorhandenen Kanalschacht anklicken. Esc: abbrechen.",
+        "ZWEITER SCHACHT: Zweiten vorhandenen Kanalschacht anklicken. Esc: abbrechen.")
+    while len(handles) < 2:
+        handle = picker(prompts[len(handles)])
+        if not handle:
+            return ()
+        if handle in handles:
+            raise core.SewerError("Bitte zwei unterschiedliche Schächte wählen.")
+        handles.append(handle)
+    return tuple(handles)
+
+
+def _connect_shafts(preferences, managed):
+    handles = _connection_shaft_handles(managed)
+    if not handles:
+        return
+    first = sewer_live.read_shaft(handles[0])
+    second = sewer_live.read_shaft(handles[1])
+    selected = sewer_ui.shaft_connection_dialog(first, second, preferences)
+    if selected is None:
+        return
+    dn_mm = selected["dn_mm"]
+    options = _drawing_defaults({
+        "kind": first["kind"],
+        "network_id": first["kind"],
+        "name": "",
+        "dn_mm": dn_mm,
+        "outside_diameter_mm": dn_mm,
+        "outside_diameter_explicit": False,
+        "material": selected["material"],
+        "shaft_diameter_m": preferences["shaft_diameter_m"],
+        "shaft_construction_material": preferences["shaft_construction_material"],
+        "shaft_wall_thickness_m": preferences["shaft_wall_thickness_m"],
+        "cover_diameter_m": preferences["shaft_cover_diameter_m"],
+        "cover_symbol": preferences["shaft_cover_symbol"],
+        "cover_placement": preferences["shaft_cover_placement"],
+        "cover_rotation_deg": preferences["shaft_cover_rotation_deg"],
+        "join_style": preferences["join_style"],
+        "fillet_radius_m": preferences["fillet_radius_m"],
+        "flow_arrow_scale": preferences["flow_arrow_scale"],
+        "label_layout": preferences["label_layout"],
+        "label_width_m": 0.0,
+        "draw_3d": selected["draw_3d"],
+        "graphics_mode": selected["graphics_mode"],
+        "color_override": None,
+    }, preferences)
+    sewer_live.connect_selected_shafts(
+        handles, options, preferences)
+    adapter.alert(
+        "Die Schächte %s und %s wurden mit einer Haltung DN %d verbunden." %
+        (first["name"], second["name"], dn_mm))
 
 
 def _selected_or_picked(managed, role):
@@ -319,8 +384,11 @@ def run(action=None):
             managed_role = managed[0][1].get("role") if len(managed) == 1 else None
             selected_shaft_count = sum(
                 1 for _handle, data in managed if data.get("role") == "sewer_shaft")
+            selected_pipe_count = sum(
+                1 for _handle, data in managed if data.get("role") == "sewer_pipe")
             action = sewer_ui.home_dialog(
-                len(sources), len(managed), managed_role, selected_shaft_count)
+                len(sources), len(managed), managed_role, selected_shaft_count,
+                selected_pipe_count)
         if action is None:
             return
         if action == "sources":
@@ -337,6 +405,8 @@ def run(action=None):
             _split(preferences, managed)
         elif action == "connect":
             _connect(preferences, managed)
+        elif action == "connect_shafts":
+            _connect_shafts(preferences, managed)
         elif action == "stub":
             _stub(preferences, managed)
         elif action == "special":
@@ -373,13 +443,23 @@ def run(action=None):
             from PD_KanalLeitungMengen import app as quantities_app
             quantities_app.run()
         elif action == "settings":
-            updated, recolor = sewer_ui.preferences_dialog(preferences)
+            updated, update_scope = sewer_ui.preferences_dialog(preferences)
             if updated is not None:
                 preferences = sewer_settings.save(updated)
                 sewer_live.ensure_classes(preferences)
-                count = sewer_live.apply_standard_colors(preferences) if recolor else 0
-                adapter.alert("Kanaleinstellungen gespeichert.%s" %
-                              (" %d bestehende Objekte aktualisiert." % count if recolor else ""))
+                count = (sewer_live.apply_preferences(
+                    preferences, managed, update_scope)
+                         if update_scope != "save" else 0)
+                scope_labels = {
+                    "selection": "in der Markierung",
+                    "systems": "in den angeschlossenen Kanalsystemen",
+                    "drawing": "in der gesamten Zeichnung",
+                }
+                adapter.alert(
+                    "Kanaleinstellungen gespeichert.%s" %
+                    ((" %d Kanalobjekt(e) %s aktualisiert. Sohlhöhen, Namen, DN und Material "
+                      "blieben erhalten." % (count, scope_labels[update_scope]))
+                     if update_scope != "save" else ""))
         elif action == "smart":
             if managed:
                 _edit(preferences, managed)

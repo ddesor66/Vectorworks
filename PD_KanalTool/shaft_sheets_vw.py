@@ -20,6 +20,9 @@ SHEET_PREFIX = "PD-Schachtblatt-"
 SHEET_CLASS = "PD-KAN-Schachtblatt"
 BLACK = (0, 0, 0)
 LIGHT_GRAY = (54000, 54000, 54000)
+LAYER_REPAGINATE = 156
+LAYER_SHEET_WIDTH = 165
+LAYER_SHEET_HEIGHT = 166
 
 
 def _safe_name(value, fallback="Schacht"):
@@ -375,20 +378,58 @@ def _render_page(shaft, connections, config, preferences, factor):
     _draw_footer(shaft, config, factor)
 
 
+def _set_sheet_page_size(layer, width, height, units_to_meters=None):
+    """Apply and verify one physical sheet page in Vectorworks 2026.
+
+    ``SetDrawingRect`` alone leaves the printer-page variables unchanged in
+    Vectorworks 2026 on Windows.  ``TBB_GetPageArea`` then reports the previous
+    page size and the transactional page creator deletes the preview again.
+    Selectors 165/166 are stored in current document units, while
+    ``TBB_GetPageArea`` reports inches.  Mixing these units left A4 in portrait
+    orientation.  Apply the physical sheet dimensions in document units and
+    verify the orientation after every native repagination.
+    """
+    width = float(width)
+    height = float(height)
+    factor = (adapter.units_to_meters() if units_to_meters is None else
+              float(units_to_meters))
+    if factor <= 0.0 or not math.isfinite(factor):
+        raise core.SewerError("Dokumenteinheiten für das Schachtblatt sind ungültig.")
+    width_units = width * 0.0254 / factor
+    height_units = height * 0.0254 / factor
+    vs.SetDrawingRect(width, height)
+    actual_width = actual_height = 0.0
+    # Width/height ordering differs in some localized 2026 builds.  The first
+    # assignment follows the documented/forum-confirmed selector order; the
+    # second is a safe native retry only when the host still reports portrait.
+    for sheet_width, sheet_height in (
+            (width_units, height_units), (height_units, width_units)):
+        vs.SetObjectVariableReal(layer, LAYER_SHEET_WIDTH, sheet_width)
+        vs.SetObjectVariableReal(layer, LAYER_SHEET_HEIGHT, sheet_height)
+        vs.SetObjectVariableBoolean(layer, LAYER_REPAGINATE, True)
+        actual = vs.TBB_GetPageArea(layer)
+        if not isinstance(actual, (tuple, list)) or len(actual) < 2:
+            raise core.SewerError("Schachtblatt-Seitengröße konnte nicht gelesen werden.")
+        actual_width, actual_height = float(actual[0]), float(actual[1])
+        if (abs(actual_width - width) <= 0.01 and
+                abs(actual_height - height) <= 0.01):
+            return actual_width, actual_height
+    raise core.SewerError(
+        "Vectorworks hat für das Schachtblatt %.4f × %.4f Zoll statt "
+        "DIN A4 quer (%.4f × %.4f Zoll) eingestellt." %
+        (actual_width, actual_height, width, height))
+
+
 def _create_sheet_layer(name, shaft, connections, config, preferences):
     layer = vs.CreateLayer(name, SHEET_LAYER_TYPE)
     if not layer:
         raise core.SewerError("Layoutebene für Schachtblatt konnte nicht angelegt werden.")
     try:
         vs.Layer(name)
-        vs.SetDrawingRect(*A4_LANDSCAPE_INCHES)
-        actual = vs.TBB_GetPageArea(layer)
-        if (not isinstance(actual, (tuple, list)) or len(actual) < 2 or
-                abs(float(actual[0]) - A4_LANDSCAPE_INCHES[0]) > 0.01 or
-                abs(float(actual[1]) - A4_LANDSCAPE_INCHES[1]) > 0.01):
-            raise core.SewerError(
-                "Vectorworks hat für das Schachtblatt nicht DIN A4 quer übernommen.")
-        _render_page(shaft, connections, config, preferences, adapter.units_to_meters())
+        factor = adapter.units_to_meters()
+        _set_sheet_page_size(layer, *A4_LANDSCAPE_INCHES,
+                             units_to_meters=factor)
+        _render_page(shaft, connections, config, preferences, factor)
         return layer
     except Exception:
         vs.DelObject(layer)

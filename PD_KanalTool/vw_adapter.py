@@ -321,12 +321,24 @@ def pick_connection_point(on_complete, help_text=None):
 
 
 def pick_object(predicate, help_text):
+    """Return the tracked handle, or ``None`` when Vectorworks cancels.
+
+    Vectorworks 2026 normally returns ``(handle, point)`` from TrackObject,
+    but the Windows Python binding returns ``None`` for some cancellation and
+    failed-hit paths.  Those paths are normal user input, not an exception.
+    """
     vs.SetTempToolHelpStr(str(help_text))
     try:
-        handle, _point_value = vs.TrackObject(predicate)
+        result = vs.TrackObject(predicate)
     finally:
         vs.SetTempToolHelpStr("")
-    return handle
+    if result is None:
+        return None
+    if isinstance(result, (tuple, list)):
+        return result[0] if result else None
+    # A few Vectorworks service-pack bindings have returned the handle alone.
+    # Supporting that shape costs nothing and keeps the adapter boundary safe.
+    return result
 
 
 def pick_pipe(help_text="Kanalhaltung grafisch anklicken. Esc: abbrechen."):

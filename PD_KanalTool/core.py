@@ -39,6 +39,17 @@ def shaft_construction_material_label(value):
     return "PP-Schacht" if shaft_construction_material(value) == "PP" else "Betonschacht"
 
 
+def shaft_construction_label(material, custom_label=None):
+    """Return the compact, user-visible construction label for plan text."""
+    default = "PP" if shaft_construction_material(material) == "PP" else "B"
+    text = str(custom_label or "").strip()
+    if not text:
+        return default
+    if len(text) > 64 or any(character in text for character in "\r\n\t"):
+        raise SewerError("Bauarttext muss aus höchstens 64 druckbaren Zeichen bestehen.")
+    return text
+
+
 def shaft_outer_diameter_m(shaft):
     """Return the physical outside diameter from clear inside dimensions."""
     if not isinstance(shaft, dict):
@@ -399,6 +410,48 @@ def build_network(paths, options, existing_shafts=(), next_numbers=None,
             "next_numbers": next_numbers}
 
 
+def pipe_between_shafts(first, second, options, existing_pipes=(), identity_factory=None):
+    """Build one downhill holding directly between two existing visible shafts."""
+    first = validate_shaft(first, allow_hidden=True)
+    second = validate_shaft(second, allow_hidden=True)
+    if not first["visible"] or not second["visible"]:
+        raise SewerError("Zum Verbinden müssen zwei sichtbare Schächte gewählt werden.")
+    if first["id"] == second["id"]:
+        raise SewerError("Zum Verbinden müssen zwei verschiedene Schächte gewählt werden.")
+    if first["kind"] != second["kind"]:
+        raise SewerError("Zwei Schächte unterschiedlicher Kanalart können nicht verbunden werden.")
+    if math.dist((first["x_m"], first["y_m"]), (second["x_m"], second["y_m"])) <= 1e-6:
+        raise SewerError("Die gewählten Schächte liegen am gleichen Punkt.")
+    selected_ids = {first["id"], second["id"]}
+    for value in existing_pipes:
+        pipe = validate_pipe(value)
+        if {pipe["start_id"], pipe["end_id"]} == selected_ids:
+            raise SewerError("Zwischen den gewählten Schächten besteht bereits eine Haltung.")
+
+    # Flow always runs from the higher invert to the lower one. Equal inverts
+    # use a stable name/identity order so repeated construction is deterministic.
+    if (second["ks_m"] > first["ks_m"] or
+            second["ks_m"] == first["ks_m"] and
+            (second["name"], second["id"]) < (first["name"], first["id"])):
+        first, second = second, first
+    values = dict(options or {})
+    values.update(
+        kind=first["kind"],
+        start_invert_m=first["ks_m"],
+        calculation_mode="end",
+        calculation_value=second["ks_m"],
+        reverse_flow=False,
+        shaft_mode="manual",
+        cover_height_m=max(first["kd_m"], second["kd_m"]),
+    )
+    built = build_network(
+        (((first["x_m"], first["y_m"]), (second["x_m"], second["y_m"])),),
+        values, (first, second), identity_factory=identity_factory)
+    if built["shafts"] or len(built["pipes"]) != 1:
+        raise SewerError("Die Haltung zwischen den Schächten konnte nicht eindeutig erzeugt werden.")
+    return built["pipes"][0]
+
+
 def validate_pipe(value):
     if not isinstance(value, dict) or value.get("schema") != SCHEMA:
         raise SewerError("Unbekannte Kanalrohrdaten.")
@@ -470,6 +523,33 @@ def validate_pipe(value):
     return result
 
 
+def pipe_flow_reversal_required(pipe, tolerance=1e-9):
+    """Return whether the physical endpoint elevations require reverse flow."""
+    if not isinstance(pipe, dict):
+        raise SewerError("Unbekannte Kanalrohrdaten.")
+    start = number(pipe.get("start_invert_m"), "Anfangssohle")
+    end = number(pipe.get("end_invert_m"), "Endsohle")
+    tolerance = abs(number(tolerance, "Fließrichtungstoleranz"))
+    return start + tolerance < end
+
+
+def orient_pipe_downhill(pipe):
+    """Validate a pipe and, if necessary, reverse it without moving endpoints.
+
+    The returned boolean tells callers whether ``start_id``/``end_id`` and
+    their associated invert elevations were exchanged.  This is deliberately
+    separate from validation so a UI can obtain the user's confirmation before
+    applying a direction change.
+    """
+    result = copy.deepcopy(pipe)
+    reversed_flow = pipe_flow_reversal_required(result)
+    if reversed_flow:
+        result["start_id"], result["end_id"] = result.get("end_id"), result.get("start_id")
+        result["start_invert_m"], result["end_invert_m"] = (
+            result.get("end_invert_m"), result.get("start_invert_m"))
+    return validate_pipe(result), reversed_flow
+
+
 def validate_shaft(value, allow_hidden=False):
     if not isinstance(value, dict) or value.get("schema") != SCHEMA:
         raise SewerError("Unbekannte Schachtdaten.")
@@ -499,6 +579,8 @@ def validate_shaft(value, allow_hidden=False):
         raise SewerError("Schachtdurchmesser darf nicht negativ sein.")
     result["construction_material"] = shaft_construction_material(
         result.get("construction_material", "PP"))
+    result["construction_label"] = shaft_construction_label(
+        result["construction_material"], result.get("construction_label"))
     default_wall = (DEFAULT_CONCRETE_WALL_THICKNESS_M
                     if result["construction_material"] == "concrete" else 0.0)
     result["wall_thickness_m"] = number(
@@ -688,7 +770,7 @@ def validate_network(pipes, shafts):
     return pipes, shafts
 
 
-def update_pipe(pipe, length_m, changes):
+def update_pipe(pipe, length_m, changes, allow_flow_reversal=False):
     result = validate_pipe(pipe)
     result.update({key: copy.deepcopy(value) for key, value in changes.items()
                    if key not in ("start_invert_m", "end_invert_m", "slope_percent")})
@@ -697,10 +779,22 @@ def update_pipe(pipe, length_m, changes):
     default_reference = result["end_invert_m"] if mode == "start" else result["start_invert_m"]
     start = number(changes.get("start_invert_m", default_reference),
                    "Endsohle" if mode == "start" else "Anfangssohle")
-    value = changes.get("calculation_value", result["end_invert_m"])
-    elevations, _ = elevation_series(((0.0, 0.0), (length, 0.0)), start, mode, value)
+    value = number(changes.get("calculation_value", result["end_invert_m"]),
+                   "Endsohle/Gefälle")
+    if allow_flow_reversal:
+        if mode == "slope":
+            elevations = (start, start - length * value / 100.0)
+        elif mode == "start":
+            elevations = (start + length * value / 100.0, start)
+        elif mode == "end":
+            elevations = (start, value)
+        else:
+            raise SewerError("Unbekannte Höhenberechnung.")
+    else:
+        elevations, _ = elevation_series(
+            ((0.0, 0.0), (length, 0.0)), start, mode, value)
     result.update(start_invert_m=elevations[0], end_invert_m=elevations[1], length_m=length)
-    return validate_pipe(result)
+    return result if allow_flow_reversal else validate_pipe(result)
 
 
 def reverse_pipe(pipe):
@@ -781,6 +875,20 @@ def format_number(value, decimals):
     return (("%%.%df" % int(decimals)) % number(value, "Zahl")).replace(".", ",")
 
 
+def readable_line_angle(dx, dy):
+    """Return a line-parallel text angle that never reads upside down."""
+    dx = number(dx, "Richtungsvektor X")
+    dy = number(dy, "Richtungsvektor Y")
+    if math.hypot(dx, dy) <= 1e-12:
+        raise SewerError("Die Leitung besitzt keine eindeutige Beschriftungsrichtung.")
+    angle = math.degrees(math.atan2(dy, dx))
+    if angle > 90.0:
+        angle -= 180.0
+    elif angle <= -90.0:
+        angle += 180.0
+    return angle
+
+
 def pipe_label(pipe, preferences):
     pipe = validate_pipe(pipe)
     slope = format_number(pipe["slope_percent"], preferences["slope_decimals"])
@@ -788,6 +896,15 @@ def pipe_label(pipe, preferences):
     first = "%s %% | %s m" % (slope, length)
     second = "DN %d %s" % (pipe["dn_mm"], pipe["material"])
     return first + ("\n" if pipe["label_layout"] == "two_line" else " | ") + second
+
+
+def connection_plan_name(role, tag, role_count):
+    """Readable plan name; number only when one role occurs more than once."""
+    if role not in ("in", "out"):
+        raise SewerError("Ungültige Anschlussart in der Schachtbeschriftung.")
+    label = "Zulauf" if role == "in" else "Ablauf"
+    prefix = str(tag or "").strip()
+    return "%s %s" % (prefix, label) if int(role_count) > 1 and prefix else label
 
 
 def shaft_label(shaft, endpoint_rows, preferences):
@@ -848,35 +965,36 @@ def shaft_label(shaft, endpoint_rows, preferences):
         values = incoming + [value for value in outgoing if value not in incoming]
         return "KS = %s m" % height(min(values) if values else shaft["ks_m"])
     depth = format_number(shaft["kd_m"] - shaft["ks_m"], preferences["length_decimals"])
-    lines = [shaft["name"]]
-    if shaft["note"]:
-        lines.extend(shaft["note"].splitlines())
+    lines = [shaft["name"], "Bauart: %s" % shaft["construction_label"]]
     if shaft["structure_type"] != "special":
         diameter = format_number(shaft["diameter_m"], preferences["length_decimals"])
-        lines.append("Bauart = %s" % shaft_construction_material_label(
-            shaft["construction_material"]))
-        if shaft["construction_material"] == "concrete":
-            wall = format_number(shaft["wall_thickness_m"], preferences["length_decimals"])
-            outside = format_number(shaft_outer_diameter_m(shaft), preferences["length_decimals"])
-            lines.append("Ø innen = %s m | Wand = %s m | Ø außen = %s m" %
-                         (diameter, wall, outside))
-        else:
-            lines.append("Ø = %s m" % diameter)
+        lines.append("D.= %s m" % diameter)
     lines.append("KD = %s m" % height(shaft["kd_m"]))
     if detailed:
-        for row in rows:
-            lines.append("%s %s | KS = %s m | DN %d %s | %s°" %
-                         (row["tag"], row["role_label"], height(row["height"]),
-                          row["dn_mm"], row["material"],
-                          format_number(row["bearing_deg"], 1)))
-    elif incoming and outgoing and (len(incoming) > 1 or len(outgoing) > 1 or incoming != outgoing):
-        lines.append("KS Zulauf = %s m" % " / ".join(height(value) for value in incoming))
-        lines.append("KS Ablauf = %s m" % " / ".join(height(value) for value in outgoing))
+        # Connection rows are useful only where the displayed elevations
+        # differ. Tags such as Z1/A1 are reserved for multiple connections of
+        # the same role; the pipe material does not belong in this plan label.
+        shown_heights = {
+            round(row["height"], preferences["height_decimals"]) for row in rows}
+        if len(shown_heights) > 1:
+            counts = {
+                role: sum(1 for row in rows if row["role"] == role)
+                for role in ("in", "out")}
+            for row in rows:
+                lines.append("%s | KS = %s m" %
+                             (connection_plan_name(
+                                 row["role"], row["tag"], counts[row["role"]]),
+                              height(row["height"])))
     else:
-        values = incoming + [value for value in outgoing if value not in incoming]
-        lines.append("KS = %s m" % height(min(values) if values else shaft["ks_m"]))
+        shown_heights = {
+            round(value, preferences["height_decimals"])
+            for value in incoming + outgoing}
+        if len(shown_heights) > 1:
+            if incoming:
+                lines.append("Zulauf | KS = %s m" %
+                             " / ".join(height(value) for value in incoming))
+            if outgoing:
+                lines.append("Ablauf | KS = %s m" %
+                             " / ".join(height(value) for value in outgoing))
     lines.append("Tiefe = %s m" % depth)
-    for drop in shaft.get("drops", ()):
-        lines.append("Absturz OK = %s m / UK = %s m" % (
-            height(drop["upper_invert_m"]), height(drop["lower_invert_m"])))
     return "\n".join(lines)

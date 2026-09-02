@@ -1,4 +1,4 @@
-# PD Kanaltool 1.0.22
+# PD Kanaltool 1.1.1
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und
@@ -18,9 +18,20 @@ greift nicht in das Datenmodell oder die Bedienoberfläche des Gefälletools ein
 - Die Erfassungsmaske ist in die nebeneinanderliegenden Bereiche `Rohr und
   Höhen`, `Schächte` und `Darstellung` gegliedert. Die wichtigsten
   Kanal-Unterbefehle stehen außerdem rechts in der Objekt-Info-Palette.
+- Das Aktionsmenü enthält nur eindeutige Erstellungs- und Globalbefehle. Nach
+  Auswahl einer Haltung oder eines Schachts stehen Bearbeiten, neuer Strang,
+  Schacht–Schacht-Verbindung, Schacht einsetzen, Stutzen, Sonderschacht,
+  Absturz, Haltungen vereinigen, DGM-Abgleich, Schachtblatt und Löschen direkt
+  rechts in der Objekt-Info-Palette. Wiederholte Dialoginitialisierungen fügen
+  keine doppelten Aktionspunkte mehr hinzu.
 - Eine Haltung wird mit beliebig vielen Punkten gezeichnet. Doppelklick oder
   Enter schließt sie ab zwei Punkten ab. Die Zurücktaste entfernt nur den
   zuletzt gesetzten Punkt; Esc verwirft den noch nicht übernommenen Lauf.
+- Ändert eine Schacht- oder Rohrsohle die Fließrichtung einer Haltung, nennt
+  das Tool vor der Übernahme jede betroffene Richtung. Erst nach einer
+  Ja-Bestätigung werden Anfang/Ende, Zu-/Ablauf, positives Gefälle,
+  Fließrichtungspfeil, Stationierung und abhängige Beschriftungen gemeinsam
+  neu aufgebaut; bei Nein bleibt der bisherige Stand unverändert.
 - Bodenabläufe und Hausanschlüsse werden immer am freien Ende begonnen. Der
   letzte Doppelklickpunkt muss auf der vorhandenen Hauptleitung liegen. Erst
   dort wird die Hauptleitung geteilt und der Stutzen angelegt.
@@ -43,6 +54,25 @@ Pfeil, der stets von der höheren zur niedrigeren Sohle zeigt. Rohrsohlen,
 Gefälle, DN, Material, Ausrundungsradius und ein- oder zweizeilige
 Beschriftungen bleiben über das Kanalobjekt editierbar. Die 3D-Rohrachse liegt
 einen halben DN über der Sohle.
+
+Die Voreinstellungen sind in die kompakten Register `Kataloge und Farben`,
+`Darstellung` sowie `Schächte und Schachtdeckel` gegliedert. Beim Speichern kann
+gezielt gewählt werden, ob die Vorgaben nur für neue Objekte, für die aktuelle
+Markierung, für die vollständigen verbundenen Kanalsysteme der Markierung oder
+für alle Kanalobjekte der Zeichnung gelten. Eine Bestandsaktualisierung erhält
+Sohlhöhen, Schachtnamen, DN, Material, Lage und individuelle Farben.
+
+Für den Schachtnamen sind eine eigene Schriftgröße und die Stile `Normal`,
+`Fett`, `Unterstrichen` und `Fett und unterstrichen` wählbar. Nur die erste
+Namenszeile erhält diese Typografie; die technischen Schachtdaten verwenden die
+allgemeine Beschriftungsgröße.
+
+Die kompakte Plan-Schachtbeschriftung zeigt keine Rohrmaterialkürzel. Zu- und
+Ablaufzeilen erscheinen nur, wenn sich die dargestellten Anschlusshöhen
+unterscheiden. Ein einzelner Anschluss heißt schlicht `Zulauf` bzw. `Ablauf`;
+erst mehrere Zuläufe oder Abläufe erhalten `Z1`, `Z2` bzw. `A1`, `A2`.
+Schachtblätter behalten ihre vollständigen Anschlussdaten einschließlich
+Material und eindeutiger Kennung.
 
 ## Stutzen und Anschlüsse
 
@@ -71,7 +101,9 @@ der Unterkante des Ablaufs und fällt gleichmäßig zur Hauptleitung.
 ## Schächte und Sonderbauwerke
 
 Runde Schächte besitzen Schachtdeckel, getrennte Zulauf-/Ablaufsohlen,
-Zusatztext, freie Namen und die bekannte 2D/3D-Darstellung. Ein Schacht kann
+freie Namen und die bekannte 2D/3D-Darstellung. Für die Bauart steht im
+Schachttext automatisch `B` für Beton oder `PP`; der Eintrag kann am Schacht
+durch einen freien Text ersetzt werden. Ein Schacht kann
 durch Anklicken einer darüberliegenden geschlossenen Polygon- oder
 Polylinienkontur in einen Sonderschacht umgewandelt werden. Anschlüsse enden
 dann an der tatsächlichen Kontur; in der Beschriftung entfällt der runde
@@ -89,8 +121,12 @@ Material, Zu-/Ablauf, Anschlusshöhe und Richtung werden unmittelbar aus den
 aktuellen Haltungsdaten abgeleitet. Auch zwei Anschlüsse mit gleicher Höhe
 bleiben getrennte Einträge. Bei unterschiedlichen Höhen stehen die
 Anschlusshöhen zusätzlich direkt an den jeweiligen Anschlussrichtungen. Das
-Schacht-Informationsfeld führt jeden Anschluss mit Kennung, Zu-/Ablauf, Höhe,
-DN, Material und Winkel einzeln auf.
+Schacht-Informationsfeld ist bewusst kompakt und führt ausschließlich
+Schachtname, Bauart, `D.=`, `KD`, jeden Zu- und Ablauf sowie die Tiefe. Die
+Anschlusszeilen enthalten Kennung, Zu-/Ablauf, Höhe und Material; der
+Rohrdurchmesser und der Richtungswinkel bleiben den Schachtblättern
+vorbehalten. Separate Anschlusshöhen am Schacht stehen leserichtig parallel
+zur jeweiligen Haltung.
 
 Bei runden Kanalschächten wird ausdrücklich zwischen `PP-Schacht` und
 `Betonschacht` gewählt. Der eingegebene Durchmesser ist der lichte
@@ -99,7 +135,9 @@ Innendurchmesser. Für Betonschächte gilt standardmäßig eine 15 cm starke,
 `Ø außen = Ø innen + 2 × Wandstärke` berechnet. Dieses Außenmaß steuert die
 2D-Außenkontur, den 3D-Schachtkörper, die Lage des Schachtdeckels, die
 Rohranschlusstrimmung und die Beschriftungsabstände. Innen-, Wand- und
-Außendurchmesser erscheinen außerdem im Schachttext und im Schachtblatt.
+Außendurchmesser bleiben als technische Berechnungswerte und für das
+Schachtblatt erhalten; im kompakten Schachttext steht nur `D.=` mit dem
+lichten Durchmesser.
 PP-Schächte behalten den eingegebenen Durchmesser ohne Betonwandzuschlag.
 Sonderschächte verwenden weiterhin ausschließlich ihre gezeichnete Kontur.
 
@@ -126,8 +164,16 @@ Schachtblatt-Datenbestand existiert nicht.
 ## Bearbeitung und Prüfung
 
 Ein Doppelklick auf Haltung, Schacht oder Beschriftung öffnet die
-zusammenhängende Kanalkette. Die aktuelle Tabellenzeile hebt das zugehörige
-Zeichnungsobjekt dynamisch hervor. Teilen, Vereinigen, Löschen, Verschieben,
+zusammenhängende Kanalkette. In der Tabelle können mit Strg-/Umschalt-Klick
+mehrere Haltungen ausgewählt und mit einem gemeinsamen Gefälle geändert
+werden; alle markierten Zeichnungsobjekte werden dynamisch hervorgehoben.
+Über den dauerhaft sichtbaren Startmenübefehl lassen sich zwei vorhandene
+Schächte direkt mit einer neuen Haltung verbinden. Bereits markierte Schächte
+werden übernommen; fehlende Schächte werden nacheinander grafisch gewählt.
+DN, Material, Ein-/Doppelliniengrafik und 3D-Erzeugung werden zuvor in einem
+kompakten Dialog gewählt; die Fließrichtung folgt automatisch der höheren zur
+tieferen Sohle. Teilen,
+Vereinigen, Löschen, Verschieben,
 Höhenfortschreibung und `Kanalnetz prüfen` arbeiten auf dem persistenten
 Netzgraphen. Änderungen werden vor dem Löschen von Ausgangsobjekten validiert
 und bleiben über Vectorworks `Rückgängig` wiederherstellbar.

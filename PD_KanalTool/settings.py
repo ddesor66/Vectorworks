@@ -32,6 +32,8 @@ DEFAULTS = {
     "shaft_cover_rotation_deg": 0.0,
     "cover_offset_m": 1.5,
     "point_size": 9.0,
+    "shaft_name_point_size": 10.0,
+    "shaft_name_text_style": "bold",
     "text_offset_mm": 3.0,
     "height_decimals": 2,
     "slope_decimals": 2,
@@ -125,6 +127,7 @@ def validate(value):
             ("flow_arrow_scale", "Fließrichtungspfeil-Skalierung", 0.1, 20.0),
             ("cover_offset_m", "Deckelabstand", 0.0, 100.0),
             ("point_size", "Schriftgröße", 1.0, 200.0),
+            ("shaft_name_point_size", "Schriftgröße des Schachtnamens", 1.0, 200.0),
             ("text_offset_mm", "Textabstand", 0.0, 100.0)):
         result[key] = core.number(result.get(key), label)
         if not low <= result[key] <= high:
@@ -134,6 +137,11 @@ def validate(value):
     if not 0.1 <= result["pipe_wall_thickness_mm"] <= 1000.0:
         raise core.SewerError("Die Standard-Rohrwandstärke muss zwischen 0,1 und 1000 mm liegen.")
     result["hollow_3d"] = bool(result.get("hollow_3d", True))
+    result["shaft_name_text_style"] = str(
+        result.get("shaft_name_text_style", "bold"))
+    if result["shaft_name_text_style"] not in (
+            "normal", "bold", "underline", "bold_underline"):
+        raise core.SewerError("Ungültiger Schriftstil des Schachtnamens.")
     result["shaft_construction_material"] = core.shaft_construction_material(
         result.get("shaft_construction_material", "concrete"))
     if result["shaft_construction_material"] == "PP" or result["shaft_diameter_m"] <= 0.0:

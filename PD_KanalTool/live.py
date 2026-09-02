@@ -361,6 +361,51 @@ def create(paths, options, preferences):
     return tuple(pipe_handles)
 
 
+def connect_selected_shafts(handles, options, preferences):
+    """Create one holding between exactly two existing visible shafts."""
+    values = tuple(handles)
+    if len(values) != 2:
+        raise core.SewerError("Zum Verbinden genau zwei vorhandene Schächte markieren.")
+    shaft_rows = []
+    for handle in values:
+        data = _live().data_of(handle)
+        if not is_sewer_data(data) or data.get("role") != "sewer_shaft":
+            raise core.SewerError("Zum Verbinden dürfen nur zwei Schächte markiert sein.")
+        shaft_rows.append((handle, read_shaft(handle, data)))
+    preferences = settings.validate(preferences)
+    ensure_classes(preferences)
+    pipe = core.pipe_between_shafts(
+        shaft_rows[0][1], shaft_rows[1][1], options,
+        (value for _handle, value in pipe_records()))
+    prospective_pipes = [value for _handle, value in pipe_records()] + [pipe]
+    prospective_shafts = [value for _handle, value in shaft_records()]
+    core.validate_network(prospective_pipes, prospective_shafts)
+    vs.NameUndoEvent("PD Zwei Schächte verbinden")
+    created = []
+    try:
+        pipe_handle = _new_object((0.0, 0.0), "sewer_pipe", pipe, preferences, created)
+        _associate_pipe(pipe_handle, pipe)
+        ensure_label(pipe_handle, _live().data_of(pipe_handle), created)
+        for created_handle in created:
+            vs.ResetObject(created_handle)
+        for shaft_handle, _shaft in shaft_rows:
+            vs.ResetObject(shaft_handle)
+            _reset_labels(_live().data_of(shaft_handle))
+        validate_document(preferences)
+    except Exception:
+        for created_handle in reversed(created):
+            if created_handle:
+                vs.DelObject(created_handle)
+        for shaft_handle, _shaft in shaft_rows:
+            vs.ResetObject(shaft_handle)
+            _reset_labels(_live().data_of(shaft_handle))
+        raise
+    vs.DSelectAll()
+    vs.SetSelect(pipe_handle)
+    vs.ReDrawAll()
+    return pipe_handle
+
+
 def _delete_with_labels(handle, data):
     for name in data.get("labels", ()):
         label = vs.GetObject(name)
@@ -1583,8 +1628,36 @@ def _downstream_height_changes(rows, root_id, delta_m, mode):
         value["start_invert_m"] += delta
         if mode == "shift":
             value["end_invert_m"] += delta
-        changed[pipe_handle] = core.validate_pipe(value)
+        # A slope adjustment can deliberately lift the downstream start above
+        # or below its former end.  Direction is confirmed and normalized by
+        # the caller before the transaction is committed.
+        changed[pipe_handle] = value
     return changed
+
+
+def _confirmed_pipe_directions(pipe_updates):
+    """Validate prospective pipes after one confirmation for all reversals."""
+    updates = dict(pipe_updates)
+    names = {shaft["id"]: (shaft.get("name") or shaft["id"])
+             for _handle, shaft in shaft_records()}
+    reversals = []
+    for handle, pipe in updates.items():
+        if core.pipe_flow_reversal_required(pipe):
+            start_name = names.get(pipe.get("start_id"), pipe.get("start_id", "?"))
+            end_name = names.get(pipe.get("end_id"), pipe.get("end_id", "?"))
+            reversals.append((handle, "%s → %s wird zu %s → %s" %
+                              (start_name, end_name, end_name, start_name)))
+    if reversals and not sewer_ui.confirm_flow_reversal(
+            tuple(description for _handle, description in reversals)):
+        return None
+    reversal_handles = {handle for handle, _description in reversals}
+    result = {}
+    for handle, pipe in updates.items():
+        if handle in reversal_handles:
+            result[handle], _reversed = core.orient_pipe_downhill(pipe)
+        else:
+            result[handle] = core.validate_pipe(pipe)
+    return result
 
 
 def _cover_direction(shaft):
@@ -1870,8 +1943,12 @@ def _create_text(text, angle, preferences, wrap_width=0.0):
 def _draw_connection_height_labels(shaft, preferences, factor):
     """Label every differing endpoint height directly at its pipe direction."""
     rows = shaft_connection_views(shaft)
-    if len({round(row["invert_m"], 9) for row in rows}) <= 1:
+    if len({round(row["invert_m"], preferences["height_decimals"])
+            for row in rows}) <= 1:
         return
+    counts = {
+        role: sum(1 for row in rows if row["role"] == role)
+        for role in ("in", "out")}
     base_radius_m = max(core.shaft_outer_diameter_m(shaft) * 0.5, 0.25)
     for index, row in enumerate(rows):
         ux, uy = row["direction"]
@@ -1879,8 +1956,11 @@ def _draw_connection_height_labels(shaft, preferences, factor):
         offset_m = base_radius_m + 0.16 + (index % 2) * 0.07
         x, y = ux * offset_m / factor, uy * offset_m / factor
         text = "%s KS %s m" % (
-            row["tag"], core.format_number(row["invert_m"], preferences["height_decimals"]))
-        text_handle = _create_text(text, 0.0, preferences)
+            core.connection_plan_name(
+                row["role"], row["tag"], counts[row["role"]]),
+            core.format_number(row["invert_m"], preferences["height_decimals"]))
+        angle = core.readable_line_angle(ux, uy)
+        text_handle = _create_text(text, angle, preferences)
         vs.HMove(text_handle, x, y)
 
 
@@ -1945,6 +2025,7 @@ def draw_label(handle, data):
     angle = 0.0
     wrap_width = 0.0
     shaft_label = False
+    shaft_name = ""
     if owner_data["role"] == "sewer_pipe":
         pipe = read_pipe(owner, owner_data)
         (_a, start), (_b, end) = _endpoints(pipe)
@@ -1959,11 +2040,21 @@ def draw_label(handle, data):
         shaft = read_shaft(owner, owner_data)
         rows = shaft_connection_views(shaft)
         text = core.shaft_label(shaft, rows, preferences)
+        shaft_name = shaft.get("name", "")
         anchor_m = shaft["x_m"], shaft["y_m"]
     if not text:
         return
     text_handle = _create_text(
         text, angle - float(vs.GetSymRot(handle) or 0.0), preferences, wrap_width)
+    if shaft_label and shaft_name and text.startswith(shaft_name):
+        # Vectorworks text styles are bit flags: bold=1, underline=4.
+        style = {"normal": 0, "bold": 1, "underline": 4,
+                 "bold_underline": 5}[
+                     preferences.get("shaft_name_text_style", "bold")]
+        vs.SetTextSize(text_handle, 0, len(shaft_name),
+                       preferences.get("shaft_name_point_size",
+                                       preferences["point_size"]))
+        vs.SetTextStyle(text_handle, 0, len(shaft_name), style)
     box = _bbox(vs.GetBBox(text_handle))
     scale = max(1.0, float(vs.GetLScale(vs.GetLayer(handle)) or 1.0))
     padding = 0.0008 * scale / factor
@@ -2017,7 +2108,21 @@ def _prepare_network_updates(pipe_updates, shaft_updates):
 
 
 def _commit_network_updates(pipe_updates, shaft_updates, preferences, undo_name):
-    requested_resets = tuple(dict.fromkeys(tuple(shaft_updates) + tuple(pipe_updates)))
+    requested_resets = list(dict.fromkeys(tuple(shaft_updates) + tuple(pipe_updates)))
+    # Direction changes alter inlet/outlet text and stub stationing at both
+    # endpoint structures even when the shaft's numeric payload stays equal.
+    for pipe_handle, updated in pipe_updates.items():
+        original_data = _live().data_of(pipe_handle) or {}
+        original = original_data.get("pipe") or {}
+        for identity in tuple(dict.fromkeys(
+                (original.get("start_id"), original.get("end_id"),
+                 updated.get("start_id"), updated.get("end_id")))):
+            if not identity:
+                continue
+            shaft_handle = _handle_by_id(core.SHAFT_PREFIX, identity)
+            if shaft_handle and shaft_handle not in requested_resets:
+                requested_resets.append(shaft_handle)
+    requested_resets = tuple(requested_resets)
     pipes, shafts = _prepare_network_updates(pipe_updates, shaft_updates)
     rows = tuple(dict.fromkeys(tuple(shafts) + tuple(pipes)))
     snapshots = {handle: copy.deepcopy(_live().data_of(handle)) for handle in rows}
@@ -2158,25 +2263,44 @@ def network_component(handle):
     return shaft_rows, pipe_rows
 
 
-def edit_network_chain(handle, preferences):
+def network_components(handles):
+    """Return the union of all connected components touched by ``handles``."""
+    shaft_rows = {}
+    pipe_rows = {}
+    for handle in handles:
+        component_shafts, component_pipes = network_component(handle)
+        for row_handle, value in component_shafts:
+            shaft_rows[value["id"]] = (row_handle, value)
+        for row_handle, value in component_pipes:
+            pipe_rows[value["id"]] = (row_handle, value)
+    if not shaft_rows and not pipe_rows:
+        raise core.SewerError("Kein Kanalnetz gewählt.")
+    return tuple(shaft_rows.values()), tuple(pipe_rows.values())
+
+
+def edit_network_chain(handles, preferences):
     """Edit several slopes and shaft elevations as one transactional change."""
-    shaft_rows, pipe_rows = network_component(handle)
+    targets = tuple(handles) if isinstance(handles, (tuple, list)) else (handles,)
+    shaft_rows, pipe_rows = network_components(targets)
     by_key = ({("shaft", value["id"]): row_handle for row_handle, value in shaft_rows} |
               {("pipe", value["id"]): row_handle for row_handle, value in pipe_rows})
 
-    def highlight(role, identity):
-        target = by_key.get((role, identity))
-        if target:
-            vs.DSelectAll()
-            vs.SetSelect(target)
-            vs.ReDrawAll()
+    def highlight(selections):
+        vs.DSelectAll()
+        for role, identity in selections:
+            target = by_key.get((role, identity))
+            if target:
+                vs.SetSelect(target)
+        vs.ReDrawAll()
     try:
         choice = sewer_ui.network_chain_dialog(
             tuple(value for _handle, value in shaft_rows),
             tuple(value for _handle, value in pipe_rows), highlight)
     finally:
         vs.DSelectAll()
-        vs.SetSelect(handle)
+        for target in targets:
+            if target:
+                vs.SetSelect(target)
         vs.ReDrawAll()
     if choice is None:
         return False
@@ -2222,11 +2346,18 @@ def edit(handle, preferences):
         values = sewer_ui.pipe_properties_dialog(preferences, initial)
         if values is None:
             return False
-        updated = core.update_pipe(original, original["length_m"], values)
+        # Preserve the physically entered endpoint elevations long enough to
+        # ask before an implied direction reversal.  Final validation happens
+        # in _confirmed_pipe_directions below.
+        updated = core.update_pipe(
+            original, original["length_m"], values, allow_flow_reversal=True)
         if values.get("reverse_flow"):
             updated["start_id"], updated["end_id"] = updated["end_id"], updated["start_id"]
             updated = core.validate_pipe(updated)
-        pipe_updates = {handle: updated}
+        pipe_updates = _confirmed_pipe_directions({handle: updated})
+        if pipe_updates is None:
+            return False
+        updated = pipe_updates[handle]
         delta = updated["end_invert_m"] - original["end_invert_m"]
         if (updated["end_id"] == original["end_id"] and abs(delta) > 1e-9):
             following = _downstream_pipes(updated["end_id"], (updated["id"],))
@@ -2236,6 +2367,10 @@ def edit(handle, preferences):
                     return False
                 pipe_updates.update(_downstream_height_changes(
                     following, updated["end_id"], delta, propagation))
+        if len(pipe_updates) > 1:
+            pipe_updates = _confirmed_pipe_directions(pipe_updates)
+            if pipe_updates is None:
+                return False
         _commit_network_updates(pipe_updates, {}, preferences, "PD Kanalstrecke bearbeiten")
         return True
     if data["role"] == "sewer_shaft":
@@ -2272,7 +2407,10 @@ def edit(handle, preferences):
                 changed["end_invert_m"] = choice["inlet_invert_m"]
             if pipe["start_id"] == original["id"]:
                 changed["start_invert_m"] = choice["outlet_invert_m"]
-            changed_pipes[pipe_handle] = core.validate_pipe(changed)
+            changed_pipes[pipe_handle] = changed
+        changed_pipes = _confirmed_pipe_directions(changed_pipes)
+        if changed_pipes is None:
+            return False
         _commit_network_updates(
             changed_pipes, {handle: updated}, preferences, "PD Kanalschacht bearbeiten")
         return True
@@ -2300,6 +2438,123 @@ def batch_edit(handles, preferences):
             vs.ResetObject(handle)
         raise
     return len(pipes)
+
+
+def _preference_targets(selected, scope):
+    """Resolve an explicit preference-update scope without changing data."""
+    scope = str(scope or "save")
+    if scope not in ("selection", "systems", "drawing"):
+        raise core.SewerError("Ungültiger Aktualisierungsumfang der Kanaleinstellungen.")
+    rows = tuple((handle, data) for handle, data in objects()
+                 if data.get("role") in ("sewer_pipe", "sewer_shaft"))
+    if scope == "drawing":
+        return rows
+    selected_handles = {handle for handle, _data in tuple(selected or ())}
+    chosen = tuple(row for row in rows if row[0] in selected_handles)
+    if not chosen:
+        raise core.SewerError(
+            "Für diese Aktualisierung zuerst mindestens eine Haltung oder einen Schacht markieren.")
+    if scope == "selection":
+        return chosen
+
+    # A system is a topologically connected component.  This remains correct
+    # when older files used only the channel kind (RW/SW/MW) as network_id.
+    node_ids = set()
+    for _handle, data in chosen:
+        if data["role"] == "sewer_shaft":
+            node_ids.add(data["shaft"]["id"])
+        else:
+            node_ids.update((data["pipe"]["start_id"], data["pipe"]["end_id"]))
+    changed = True
+    while changed:
+        changed = False
+        for _handle, data in rows:
+            if data["role"] != "sewer_pipe":
+                continue
+            pipe = data["pipe"]
+            if pipe["start_id"] in node_ids or pipe["end_id"] in node_ids:
+                before = len(node_ids)
+                node_ids.update((pipe["start_id"], pipe["end_id"]))
+                changed = changed or len(node_ids) != before
+    return tuple(
+        (handle, data) for handle, data in rows
+        if ((data["role"] == "sewer_pipe" and
+             data["pipe"]["start_id"] in node_ids and
+             data["pipe"]["end_id"] in node_ids) or
+            (data["role"] == "sewer_shaft" and data["shaft"]["id"] in node_ids)))
+
+
+def _data_with_preferences(data, preferences):
+    """Apply only global drawing standards; preserve engineering object data."""
+    updated = copy.deepcopy(data)
+    updated["preferences"] = copy.deepcopy(preferences)
+    if updated["role"] == "sewer_pipe":
+        pipe = copy.deepcopy(updated["pipe"])
+        pipe.update({
+            "fillet_radius_m": preferences["fillet_radius_m"],
+            "flow_arrow_scale": preferences["flow_arrow_scale"],
+            "graphics_mode": preferences["graphics_mode"],
+            "line_type": preferences["single_line_type"],
+            "axis_line_type": preferences["axis_line_type"],
+        })
+        updated["pipe"] = core.validate_pipe(pipe)
+    else:
+        shaft = copy.deepcopy(updated["shaft"])
+        if (shaft.get("visible", True) and
+                shaft.get("structure_type", "round") in ("round", "special") and
+                float(shaft.get("diameter_m", 0.0)) > 0.0):
+            shaft.update({
+                "construction_material": preferences["shaft_construction_material"],
+                "wall_thickness_m": preferences["shaft_wall_thickness_m"],
+                "cover_diameter_m": preferences["shaft_cover_diameter_m"],
+                "cover_symbol": preferences["shaft_cover_symbol"],
+                "cover_placement": preferences["shaft_cover_placement"],
+                "cover_rotation_deg": preferences["shaft_cover_rotation_deg"],
+            })
+        updated["shaft"] = core.validate_shaft(shaft, allow_hidden=True)
+    return updated
+
+
+def apply_preferences(preferences, selected=None, scope="drawing"):
+    """Transactionally redraw a selection, connected systems or the document."""
+    preferences = sewer_settings.validate(preferences)
+    targets = _preference_targets(selected, scope)
+    if not targets:
+        raise core.SewerError("Keine Kanalobjekte zum Aktualisieren gefunden.")
+    ensure_classes(preferences)
+    snapshots = {handle: copy.deepcopy(data) for handle, data in targets}
+    planned = {handle: _data_with_preferences(data, preferences)
+               for handle, data in targets}
+    affected_nodes = set()
+    for data in planned.values():
+        if data["role"] == "sewer_shaft":
+            affected_nodes.add(data["shaft"]["id"])
+        else:
+            affected_nodes.update((data["pipe"]["start_id"], data["pipe"]["end_id"]))
+    redraw = set(planned)
+    # Pipe trims and hidden junction fillets depend on their neighbouring
+    # object.  Redraw those dependants without applying their standards.
+    for handle, data in objects():
+        if data.get("role") == "sewer_pipe":
+            pipe = data["pipe"]
+            if pipe["start_id"] in affected_nodes or pipe["end_id"] in affected_nodes:
+                redraw.add(handle)
+        elif (data.get("role") == "sewer_shaft" and
+              data["shaft"]["id"] in affected_nodes):
+            redraw.add(handle)
+    vs.NameUndoEvent("PD Kanaleinstellungen anwenden")
+    try:
+        for handle, data in planned.items():
+            _live().write_data(handle, data)
+        for handle in redraw:
+            vs.ResetObject(handle)
+    except Exception:
+        for handle, data in snapshots.items():
+            _live().write_data(handle, data)
+            vs.ResetObject(handle)
+        raise
+    vs.ReDrawAll()
+    return len(planned)
 
 
 def apply_standard_colors(preferences):

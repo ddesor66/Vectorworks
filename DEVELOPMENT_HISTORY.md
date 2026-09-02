@@ -23,3 +23,54 @@ https://chatgpt.com/s/cx_6a9822b6179c819196e9e4560a52eb72
 Der Quellstand wurde aus dem Gesamtinstaller 1.30.22 rekonstruiert. Fruehere
 Zwischenstaende und die urspruenglichen Commits waren im Auslieferungspaket nicht
 enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.22.
+
+## Weiterentwicklung im Repository
+
+- Kanaltool 1.0.23: kompakte Schachtbeschriftung mit Schachtname, Bauart
+  (`B`, `PP` oder Freitext), `D.=`, `KD`, einzelnen Zu-/Abläufen und Tiefe.
+- Die Kanalkette besitzt eine echte Mehrfachauswahl für Haltungen; ein
+  gemeinsames Gefälle kann mit Strg-/Umschalt-Klick vorgemerkt werden.
+- Genau zwei markierte vorhandene Schächte können über einen eigenen kompakten
+  Dialog direkt mit einer neuen Haltung verbunden werden.
+- Regressionsprüfungen decken Schachttext, Fließrichtung, Doppelverbindungen,
+  Startmenü, Dialogaufbau und Mehrfachauswahl ab.
+- Kanaltool 1.0.24: Die grafische Objektwahl behandelt den von Vectorworks bei
+  einem abgebrochenen oder fehlgeschlagenen Treffer gelieferten `None`-Wert
+  sicher. Schachtblatt-Layoutebenen setzen zusätzlich die nativen Blatt- und
+  Druckseitenvariablen und werden erst nach bestätigter DIN-A4-Querformatgröße
+  freigegeben.
+- Kanaltool 1.0.25: Der Rohrdurchmesser entfällt in den Zu-/Ablaufzeilen der
+  kompakten Schachtbeschriftung. Separate Anschlusshöhen am Schacht werden
+  parallel zur zugehörigen Haltung und automatisch leserichtig ausgerichtet.
+  Der dauerhaft sichtbare Befehl zum nachträglichen Verbinden zweier Schächte
+  übernimmt vorhandene Markierungen und fragt fehlende Schächte grafisch ab.
+- Kanaltool 1.0.26: Die Voreinstellungen verwenden drei kompakte native
+  Register statt einer unbedienbar hohen Einspaltenmaske. Neue Vorgaben lassen
+  sich wahlweise nur speichern, auf die Markierung, auf deren topologisch
+  verbundene Kanalsysteme oder auf alle Kanalobjekte der Zeichnung anwenden;
+  technische Bestandsdaten bleiben erhalten. Der Schachtname besitzt eine
+  eigene Schriftgröße sowie Normal-, Fett- und Unterstreichungsstile.
+  Schachtblatt-Layoutebenen setzen DIN A4 quer nun mit den nativen
+  Blattvariablen in Dokumenteinheiten und prüfen die Orientierung vor der
+  Seitenerzeugung.
+- Kanaltool 1.0.27: In der kompakten Plan-Schachtbeschriftung entfallen
+  Rohrmaterialkürzel. Anschlusszeilen und die linienparallelen Höhenhinweise
+  erscheinen nur bei unterschiedlich dargestellten Anschlusshöhen. Einfache
+  Zu- und Abläufe bleiben unnummeriert; Z1/Z2 bzw. A1/A2 werden erst bei
+  mehreren Anschlüssen derselben Rolle verwendet. Die vollständigen
+  Anschlussdaten im Schachtblatt bleiben unverändert erhalten.
+- Kanaltool 1.0.28: Das Aktionsmenü ist auf sieben eindeutige Erstellungs- und
+  Globalbefehle reduziert und gegen mehrfach ausgelöste Dialoginitialisierung
+  abgesichert. Objektbezogene Aktionen stehen rechts in der Objekt-Info-Palette;
+  neu hinzugekommen sind Schacht–Schacht-Verbindung, Haltungen vereinigen und
+  ausgewählte Kanalobjekte löschen. Befehle für mehrere Objekte erhalten die
+  bestehende Mehrfachauswahl.
+- Kanaltool 1.0.29: Höhenänderungen in der Kanalkette und in der direkten
+  Schachtbearbeitung erkennen eine daraus entstehende Fließrichtungsumkehr vor
+  dem Schreiben. Eine Ja/Nein-Abfrage nennt die betroffenen Haltungen; nur bei
+  Bestätigung werden Endpunktzuordnung, positives Gefälle, Zu-/Ablauftexte,
+  Pfeile und abhängige Schachtobjekte transaktional neu aufgebaut.
+- Kanaltool 1.1.1: Der auf GitHub vorhandene Stand 1.1.0 mit realem
+  Rohraußendurchmesser, Rohrwandstärke, hohler 3D-Geometrie und erweiterten
+  Mengentabellen wurde konfliktfrei mit den Bedienungs-, Beschriftungs-,
+  Schachtblatt-, Ketten- und Fließrichtungsänderungen zusammengeführt.
