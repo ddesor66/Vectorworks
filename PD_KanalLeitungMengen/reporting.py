@@ -120,8 +120,10 @@ def xlsx_sheets(report):
         overview.append((row["utility_type"], row["dn_mm"], row["material"],
                          row["line_count"], row["length_2d_m"], row["length_3d_m"]))
 
-    canal_headers = ("ID", "Netz", "Art", "DN", "OD [mm]", "OD bestätigt", "Material",
-                     "Von", "Nach", "Sohle A [m]", "Sohle E [m]", "Tiefe A [m]",
+    canal_headers = ("ID", "Netz", "Art", "DN", "OD [mm]", "Wand [mm]", "3D hohl",
+                     "OD bestätigt", "Material", "Von", "Nach",
+                     "X A [m]", "Y A [m]", "X E [m]", "Y E [m]",
+                     "Sohle A [m]", "Sohle E [m]", "Achse A [m]", "Achse E [m]", "Gefälle [%]", "Tiefe A [m]",
                      "Tiefe E [m]", "Länge 2D [m]", "Länge 3D [m]",
                      "Grabenlänge netto [m]", "Schachtgruben-Abzug [m]",
                      "lichte Breite min [m]",
@@ -130,9 +132,13 @@ def xlsx_sheets(report):
     canal_rows = [_style_row(canal_headers, STYLE_HEADER)]
     for row in report["canals"]:
         canal_rows.append((row["id"], row["network_id"], row["kind"], row["dn_mm"],
-                           row["outside_diameter_mm"], "Ja" if row["outside_diameter_explicit"] else "NEIN",
+                           row["outside_diameter_mm"], row["wall_thickness_mm"],
+                           "Ja" if row["hollow_3d"] else "Nein",
+                           "Ja" if row["outside_diameter_explicit"] else "NEIN",
                            row["material"], row["start_name"], row["end_name"],
-                           row["start_invert_m"], row["end_invert_m"], row["start_depth_m"],
+                           row["start_x_m"], row["start_y_m"], row["end_x_m"], row["end_y_m"],
+                           row["start_invert_m"], row["end_invert_m"],
+                           row["start_axis_m"], row["end_axis_m"], row["slope_percent"], row["start_depth_m"],
                            row["end_depth_m"], row["length_2d_m"], row["length_3d_m"],
                            row["trench_length_m"], row["shaft_pit_overlap_length_m"],
                            row["minimum_clear_width_m"], row["maximum_clear_width_m"],
@@ -196,7 +202,7 @@ def xlsx_sheets(report):
 
     return [
         {"name": "00_Uebersicht", "rows": overview, "widths": (36, 22, 16, 18, 18, 16, 18, 13, 13, 13, 13, 13, 18, 18), "freeze_rows": 1},
-        {"name": "01_Kanalhaltungen", "rows": canal_rows, "widths": (38, 20, 12, 10, 12, 14, 16, 18, 18) + (16,) * 12, "freeze_rows": 1},
+        {"name": "01_Kanalhaltungen", "rows": canal_rows, "widths": (38, 20, 12, 10) + (14,) * 28, "freeze_rows": 1},
         {"name": "02_Schaechte", "rows": shaft_rows, "widths": (38, 18, 12, 18, 16) + (15,) * 15, "freeze_rows": 1},
         {"name": "03_Leitungen", "rows": utility_rows, "widths": (38, 38, 24, 24, 10, 12, 14, 18, 18, 18), "freeze_rows": 1},
         {"name": "04_Erdmassen", "rows": earth_rows, "widths": (38, 12, 10, 12, 16, 12) + (16,) * 9, "freeze_rows": 1},

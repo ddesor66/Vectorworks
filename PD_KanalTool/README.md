@@ -139,6 +139,11 @@ zurückgerollt.
 
 ## Laufende Kanal- und Leitungsmengen
 
+Die Haltungstabelle führt zusätzlich Start-/Endkoordinaten, Sohl- und Achshöhen,
+Gefälle, Außendurchmesser, Wandstärke und den 3D-Hohlrohrstatus. In der 2D-Grafik
+wird der reale Außendurchmesser verwendet; die 3D-Ausgabe kann als geschlossenes
+Hohlrohr mit sichtbarer Innenkontur erzeugt werden.
+
 `Massenermittlung, Erdmassen, Verbau und Excel` erzeugt das laufende
 Arbeitsblatt `PD Kanal- und Leitungsmengen`. Es wertet Kanal- und
 Versorgungsobjekte direkt aus und zählt keine Beschriftungen, Achsen oder

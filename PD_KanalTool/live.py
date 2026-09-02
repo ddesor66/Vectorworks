@@ -1309,8 +1309,52 @@ def _tube_faces(stations, segments=24):
     return tuple(faces)
 
 
+def _hollow_tube_faces(stations, wall, segments=24):
+    """Create a closed pipe wall with outside, inside and annular end faces."""
+    values = tuple((tuple(center), float(radius)) for center, radius in stations)
+    wall = float(wall)
+    if wall <= 0.0 or any(radius <= wall for _center, radius in values):
+        raise core.SewerError("Ungültige Wandstärke der 3D-Rohrgeometrie.")
+    first, second = values[0][0], values[-1][0]
+    vector = tuple(second[index] - first[index] for index in range(3))
+    length = math.sqrt(sum(component * component for component in vector))
+    if length <= 1e-9:
+        raise core.SewerError("Ungültige 3D-Rohrgeometrie.")
+    axis = tuple(component / length for component in vector)
+    reference = (0.0, 0.0, 1.0) if abs(axis[2]) < 0.9 else (0.0, 1.0, 0.0)
+    first_axis = (axis[1] * reference[2] - axis[2] * reference[1],
+                  axis[2] * reference[0] - axis[0] * reference[2],
+                  axis[0] * reference[1] - axis[1] * reference[0])
+    magnitude = math.sqrt(sum(component * component for component in first_axis))
+    first_axis = tuple(component / magnitude for component in first_axis)
+    second_axis = (axis[1] * first_axis[2] - axis[2] * first_axis[1],
+                   axis[2] * first_axis[0] - axis[0] * first_axis[2],
+                   axis[0] * first_axis[1] - axis[1] * first_axis[0])
+    outer = tuple(_ring(center, radius, first_axis, second_axis, segments)
+                  for center, radius in values)
+    inner = tuple(_ring(center, radius - wall, first_axis, second_axis, segments)
+                  for center, radius in values)
+    faces = []
+    for lower, upper in zip(outer, outer[1:]):
+        for index in range(segments):
+            following = (index + 1) % segments
+            faces.append((lower[index], lower[following], upper[following], upper[index]))
+    for lower, upper in zip(inner, inner[1:]):
+        for index in range(segments):
+            following = (index + 1) % segments
+            faces.append((lower[following], lower[index], upper[index], upper[following]))
+    for outer_ring, inner_ring, reverse in (
+            (outer[0], inner[0], True), (outer[-1], inner[-1], False)):
+        for index in range(segments):
+            following = (index + 1) % segments
+            face = (outer_ring[index], inner_ring[index],
+                    inner_ring[following], outer_ring[following])
+            faces.append(tuple(reversed(face)) if reverse else face)
+    return tuple(faces)
+
+
 def _draw_pipe_3d(first, second, radius, class_value, color,
-                  start_radius=None, end_radius=None):
+                  start_radius=None, end_radius=None, wall=None):
     start_radius = radius if start_radius is None else start_radius
     end_radius = radius if end_radius is None else end_radius
     vector = tuple(second[index] - first[index] for index in range(3))
@@ -1325,7 +1369,9 @@ def _draw_pipe_3d(first, second, radius, class_value, color,
     if abs(end_radius - radius) > 1e-9:
         stations.append((tuple(second[index] - axis[index] * transition for index in range(3)), radius))
     stations.append((second, end_radius))
-    return _mesh(_tube_faces(stations), class_value, color)
+    faces = (_hollow_tube_faces(stations, wall)
+             if wall is not None else _tube_faces(stations))
+    return _mesh(faces, class_value, color)
 
 
 def _layer_z_m(handle):
@@ -1346,7 +1392,7 @@ def draw_pipe(handle, data):
     first = (start["x_m"] / factor - origin[0], start["y_m"] / factor - origin[1])
     second = (end["x_m"] / factor - origin[0], end["y_m"] / factor - origin[1])
     color = color_for(data, preferences)
-    width = pipe["dn_mm"] / 1000.0 / factor
+    width = pipe["outside_diameter_mm"] / 1000.0 / factor
     ensure_pipe_classes(pipe, preferences, color)
     class_value = class_name(pipe, preferences)
     _set_graphics(handle, class_value, color,
@@ -1383,9 +1429,11 @@ def draw_pipe(handle, data):
                    (first_invert + axis_offset - layer_z) / factor)
         second3d = (plan_second[0], plan_second[1],
                     (second_invert + axis_offset - layer_z) / factor)
-        _draw_pipe_3d(first3d, second3d, pipe["dn_mm"] / 2000.0 / factor,
+        outer_radius = pipe["outside_diameter_mm"] / 2000.0 / factor
+        wall = pipe["wall_thickness_mm"] / 1000.0 / factor if pipe["hollow_3d"] else None
+        _draw_pipe_3d(first3d, second3d, outer_radius,
                       class_name(pipe, preferences, "_3D"), color,
-                      start_width * 0.5, end_width * 0.5)
+                      start_width * 0.5, end_width * 0.5, wall)
         vs.ResetOrientation3D()
     updated = dict(data, pipe=pipe)
     _live().write_data(handle, updated)

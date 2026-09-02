@@ -361,6 +361,9 @@ def build_network(paths, options, existing_shafts=(), next_numbers=None,
                 "outside_diameter_mm": outside_diameter_mm,
                 "outside_diameter_explicit": bool(
                     options.get("outside_diameter_explicit", "outside_diameter_mm" in options)),
+                "wall_thickness_mm": number(
+                    options.get("wall_thickness_mm", 10.0), "Rohrwandstärke"),
+                "hollow_3d": bool(options.get("hollow_3d", True)),
                 "material": material,
                 "start_invert_m": elevations[index],
                 "end_invert_m": elevations[index + 1],
@@ -416,6 +419,12 @@ def validate_pipe(value):
     if not 0.0 < result["outside_diameter_mm"] <= 20000.0:
         raise SewerError(
             "Der Rohraußendurchmesser muss größer als null und höchstens 20000 mm sein.")
+    result["wall_thickness_mm"] = number(
+        result.get("wall_thickness_mm", 10.0), "Rohrwandstärke")
+    if not 0.0 < result["wall_thickness_mm"] < result["outside_diameter_mm"] * 0.5:
+        raise SewerError(
+            "Die Rohrwandstärke muss größer als null und kleiner als der halbe Außendurchmesser sein.")
+    result["hollow_3d"] = bool(result.get("hollow_3d", True))
     result["material"] = _material(result.get("material"))
     for key, label in (("start_invert_m", "Anfangssohle"), ("end_invert_m", "Endsohle"),
                        ("length_m", "Länge")):
@@ -754,6 +763,8 @@ def merge_pipes(first_pipe, second_pipe, shared_shaft_id, identity_factory=None)
         raise SewerError("Die Rohre müssen in Fließrichtung an einem gemeinsamen Knoten anschließen.")
     for key, label in (("kind", "Kanalart"), ("dn_mm", "DN"),
                        ("material", "Material"), ("draw_3d", "3D-Darstellung"),
+                       ("wall_thickness_mm", "Rohrwandstärke"),
+                       ("hollow_3d", "hohle 3D-Darstellung"),
                        ("join_style", "Eckverbindung"),
                        ("fillet_radius_m", "Ausrundungsradius")):
         if upstream[key] != downstream[key]:

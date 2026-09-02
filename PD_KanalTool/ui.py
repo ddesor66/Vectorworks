@@ -354,7 +354,8 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
               (40, "Freie Bezeichnung:"),
               (61, "Darstellung der Haltung:"),
               (63, "Linienart Einliniengrafik:"),
-              (65, "Gestrichelte Achslinie:"))
+              (65, "Gestrichelte Achslinie:"),
+              (67, "Rohrwandstärke [mm]:"))
     for item, text in labels:
         vs.CreateStaticText(dialog, item, text, -1)
     for item, width in ((13, 18), (15, 18), (17, 22), (21, 38), (30, 40), (32, 22), (34, 22)):
@@ -363,6 +364,9 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
     vs.CreatePullDownMenu(dialog, 62, 48)
     vs.CreateLineStylePopup(dialog, 64)
     vs.CreateLineStylePopup(dialog, 66)
+    vs.CreateEditText(
+        dialog, 68,
+        str(current.get("wall_thickness_mm", preferences["pipe_wall_thickness_mm"])).replace(".", ","), 18)
     for item, value, width in (
             (19, current.get("start_invert_m", 100.0), 18),
             (23, current.get("calculation_value", current.get("end_invert_m", 1.5)), 18),
@@ -380,6 +384,7 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
                         current.get("dn_mm", preferences["default_dn_mm"]))).replace(".", ","), 18)
     vs.CreateCheckBox(dialog, 24, "Fließrichtung gegenüber der Punktfolge umkehren")
     vs.CreateCheckBox(dialog, 35, "Zusätzliche 3D-Rohre und 3D-Schächte erzeugen")
+    vs.CreateCheckBox(dialog, 69, "3D-Rohre mit sichtbarer Innenkontur (hohl) erzeugen")
     vs.CreateCheckBox(dialog, 36, "Individuelle Farbe für diese Strecke verwenden")
     vs.CreateColorPopup(dialog, 37, 22)
     vs.CreateStaticText(dialog, 38,
@@ -416,12 +421,15 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
     vs.SetRightItem(dialog, 63, 64, 8, 0)
     vs.SetBelowItem(dialog, 63, 65, 0, 7)
     vs.SetRightItem(dialog, 65, 66, 8, 0)
+    vs.SetBelowItem(dialog, 65, 67, 0, 7)
+    vs.SetRightItem(dialog, 67, 68, 8, 0)
+    vs.SetBelowItem(dialog, 67, 69, 0, 5)
     previous = None
     for label, field in ((31, 32), (42, 43), (46, 47), (33, 34), (44, 45)):
         if previous is not None:
             vs.SetBelowItem(dialog, previous, label, 0, 7)
         else:
-            vs.SetBelowItem(dialog, 65, label, 0, 7)
+            vs.SetBelowItem(dialog, 69, label, 0, 7)
         vs.SetRightItem(dialog, label, field, 8, 0)
         previous = label
     vs.SetBelowItem(dialog, previous, 35, 0, 5)
@@ -492,6 +500,7 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
                             preferences["shaft_construction_material"]))
             vs.SetBooleanItem(dialog, 24, bool(current.get("reverse_flow", False)))
             vs.SetBooleanItem(dialog, 35, bool(current.get("draw_3d", preferences["draw_3d"])))
+            vs.SetBooleanItem(dialog, 69, bool(current.get("hollow_3d", preferences["hollow_3d"])))
             override = current.get("color_override")
             vs.SetBooleanItem(dialog, 36, override is not None)
             color = override or preferences["colors"][kind_values[_choice(dialog, 13)]]
@@ -537,6 +546,8 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
                     dialog, 64, current.get("line_type", preferences["single_line_type"])),
                 "axis_line_type": _line_type_choice(
                     dialog, 66, current.get("axis_line_type", preferences["axis_line_type"])),
+                "wall_thickness_mm": _float(dialog, 68, "Rohrwandstärke"),
+                "hollow_3d": _selected(dialog, 69),
                 "draw_3d": _selected(dialog, 35), "color_override": override,
                 "name": str(vs.GetItemText(dialog, 41) or "").strip(),
             }

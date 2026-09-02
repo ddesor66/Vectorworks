@@ -2,6 +2,9 @@
 
 Quellstand der Vectorworks-2026-Plug-ins aus der Gesamtinstallation **1.30.22**.
 
+Der Branch `main` enthält darüber hinaus die weiterentwickelte Kanal- und
+Mengenausgabe 1.1.0. Die Änderungen sind in `ST_COMPARISON.md` dokumentiert.
+
 ## Herkunft und Integritaet
 
 Der Stand wurde ohne Ausfuehrung des Installers aus dessen eingebettetem ZIP-Payload extrahiert.

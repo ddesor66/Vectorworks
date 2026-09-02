@@ -45,6 +45,8 @@ DEFAULTS = {
     "flow_arrow_scale": 1.0,
     "shaft_mode": "all",
     "draw_3d": True,
+    "pipe_wall_thickness_mm": 10.0,
+    "hollow_3d": True,
     "stub_dn_mm": 150,
     "floor_drain_dn_mm": 150,
     "floor_drain_width_m": 0.30,
@@ -127,6 +129,11 @@ def validate(value):
         result[key] = core.number(result.get(key), label)
         if not low <= result[key] <= high:
             raise core.SewerError("%s liegt außerhalb des zulässigen Bereichs." % label)
+    result["pipe_wall_thickness_mm"] = core.number(
+        result.get("pipe_wall_thickness_mm", 10.0), "Standard-Rohrwandstärke")
+    if not 0.1 <= result["pipe_wall_thickness_mm"] <= 1000.0:
+        raise core.SewerError("Die Standard-Rohrwandstärke muss zwischen 0,1 und 1000 mm liegen.")
+    result["hollow_3d"] = bool(result.get("hollow_3d", True))
     result["shaft_construction_material"] = core.shaft_construction_material(
         result.get("shaft_construction_material", "concrete"))
     if result["shaft_construction_material"] == "PP" or result["shaft_diameter_m"] <= 0.0:
