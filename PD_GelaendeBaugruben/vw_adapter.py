@@ -42,8 +42,12 @@ OUTPUT_RECORD = "PD_GB_Ausgabe"
 OUTPUT_FIELD = "Daten"
 CLASS_SOURCE_POINT = "PD-GB-Quelldaten-Punkt"
 CLASS_SOURCE_LINE = "PD-GB-Quelldaten-Bruchkante"
+CLASS_CONTROL_TEXT = "PD-GB-Kontrolle-Text"
+CLASS_CONTROL_LINE = "PD-GB-Kontrolle-Linie"
 COLOR_SOURCE_POINT = (0, 50000, 0)
 COLOR_SOURCE_LINE = (0, 60000, 12000)
+COLOR_CONTROL_TEXT = (50000, 0, 50000)
+COLOR_CONTROL_LINE = (60000, 18000, 0)
 TEXT_NUMBER = re.compile(r"(?<![0-9.,])[-+]?\d+(?:[.,]\d+)?(?![0-9.,])")
 CLASS_PIT = "PD-GB-Baugrube"
 CLASS_SLOPE = "PD-GB-Boeschung"
@@ -325,13 +329,15 @@ def source_handle_types(handles):
     return tuple(result)
 
 
-def _with_source_type(elements, object_type):
+def _with_source_type(elements, object_type, source_handle=None):
     """Attach the originating native type, including recursively read members."""
     result = []
     for raw in tuple(elements or ()):
         element = dict(raw)
         element.setdefault("source_type", object_type)
         element.setdefault("source_type_name", object_type_name(object_type))
+        if source_handle:
+            element.setdefault("source_handle", source_handle)
         result.append(element)
     return tuple(result)
 
@@ -579,9 +585,9 @@ def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
     if object_type == TYPE_MESH:
         values = _mesh_source_elements(handle, factor)
         if values:
-            return _with_source_type(values, object_type)
+            return _with_source_type(values, object_type, handle)
         fallback = _source_element(handle, factor, chord_tolerance_m)
-        return _with_source_type((fallback,) if fallback else (), object_type)
+        return _with_source_type((fallback,) if fallback else (), object_type, handle)
     if object_type == TYPE_NURBS_CURVE:
         identifier = _identifier(handle)
         class_name, layer_name = _context(handle)
@@ -595,9 +601,9 @@ def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
             return _with_source_type(({
                 "id": identifier, "kind": "breakline", "points": points,
                 "class": class_name, "layer": layer_name,
-            },), object_type)
+            },), object_type, handle)
         fallback = _source_element(handle, factor, chord_tolerance_m)
-        return _with_source_type((fallback,) if fallback else (), object_type)
+        return _with_source_type((fallback,) if fallback else (), object_type, handle)
     if object_type == TYPE_GROUP:
         identity = _identifier(handle)
         if identity in ancestry:
@@ -609,7 +615,7 @@ def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
         if result:
             return tuple(result)
         fallback = _source_element(handle, factor, chord_tolerance_m)
-        return _with_source_type((fallback,) if fallback else (), object_type)
+        return _with_source_type((fallback,) if fallback else (), object_type, handle)
     # Symbol instances, solids, rectangles, ovals, dimensions and other
     # imported spatial types must contribute their actual polygon geometry,
     # not merely one generic centre point.
@@ -621,12 +627,13 @@ def _source_elements(handle, factor, chord_tolerance_m, ancestry=()):
     if object_type not in direct_types:
         converted = _converted_3d_elements(handle, factor)
         if converted:
-            return _with_source_type(converted, object_type)
+            return _with_source_type(converted, object_type, handle)
     element = _source_element(handle, factor, chord_tolerance_m)
     if element:
-        return _with_source_type((element,), object_type)
+        return _with_source_type((element,), object_type, handle)
     if object_type == TYPE_PARAMETRIC:
-        return _with_source_type(_converted_3d_elements(handle, factor), object_type)
+        return _with_source_type(
+            _converted_3d_elements(handle, factor), object_type, handle)
     return ()
 
 
@@ -679,6 +686,7 @@ def extract_sources(handles, chord_tolerance_m=core.DEFAULT_CHORD_TOLERANCE_M,
                 element = dict(raw)
                 element.setdefault("source_type", object_type)
                 element.setdefault("source_type_name", object_type_name(object_type))
+                element.setdefault("source_handle", handle)
                 result.append(element)
         else:
             object_type = int(vs.GetTypeN(handle) or 0)
@@ -755,6 +763,58 @@ def _read_record(handle, name, field):
     return value if isinstance(value, dict) else None
 
 
+def _create_control_copies(review, control_layer):
+    """Duplicate readable source texts and lines onto a visual QA layer."""
+    created = []
+    seen_sources = set()
+    counts = {"texts": 0, "lines": 0}
+    for element in review.get("usable", ()):
+        object_type = element.get("source_type")
+        if object_type not in (TYPE_TEXT, TYPE_LINE):
+            continue
+        source = element.get("source_handle")
+        if not source or source in seen_sources:
+            continue
+        seen_sources.add(source)
+        try:
+            # Keep the absolute 3D position when the source and control layers
+            # have different layer elevations.
+            duplicate = vs.CreateDuplicateObjN(source, control_layer, False)
+        except (AttributeError, TypeError):
+            try:
+                duplicate = vs.CreateDuplicateObject(source, control_layer)
+            except (AttributeError, TypeError):
+                duplicate = None
+        if not duplicate:
+            raise core.TerrainError(
+                "%s konnte nicht auf die Kontrollebene kopiert werden."
+                % object_type_name(object_type))
+        created.append(duplicate)
+        if int(vs.GetTypeN(duplicate) or 0) != object_type:
+            raise core.TerrainError(
+                "Die Kontrollkopie hat nicht mehr den ursprünglichen Objekttyp %s."
+                % object_type_name(object_type))
+        try:
+            duplicate_layer = vs.GetLayer(duplicate)
+        except (AttributeError, TypeError):
+            duplicate_layer = control_layer
+        if duplicate_layer and duplicate_layer != control_layer:
+            raise core.TerrainError(
+                "%s wurde nicht auf der Kontrollebene abgelegt."
+                % object_type_name(object_type))
+        if object_type == TYPE_TEXT:
+            counts["texts"] += 1
+            vs.SetClass(duplicate, CLASS_CONTROL_TEXT)
+            vs.SetPenFore(duplicate, COLOR_CONTROL_TEXT)
+            vs.SetFillFore(duplicate, COLOR_CONTROL_TEXT)
+        else:
+            counts["lines"] += 1
+            vs.SetClass(duplicate, CLASS_CONTROL_LINE)
+            vs.SetPenFore(duplicate, COLOR_CONTROL_LINE)
+            vs.SetLW(duplicate, 40)
+    return tuple(created), counts
+
+
 def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
     if review.get("blocking_count"):
         raise core.TerrainError("Die Quelldaten enthalten noch blockierende Konflikte.")
@@ -765,10 +825,14 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
     previous_layer = str(vs.GetLName(vs.ActLayer()) or "")
     previous_class = str(vs.ActiveClass() or "")
     layer = None
+    control_layer = None
     created = []
+    control_created = []
     completed = False
     _ensure_class(CLASS_SOURCE_POINT, (0, 45000, 0))
     _ensure_class(CLASS_SOURCE_LINE, (0, 25000, 50000))
+    _ensure_class(CLASS_CONTROL_TEXT, COLOR_CONTROL_TEXT)
+    _ensure_class(CLASS_CONTROL_LINE, COLOR_CONTROL_LINE)
     try:
         layer = vs.CreateLayer(target_name, 1)
         if not layer:
@@ -805,6 +869,14 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
                 vs.SetLW(handle, 40)
         if len(created) != review["usable_count"]:
             raise core.TerrainError("Nicht alle Quelldaten wurden erzeugt.")
+        control_name = _unique_name(target_name + "-Kontrolle")
+        control_layer = vs.CreateLayer(control_name, 1)
+        if not control_layer:
+            raise core.TerrainError("Die Kontrollebene konnte nicht angelegt werden.")
+        control_created, control_counts = _create_control_copies(review, control_layer)
+        # The native DGM command must receive only the normalized 3D sources.
+        # Return to that layer and keep visual text/line copies unselected.
+        vs.Layer(target_name)
         vs.DSelectAll()
         layer_value = _criterion_literal(target_name)
         layer_criterion = "(L='%s')" % layer_value
@@ -843,12 +915,21 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
         verification = {
             "points": actual_points, "lines": actual_lines,
             "selected": actual_selected, "selection_verified": selection_verified,
+            "control_layer": control_name,
+            "control_texts": control_counts["texts"],
+            "control_lines": control_counts["lines"],
+            "control_total": len(control_created),
         }
         vs.NameUndoEvent("PD Gelände-Quelldaten vorbereiten")
         vs.ReDrawAll()
         completed = True
         return target_name, tuple(created), verification
     except Exception:
+        for handle in control_created:
+            if handle:
+                vs.DelObject(handle)
+        if control_layer:
+            vs.DelObject(control_layer)
         for handle in created:
             if handle:
                 vs.DelObject(handle)

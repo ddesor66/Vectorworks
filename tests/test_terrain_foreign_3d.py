@@ -13,6 +13,11 @@ class FakeVS(types.ModuleType):
         self.layers = {}
         self.layer_objects = {}
         self.layer_order = []
+        self.duplicate_objects = []
+        self.classes = {}
+        self.pen_colors = {}
+        self.fill_colors = {}
+        self.line_weights = {}
 
     def GetTypeN(self, handle): return self.types[handle]
     def GetObjectUuid(self, handle): return handle
@@ -62,6 +67,26 @@ class FakeVS(types.ModuleType):
 
     def HDuplicate(self, handle, _dx, _dy):
         return getattr(self, "duplicates", {}).get(handle)
+
+    def CreateDuplicateObject(self, handle, container):
+        duplicate = handle + "-control"
+        self.types[duplicate] = self.types[handle]
+        self.layers[duplicate] = container
+        self.duplicate_objects.append((handle, container, None, duplicate))
+        return duplicate
+
+    def CreateDuplicateObjN(self, handle, container, maintain_relative_height):
+        duplicate = handle + "-control"
+        self.types[duplicate] = self.types[handle]
+        self.layers[duplicate] = container
+        self.duplicate_objects.append(
+            (handle, container, maintain_relative_height, duplicate))
+        return duplicate
+
+    def SetClass(self, handle, class_name): self.classes[handle] = class_name
+    def SetPenFore(self, handle, color): self.pen_colors[handle] = color
+    def SetFillFore(self, handle, color): self.fill_colors[handle] = color
+    def SetLW(self, handle, weight): self.line_weights[handle] = weight
 
     def ConvertTo3DPolys(self, handle):
         return getattr(self, "conversions", {}).get(handle)
@@ -256,6 +281,31 @@ class Foreign3DTests(unittest.TestCase):
         self.assertFalse(unsupported)
         self.assertEqual(("Text", "Linie"),
                          tuple(value["source_type_name"] for value in sources))
+        self.assertEqual(("text", "line"),
+                         tuple(value["source_handle"] for value in sources))
+
+    def test_visual_control_layer_copies_each_text_and_line_source_once(self):
+        fake = FakeVS()
+        fake.types.update(text=10, line=2, point=9)
+        adapter = load_adapter(fake)
+        review = {"usable": (
+            {"source_type": 10, "source_handle": "text"},
+            {"source_type": 10, "source_handle": "text"},
+            {"source_type": 2, "source_handle": "line"},
+            {"source_type": 9, "source_handle": "point"},
+        )}
+        created, counts = adapter._create_control_copies(review, "control-layer")
+        self.assertEqual(("text-control", "line-control"), created)
+        self.assertEqual({"texts": 1, "lines": 1}, counts)
+        self.assertEqual([
+            ("text", "control-layer", False, "text-control"),
+            ("line", "control-layer", False, "line-control"),
+        ], fake.duplicate_objects)
+        self.assertEqual(adapter.CLASS_CONTROL_TEXT, fake.classes["text-control"])
+        self.assertEqual(adapter.CLASS_CONTROL_LINE, fake.classes["line-control"])
+        self.assertEqual(adapter.COLOR_CONTROL_TEXT, fake.pen_colors["text-control"])
+        self.assertEqual(adapter.COLOR_CONTROL_LINE, fake.pen_colors["line-control"])
+        self.assertEqual(40, fake.line_weights["line-control"])
 
     def test_nurbs_keeps_individual_vertex_heights(self):
         fake = FakeVS()
@@ -295,6 +345,8 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual(["point", "point", "point"], [item["kind"] for item in elements])
         self.assertEqual(["Mesh", "Mesh", "Text"],
                          [item["source_type_name"] for item in elements])
+        self.assertEqual(["mesh", "mesh", "text"],
+                         [item["source_handle"] for item in elements])
 
     def test_symbol_is_expanded_to_complete_converted_3d_geometry(self):
         fake = FakeVS()
@@ -325,7 +377,8 @@ class ForeignGeometryRecoveryTests(unittest.TestCase):
     def test_retain_all_keeps_duplicate_and_conflicting_spatial_sources(self):
         from PD_GelaendeBaugruben import core
         elements = (
-            {"id": "first", "kind": "point", "points": ((1.0, 1.0, 2.0),)},
+            {"id": "first", "kind": "point", "points": ((1.0, 1.0, 2.0),),
+             "source_handle": "native-first"},
             {"id": "duplicate", "kind": "point", "points": ((1.0, 1.0, 2.0),)},
             {"id": "other-height", "kind": "point", "points": ((1.0, 1.0, 5.0),)},
         )
@@ -334,6 +387,7 @@ class ForeignGeometryRecoveryTests(unittest.TestCase):
         self.assertEqual(3, result["usable_count"])
         self.assertEqual(0, result["excluded_count"])
         self.assertEqual(1, result["problem_count"])
+        self.assertEqual("native-first", result["usable"][0]["source_handle"])
 
     def test_boundary_crossing_is_skipped_without_blocking_valid_sources(self):
         from PD_GelaendeBaugruben import core

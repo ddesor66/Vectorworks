@@ -113,6 +113,8 @@ def _preview_sources(options):
         "Tatsächlich auf der Zielebene gezählt: %d Punkte, %d Bruchkanten; "
         "%d Objekte markiert.\n"
         "Davon aus Texten umgesetzt: %d; aus Linien umgesetzt: %d.\n\n"
+        "Sichtbare 1:1-Kontrollkopien auf Ebene „%s“: %d Texte, %d Linien. "
+        "Diese Kontrollkopien sind nicht für den DGM-Befehl markiert.\n\n"
         "Nächster nativer Vectorworks-Schritt: Landschaft > Geländemodell > "
         "Geländemodell aus Ausgangsdaten. Dieser Befehl ist über die geprüfte Python-API "
         "nicht belastbar automatisierbar.\n\n"
@@ -120,7 +122,9 @@ def _preview_sources(options):
         "Höhenlinien-Äquidistanz: %.3f m\nHöheneinheit der Modulauswertung: Meter."
         % (len(created), layer_name, verification["points"], verification["lines"],
            verification["selected"], usable_type_counts.get("Text", 0),
-           usable_type_counts.get("Linie", 0), options["model_name"], model_class,
+           usable_type_counts.get("Linie", 0), verification["control_layer"],
+           verification["control_texts"], verification["control_lines"],
+           options["model_name"], model_class,
            options["contour_interval_m"]))
 
 

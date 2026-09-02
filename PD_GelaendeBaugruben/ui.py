@@ -113,7 +113,8 @@ def source_options(defaults=None):
         "geprüft. Ab 1.024 Objekten werden wegen der Vectorworks-Auswahlbegrenzung automatisch "
         "sämtliche Objekte über die direkte native Ebenenliste gelesen, damit auch Texte und Linien ohne Callback-Verlust ankommen. Die optionale Ebenenprüfung nimmt "
         "zusätzlich unmarkierte Objekte der aktiven Ebene auf. Ohne "
-        "aktivierte Begrenzungsoption schneidet keine geschlossene Fremdgeometrie Quelldaten ab.", 70)
+        "aktivierte Begrenzungsoption schneidet keine geschlossene Fremdgeometrie Quelldaten ab. "
+        "Zusätzlich wird eine unmarkierte Kontrollebene mit sichtbaren Kopien der erfassten Texte und Linien erzeugt.", 70)
     vs.SetFirstLayoutItem(dialog, 10)
     for label, field in zip(range(10, 19), range(20, 29)):
         vs.SetRightItem(dialog, label, field, 10, 0)
