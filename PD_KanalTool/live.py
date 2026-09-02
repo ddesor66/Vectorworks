@@ -145,7 +145,47 @@ def _endpoints(pipe):
     return (start, read_shaft(start)), (end, read_shaft(end))
 
 
-def read_pipe(handle, data=None):
+def _pipe_following_index():
+    """Index valid raw pipes once by their stored flow start."""
+    result = {}
+    for _handle, raw in objects("sewer_pipe"):
+        candidate = raw.get("pipe") if isinstance(raw, dict) else None
+        if not isinstance(candidate, dict):
+            continue
+        try:
+            candidate = core.validate_pipe(candidate)
+        except core.SewerError:
+            continue
+        result.setdefault(candidate["start_id"], []).append(candidate)
+    return result
+
+
+def _holding_name_live(pipe, following_index=None):
+    """Resolve a holding name without validating unrelated document objects."""
+    current = core.validate_pipe(pipe)
+    following_index = following_index if following_index is not None else _pipe_following_index()
+    current_id = current["end_id"]
+    visited = {current["id"]}
+    while current_id:
+        shaft_handle = _handle_by_id(core.SHAFT_PREFIX, current_id)
+        if not shaft_handle:
+            break
+        shaft = read_shaft(shaft_handle)
+        if (shaft.get("visible", True) and
+                shaft.get("structure_type") not in ("junction", "stub") and
+                shaft.get("name")):
+            return "H-" + shaft["name"]
+        following = [candidate for candidate in following_index.get(current_id, ())
+                     if candidate["id"] not in visited]
+        if len(following) != 1:
+            break
+        current = following[0]
+        visited.add(current["id"])
+        current_id = current["end_id"]
+    return current.get("name") or "H-" + str(current_id or current["end_id"])
+
+
+def read_pipe(handle, data=None, following_index=None):
     data = data or _live().data_of(handle)
     if not is_sewer_data(data) or data["role"] != "sewer_pipe":
         raise core.SewerError("Kanalstrecke konnte nicht gelesen werden.")
@@ -154,11 +194,14 @@ def read_pipe(handle, data=None):
         raise core.SewerError("Rohridentität wurde geändert oder kopiert.")
     (_start_handle, start), (_end_handle, end) = _endpoints(pipe)
     pipe["length_m"] = math.dist((start["x_m"], start["y_m"]), (end["x_m"], end["y_m"]))
+    pipe["name"] = _holding_name_live(pipe, following_index)
     return core.validate_pipe(pipe)
 
 
 def pipe_records():
-    return tuple((handle, read_pipe(handle, data)) for handle, data in objects("sewer_pipe"))
+    rows = tuple(objects("sewer_pipe"))
+    following_index = _pipe_following_index()
+    return tuple((handle, read_pipe(handle, data, following_index)) for handle, data in rows)
 
 
 def shaft_connection_views(shaft, clock_mode="plan_north", north_rotation_deg=0.0):
@@ -406,12 +449,29 @@ def connect_selected_shafts(handles, options, preferences):
     return pipe_handle
 
 
-def _delete_with_labels(handle, data):
-    for name in data.get("labels", ()):
+def _delete_with_labels(handle, data, verify=False):
+    """Delete a replaced owner without risking loss of the intact original.
+
+    The owner is deleted and verified before its dependent labels.  If
+    Vectorworks refuses the owner deletion, callers can safely discard their
+    newly created replacements while the complete old object stays visible.
+    """
+    owner_name = _name(handle)
+    label_names = tuple(str(name) for name in data.get("labels", ()))
+    vs.DelObject(handle)
+    if verify and owner_name and vs.GetObject(owner_name):
+        raise core.SewerError(
+            "Die ersetzte Kanalhaltung konnte nicht gelöscht werden: %s" % owner_name)
+    for name in label_names:
         label = vs.GetObject(name)
         if label:
             vs.DelObject(label)
-    vs.DelObject(handle)
+    if verify:
+        remaining = [name for name in label_names if vs.GetObject(name)]
+        if remaining:
+            raise core.SewerError(
+                "Die alte Kanalbeschriftung konnte nicht gelöscht werden: %s"
+                % ", ".join(remaining))
 
 
 def _associate_pipe(handle, pipe):
@@ -419,6 +479,110 @@ def _associate_pipe(handle, pipe):
         shaft_handle = _handle_by_id(core.SHAFT_PREFIX, identity)
         if not shaft_handle or not vs.AddAssociation(shaft_handle, 5, handle):
             raise core.SewerError("Rohr-Schacht-Verknüpfung konnte nicht gespeichert werden.")
+
+
+def _stub_reference_updates(original, first, second):
+    """Replace a split main-pipe id in every adjacent station reference."""
+    updates = {}
+    for shaft_handle, shaft in shaft_records():
+        references = []
+        if shaft.get("structure_type") == "stub" and shaft.get("stub"):
+            references.append("stub")
+        if shaft.get("connection_station"):
+            references.append("connection_station")
+        local_fields = [field for field in references
+                        if original["id"] in shaft[field].get("main_pipe_ids", ())]
+        axis_fields = [field for field in references
+                       if original["id"] in shaft[field].get(
+                           "station_pipe_ids", shaft[field].get("main_pipe_ids", ()))]
+        if not local_fields and not axis_fields:
+            continue
+        value = copy.deepcopy(shaft)
+        if local_fields:
+            if shaft["id"] == original["start_id"]:
+                replacement = first["id"]
+            elif shaft["id"] == original["end_id"]:
+                replacement = second["id"]
+            else:
+                raise core.SewerError(
+                    "Eine bestehende Anschlussreferenz liegt nicht am Ende der geteilten Haltung.")
+        for field in local_fields:
+            value[field]["main_pipe_ids"] = [
+                replacement if identity == original["id"] else identity
+                for identity in value[field]["main_pipe_ids"]]
+        for field in axis_fields:
+            station_ids = shaft[field].get(
+                "station_pipe_ids", shaft[field].get("main_pipe_ids", ()))
+            expanded = []
+            for identity in station_ids:
+                if identity == original["id"]:
+                    expanded.extend((first["id"], second["id"]))
+                else:
+                    expanded.append(identity)
+            value[field]["station_pipe_ids"] = expanded
+        updates[shaft_handle] = core.validate_shaft(value, allow_hidden=True)
+    return updates
+
+
+def _station_axis_link(axis_pipes, main_pipe_ids):
+    """Return current end references for one unbranched holding axis."""
+    axis_pipes = tuple(core.validate_pipe(pipe) for pipe in axis_pipes)
+    main_pipe_ids = tuple(str(identity) for identity in main_pipe_ids)
+    if len(main_pipe_ids) != 2 or any(
+            identity not in {pipe["id"] for pipe in axis_pipes}
+            for identity in main_pipe_ids):
+        raise core.SewerError(
+            "Die beiden Hauptarme der Anschlussstationierung fehlen in der Haltung.")
+    degree = {}
+    endpoint_rows = {}
+    for pipe in axis_pipes:
+        for identity, invert, role in (
+                (pipe["start_id"], pipe["start_invert_m"], "start"),
+                (pipe["end_id"], pipe["end_invert_m"], "end")):
+            degree[identity] = degree.get(identity, 0) + 1
+            endpoint_rows.setdefault(identity, []).append((invert, role))
+    endpoint_ids = sorted(identity for identity, count in degree.items() if count == 1)
+    if len(endpoint_ids) != 2:
+        raise core.SewerError(
+            "Die Endschächte der Haltung für die Anschlussstationierung sind nicht eindeutig.")
+
+    def endpoint(identity):
+        rows = endpoint_rows[identity]
+        if len(rows) != 1:
+            raise core.SewerError(
+                "Die Endhöhe der Haltung für die Anschlussstationierung ist nicht eindeutig.")
+        return identity, rows[0][0], rows[0][1]
+
+    first_end, second_end = (endpoint(identity) for identity in endpoint_ids)
+    if first_end[1] > second_end[1]:
+        start, end = first_end, second_end
+    elif second_end[1] > first_end[1]:
+        start, end = second_end, first_end
+    elif first_end[2] == "start" and second_end[2] == "end":
+        start, end = first_end, second_end
+    elif second_end[2] == "start" and first_end[2] == "end":
+        start, end = second_end, first_end
+    else:
+        start, end = first_end, second_end
+    return {
+        "main_start_id": start[0], "main_end_id": end[0],
+        "main_pipe_ids": list(main_pipe_ids),
+        "station_pipe_ids": [pipe["id"] for pipe in axis_pipes],
+    }
+
+
+def _new_connection_station(original, first, second):
+    """Link a new connection to the complete holding and both real ends."""
+    _current, pipe_map, component = _holding_component(original)
+    axis_pipes = [pipe_map[identity] for identity in component
+                  if identity != original["id"]] + [first, second]
+    return dict(
+        _station_axis_link(axis_pipes, (first["id"], second["id"])),
+        station_enabled=True,
+        station_m=None, station_zero_id="",
+        station_zero_name="", station_equal_inverts=False,
+        station_basis="",
+    )
 
 
 def split_selected(handle, point_m, preferences):
@@ -430,6 +594,7 @@ def split_selected(handle, point_m, preferences):
         (start["x_m"], start["y_m"]), (end["x_m"], end["y_m"]), point_m)
     shaft_id = str(uuid.uuid4())
     first, second = core.split_pipe(pipe, shaft_id, fraction)
+    stub_updates = _stub_reference_updates(pipe, first, second)
     ks_m = first["end_invert_m"]
     next_number = _next_numbers()[pipe["kind"]]
     shaft = core.validate_shaft({
@@ -448,10 +613,14 @@ def split_selected(handle, point_m, preferences):
     })
     prospective_pipes = [value for existing_handle, value in pipe_records()
                          if existing_handle != handle] + [first, second]
-    prospective_shafts = [value for _existing_handle, value in shaft_records()] + [shaft]
+    prospective_shafts = [stub_updates.get(existing_handle, value)
+                          for existing_handle, value in shaft_records()] + [shaft]
     core.validate_network(prospective_pipes, prospective_shafts)
     vs.NameUndoEvent("PD Kanalstrecke teilen")
     created = []
+    old_owner_name = _name(handle)
+    snapshots = {existing_handle: copy.deepcopy(_live().data_of(existing_handle))
+                 for existing_handle in stub_updates}
     try:
         shaft_handle = _new_object(xy, "sewer_shaft", shaft, preferences, created)
         pipe_handles = []
@@ -461,14 +630,31 @@ def split_selected(handle, point_m, preferences):
             _associate_pipe(new_handle, value)
         for owner in (shaft_handle,) + tuple(pipe_handles):
             ensure_label(owner, _live().data_of(owner), created)
+        for existing_handle, value in stub_updates.items():
+            _live().write_data(existing_handle, dict(
+                snapshots[existing_handle], shaft=value,
+                preferences=copy.deepcopy(preferences)))
         for created_handle in created:
             vs.ResetObject(created_handle)
+        for existing_handle in stub_updates:
+            vs.ResetObject(existing_handle)
+        # Delete only after every replacement is valid, but keep the deletion
+        # inside the guarded transaction.  The name lookup proves that the old
+        # parametric holding and its labels no longer overlap the replacements.
+        _delete_with_labels(handle, data, verify=True)
     except Exception:
-        for created_handle in reversed(created):
-            if created_handle:
-                vs.DelObject(created_handle)
+        # If only an old label resisted deletion, the old owner is already
+        # gone. Keep the complete replacement instead of losing both old and
+        # new geometry. All earlier failures leave the old owner intact and
+        # therefore roll the replacement back completely.
+        if not old_owner_name or vs.GetObject(old_owner_name):
+            for existing_handle, snapshot in snapshots.items():
+                _live().write_data(existing_handle, snapshot)
+                vs.ResetObject(existing_handle)
+            for created_handle in reversed(created):
+                if created_handle:
+                    vs.DelObject(created_handle)
         raise
-    _delete_with_labels(handle, data)
     vs.DSelectAll()
     for pipe_handle in pipe_handles:
         vs.SetSelect(pipe_handle)
@@ -488,6 +674,8 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
         raise core.SewerError("Die neue Leitung beginnt nicht am gewählten Anschlusspunkt.")
     shaft_id = str(uuid.uuid4())
     first, second = core.split_pipe(original, shaft_id, fraction)
+    stub_updates = _stub_reference_updates(original, first, second)
+    station_reference = _new_connection_station(original, first, second)
     main_connection_invert = first["end_invert_m"]
     alignment = str(options.get("connection_alignment", "invert"))
     connection_invert = core.connection_invert(
@@ -527,14 +715,14 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
         "stub": ({"alignment": alignment, "main_dn_mm": original["dn_mm"],
                   "branch_dn_mm": core._dn(options.get("dn_mm")),
                   "connection_invert_m": connection_invert,
-                  "station_enabled": bool(options.get("stub_stationing", True)),
-                  "main_start_id": original["start_id"],
-                  "main_end_id": original["end_id"],
-                  "main_pipe_ids": [first["id"], second["id"]],
-                  "station_m": None, "station_zero_id": "",
-                  "station_zero_name": "", "station_equal_inverts": False,
-                  "station_basis": ""}
+                  **dict(station_reference, station_enabled=bool(
+                      options.get("stub_stationing", True)))}
                  if options.get("as_stub") else None),
+        # A normal manhole/junction placed on an existing holding is also a
+        # holding connection. Its station therefore remains available even
+        # though it is not represented by the specialised stub structure.
+        "connection_station": (None if options.get("as_stub") else
+                               copy.deepcopy(station_reference)),
         "visible": True, "color_override": copy.deepcopy(options.get("color_override")),
     })
     existing_shafts = tuple(value for _existing_handle, value in shaft_records()) + (shaft,)
@@ -571,12 +759,16 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
     new_pipes = (first, second) + tuple(built["pipes"])
     prospective_pipes = [value for existing_handle, value in pipe_records()
                          if existing_handle != handle] + list(new_pipes)
-    prospective_shafts = [value for _existing_handle, value in shaft_records()] + list(new_shafts)
+    prospective_shafts = [stub_updates.get(existing_handle, value)
+                          for existing_handle, value in shaft_records()] + list(new_shafts)
     core.validate_network(prospective_pipes, prospective_shafts)
     preferences = sewer_settings.validate(preferences)
     ensure_classes(preferences)
     vs.NameUndoEvent("PD Leitung an Kanalstrecke anschließen")
     created = []
+    old_owner_name = _name(handle)
+    snapshots = {existing_handle: copy.deepcopy(_live().data_of(existing_handle))
+                 for existing_handle in stub_updates}
     try:
         shaft_handles = {value["id"]: existing_handle
                          for existing_handle, value in shaft_records()}
@@ -591,17 +783,34 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
             for identity in (value["start_id"], value["end_id"]):
                 if not vs.AddAssociation(shaft_handles[identity], 5, new_handle):
                     raise core.SewerError("Rohr-Schacht-Verknüpfung konnte nicht gespeichert werden.")
-        owners = [shaft_handles[value["id"]] for value in new_shafts if value["visible"]] + pipe_handles
+        owners = [shaft_handles[value["id"]] for value in new_shafts if value["visible"]]
+        # Every segment owns a label PIO. The label itself decides dynamically
+        # whether this segment is the one representative of its complete
+        # holding between real shafts. This remains correct after later splits.
+        owners += pipe_handles
         for owner in owners:
             ensure_label(owner, _live().data_of(owner), created)
+        for existing_handle, value in stub_updates.items():
+            _live().write_data(existing_handle, dict(
+                snapshots[existing_handle], shaft=value,
+                preferences=copy.deepcopy(preferences)))
         for created_handle in created:
             vs.ResetObject(created_handle)
+        for existing_handle in stub_updates:
+            vs.ResetObject(existing_handle)
+        # The original must disappear before the transaction is accepted.
+        # This prevents the duplicated main holding reported for branch and
+        # stub connections.
+        _delete_with_labels(handle, data, verify=True)
     except Exception:
-        for created_handle in reversed(created):
-            if created_handle:
-                vs.DelObject(created_handle)
+        if not old_owner_name or vs.GetObject(old_owner_name):
+            for existing_handle, snapshot in snapshots.items():
+                _live().write_data(existing_handle, snapshot)
+                vs.ResetObject(existing_handle)
+            for created_handle in reversed(created):
+                if created_handle:
+                    vs.DelObject(created_handle)
         raise
-    _delete_with_labels(handle, data)
     for identity in (original["start_id"], original["end_id"]):
         existing_handle = _handle_by_id(core.SHAFT_PREFIX, identity)
         if existing_handle:
@@ -691,6 +900,7 @@ def connect_terminal(points, terminal, preferences):
         "fillet_radius_m": preferences["fillet_radius_m"],
         "flow_arrow_scale": preferences["flow_arrow_scale"],
         "label_layout": preferences["label_layout"], "label_width_m": 0.0,
+        "label_rotation_deg": preferences["label_rotation_deg"],
         "draw_3d": preferences["draw_3d"],
         "graphics_mode": preferences["graphics_mode"],
         "line_type": preferences["single_line_type"],
@@ -735,13 +945,32 @@ def replace_with_special(handle, source_polygon, preferences):
 def set_drop(handle, value, preferences):
     data = _live().data_of(handle)
     shaft = read_shaft(handle, data)
-    connected = {pipe["id"] for _pipe_handle, pipe in _connected_pipes(shaft["id"])}
-    if value["pipe_id"] not in connected:
+    connected = {pipe["id"]: (pipe_handle, pipe)
+                 for pipe_handle, pipe in _connected_pipes(shaft["id"])}
+    selected = connected.get(value["pipe_id"])
+    if selected is None:
         raise core.SewerError("Die gewählte Absturzhaltung ist nicht mehr mit dem Schacht verbunden.")
+    pipe_handle, pipe = selected
+    if pipe["end_id"] != shaft["id"]:
+        raise core.SewerError("Ein Absturz kann nur an einer ankommenden Haltung angelegt werden.")
+    upper = core.number(value.get("upper_invert_m"), "Obere Absturzhöhe")
+    lower = core.number(value.get("lower_invert_m"), "Untere Absturzhöhe")
+    if upper <= lower + 1e-6:
+        raise core.SewerError(
+            "Die obere Absturzhöhe muss eindeutig über der unteren Absturzhöhe liegen.")
+    changed_pipe = dict(pipe, end_invert_m=upper)
+    if core.pipe_flow_reversal_required(changed_pipe):
+        raise core.SewerError(
+            "Die obere Absturzhöhe liegt über der Sohle am vorherigen Schacht. "
+            "Damit wäre die gewählte Haltung keine ankommende Leitung mehr.")
+    changed_pipe = core.validate_pipe(changed_pipe)
     drops = [row for row in shaft.get("drops", ()) if row["pipe_id"] != value["pipe_id"]]
-    drops.append(dict(value))
+    drops.append({"pipe_id": value["pipe_id"], "upper_invert_m": upper,
+                  "lower_invert_m": lower})
     updated = core.validate_shaft(dict(shaft, drops=drops), allow_hidden=True)
-    _commit_network_updates({}, {handle: updated}, preferences, "PD Absturz vor Schacht")
+    _commit_network_updates(
+        {pipe_handle: changed_pipe}, {handle: updated}, preferences,
+        "PD Absturz vor Schacht")
     return updated
 
 
@@ -1483,13 +1712,6 @@ def draw_pipe(handle, data):
     updated = dict(data, pipe=pipe)
     _live().write_data(handle, updated)
     _reset_labels(updated)
-    for identity in (pipe["start_id"], pipe["end_id"]):
-        shaft_handle = _handle_by_id(core.SHAFT_PREFIX, identity)
-        shaft_data = _live().data_of(shaft_handle) if shaft_handle else None
-        if (is_sewer_data(shaft_data) and shaft_data.get("role") == "sewer_shaft" and
-                shaft_data.get("shaft", {}).get("structure_type") == "stub" and
-                pipe["id"] in shaft_data["shaft"].get("stub", {}).get("main_pipe_ids", ())):
-            vs.ResetObject(shaft_handle)
 
 
 def _frustum_faces(bottom_center, bottom_radius, top_center, top_radius, segments=24):
@@ -1542,23 +1764,44 @@ def _connected_pipes(identity):
 
 
 def _refresh_stub_stationing(shaft):
-    """Derive a fitting station from current main geometry and inverts."""
-    if shaft.get("structure_type") != "stub" or not shaft.get("stub", {}).get(
-            "station_enabled", False):
+    """Derive a station for every connection inserted into a main holding."""
+    if (shaft.get("structure_type") == "stub" and
+            shaft.get("stub", {}).get("station_enabled", False)):
+        field = "stub"
+    elif (shaft.get("connection_station") or {}).get("station_enabled", False):
+        field = "connection_station"
+    else:
         return shaft
     result = copy.deepcopy(shaft)
-    stub = result["stub"]
-    start_handle = _handle_by_id(core.SHAFT_PREFIX, stub["main_start_id"])
-    end_handle = _handle_by_id(core.SHAFT_PREFIX, stub["main_end_id"])
+    reference = result[field]
+    # Rebuild the axis from the two local main arms on every reset. Seeding
+    # both arms deliberately crosses only this connection; _holding_component
+    # then follows invisible bends and main arms at other fittings, while any
+    # currently visible shaft forms a new station boundary. Besides keeping
+    # moved geometry current, this upgrades legacy fitting data whose cached
+    # station_pipe_ids contained only the two local arms.
+    axis_map = {}
+    for pipe_id in reference["main_pipe_ids"]:
+        pipe_handle = _handle_by_id(core.PIPE_PREFIX, pipe_id)
+        if not pipe_handle:
+            raise core.SewerError("Hauptarm der Anschlussstationierung fehlt.")
+        local_pipe = read_pipe(pipe_handle)
+        _current, component_map, component = _holding_component(local_pipe)
+        for identity in component:
+            axis_map[identity] = component_map[identity]
+    reference.update(_station_axis_link(
+        tuple(axis_map.values()), reference["main_pipe_ids"]))
+    start_handle = _handle_by_id(core.SHAFT_PREFIX, reference["main_start_id"])
+    end_handle = _handle_by_id(core.SHAFT_PREFIX, reference["main_end_id"])
     if not start_handle or not end_handle:
-        raise core.SewerError("Stationierungsnullpunkt des Kanalstutzens fehlt.")
+        raise core.SewerError("Stationierungsnullpunkt des Haltungsanschlusses fehlt.")
     start = read_shaft(start_handle)
     end = read_shaft(end_handle)
     main_pipes = {}
-    for pipe_id in stub["main_pipe_ids"]:
+    for pipe_id in reference.get("station_pipe_ids", reference["main_pipe_ids"]):
         pipe_handle = _handle_by_id(core.PIPE_PREFIX, pipe_id)
         if not pipe_handle:
-            raise core.SewerError("Hauptleitung der Stutzenstationierung fehlt.")
+            raise core.SewerError("Hauptleitung der Anschlussstationierung fehlt.")
         main_pipes[pipe_id] = read_pipe(pipe_handle)
 
     def invert_at(identity):
@@ -1569,8 +1812,35 @@ def _refresh_stub_stationing(shaft):
             if pipe["end_id"] == identity:
                 values.append(pipe["end_invert_m"])
         if len(values) != 1:
-            raise core.SewerError("Hauptleitungssohle der Stutzenstationierung ist nicht eindeutig.")
+            raise core.SewerError("Hauptleitungssohle der Anschlussstationierung ist nicht eindeutig.")
         return values[0]
+
+    def axis_from(identity):
+        points = []
+        current = identity
+        visited = set()
+        while True:
+            if current == result["id"]:
+                node = result
+            else:
+                node_handle = _handle_by_id(core.SHAFT_PREFIX, current)
+                if not node_handle:
+                    raise core.SewerError(
+                        "Ein Achsenknoten der Anschlussstationierung fehlt.")
+                node = read_shaft(node_handle)
+            points.append((node["x_m"], node["y_m"]))
+            if current == result["id"]:
+                return tuple(points)
+            candidates = [pipe for pipe in main_pipes.values()
+                          if pipe["id"] not in visited and current in (
+                              pipe["start_id"], pipe["end_id"])]
+            if len(candidates) != 1:
+                raise core.SewerError(
+                    "Die Achse der Anschlussstationierung ist nicht durchgängig eindeutig.")
+            pipe = candidates[0]
+            visited.add(pipe["id"])
+            current = (pipe["end_id"] if pipe["start_id"] == current
+                       else pipe["start_id"])
 
     try:
         station = stub_stationing.calculate(
@@ -1579,15 +1849,13 @@ def _refresh_stub_stationing(shaft):
             {"id": end["id"], "x_m": end["x_m"], "y_m": end["y_m"],
              "invert_m": invert_at(end["id"])},
             (result["x_m"], result["y_m"]),
-            start_axis=((start["x_m"], start["y_m"]),
-                        (result["x_m"], result["y_m"])),
-            end_axis=((end["x_m"], end["y_m"]),
-                      (result["x_m"], result["y_m"])))
+            start_axis=axis_from(start["id"]),
+            end_axis=axis_from(end["id"]))
     except stub_stationing.StubStationingError as error:
         raise core.SewerError(str(error)) from error
     zero = start if station["station_zero_id"] == start["id"] else end
-    stub.update(station, station_zero_name=zero.get("name", ""))
-    result["stub"] = stub
+    reference.update(station, station_zero_name=zero.get("name", ""))
+    result[field] = reference
     return core.validate_shaft(result, allow_hidden=True)
 
 
@@ -1789,7 +2057,8 @@ def _draw_stub_symbol(shaft, data, class_value, color, factor):
     """Plan marker for a circular branch fitting at the main holding."""
     rows = _junction_rows(shaft)
     branch_dn = shaft["stub"]["branch_dn_mm"]
-    branch = next((row for row in rows if row["pipe"]["dn_mm"] == branch_dn), None)
+    main_ids = set(shaft["stub"].get("main_pipe_ids", ()))
+    branch = next((row for row in rows if row["pipe"]["id"] not in main_ids), None)
     direction = branch["direction"] if branch else (1.0, 0.0)
     radius = max(0.08, branch_dn / 2000.0) / factor
     vs.Oval((-radius, radius), (radius, -radius))
@@ -1804,6 +2073,57 @@ def _draw_stub_symbol(shaft, data, class_value, color, factor):
         (start[0] + nx * radius * 0.65, start[1] + ny * radius * 0.65), tip,
         (start[0] - nx * radius * 0.65, start[1] - ny * radius * 0.65)),
         class_value, color)
+
+
+def _draw_stub_3d(handle, shaft, data, factor):
+    """Draw one continuous tee/wye fitting between all three pipe bodies.
+
+    The pipe PIOs terminate at the fitting profile.  These overlapping arms
+    bridge the two main segments and the branch in both plan and elevation,
+    so no open pipe ends or detached short pieces remain in a 3D view.
+    """
+    rows = _junction_rows(shaft)
+    main_ids = set(shaft.get("stub", {}).get("main_pipe_ids", ()))
+    main_rows = [row for row in rows if row["pipe"]["id"] in main_ids]
+    branch_rows = [row for row in rows if row["pipe"]["id"] not in main_ids]
+    if len(main_rows) != 2 or len(branch_rows) != 1:
+        return
+    active_rows = [row for row in main_rows + branch_rows
+                   if row["pipe"].get("draw_3d", True)]
+    if len(active_rows) < 2:
+        return
+    preferences = data["preferences"]
+    layer_z = _layer_z_m(handle)
+
+    def axis_height(row):
+        pipe = row["pipe"]
+        invert = (pipe["start_invert_m"] if pipe["start_id"] == shaft["id"]
+                  else pipe["end_invert_m"])
+        return (invert + pipe["dn_mm"] / 2000.0 - layer_z) / factor
+
+    main_z = sum(axis_height(row) for row in main_rows) / 2.0
+    for row in active_rows:
+        pipe = row["pipe"]
+        color = color_for({"role": "sewer_pipe", "pipe": pipe}, preferences)
+        ensure_pipe_classes(pipe, preferences, color)
+        radius = pipe["outside_diameter_mm"] / 2000.0 / factor
+        width = radius * 2.0
+        trim, _end_width, _cap = _connection_profile(shaft, pipe, width, factor)
+        # A slight overlap hides the capped end face of the adjacent pipe mesh
+        # and produces a visually continuous fitting without boolean solids.
+        arm = max(trim + 0.01 / factor, radius * 1.10)
+        direction = row["direction"]
+        end = (direction[0] * arm, direction[1] * arm, axis_height(row))
+        start_radius = radius
+        if row in branch_rows:
+            main_radius = max(
+                value["pipe"]["outside_diameter_mm"] / 2000.0 / factor
+                for value in main_rows)
+            start_radius = min(radius, main_radius) * 0.82
+        _draw_pipe_3d(
+            (0.0, 0.0, main_z), end, radius,
+            class_name(pipe, preferences, "_3D"), color,
+            start_radius=start_radius, end_radius=radius)
 
 
 def _draw_drops(handle, shaft, preferences, class_value, color, factor):
@@ -1825,22 +2145,41 @@ def _draw_drops(handle, shaft, preferences, class_value, color, factor):
         if length <= 1e-9:
             continue
         ux, uy = dx / length, dy / length
-        distance = (max(core.shaft_outer_diameter_m(shaft) * 0.5, 0.20) + 0.20) / factor
+        pipe_color = color_for({"role": "sewer_pipe", "pipe": pipe}, preferences)
+        pipe_class = class_name(pipe, preferences)
+        ensure_pipe_classes(pipe, preferences, pipe_color)
+        outside_radius = pipe["outside_diameter_mm"] / 2000.0 / factor
+        trim, _end_width, _cap = _connection_profile(
+            shaft, pipe, outside_radius * 2.0, factor)
+        distance = trim + max(outside_radius * 2.0, 0.20 / factor)
         center = ux * distance, uy * distance
-        radius = pipe["dn_mm"] / 2000.0 / factor
-        vs.Oval(((center[0] - radius), (center[1] + radius)),
-                ((center[0] + radius), (center[1] - radius)))
+        wall_point = ux * trim, uy * trim
+        vs.Oval(((center[0] - outside_radius), (center[1] + outside_radius)),
+                ((center[0] + outside_radius), (center[1] - outside_radius)))
         marker = vs.LNewObj()
         if marker:
-            _set_graphics(marker, class_value, color, fill=False, opacity=100)
+            _set_graphics(marker, pipe_class, pipe_color, fill=False, opacity=100)
+        _draw_open_polyline((wall_point, center), pipe_class, pipe_color)
         if pipe.get("draw_3d", preferences.get("draw_3d", True)):
-            first = (center[0], center[1],
-                     (drop["lower_invert_m"] + pipe["dn_mm"] / 2000.0 - layer_z) / factor)
-            second = (center[0], center[1],
-                      (drop["upper_invert_m"] + pipe["dn_mm"] / 2000.0 - layer_z) / factor)
-            if second[2] > first[2] + 1e-9:
-                _draw_pipe_3d(first, second, radius,
-                              class_name(pipe, preferences, "_3D"), color)
+            axis_offset = pipe["dn_mm"] / 2000.0
+            lower_z = (drop["lower_invert_m"] + axis_offset - layer_z) / factor
+            upper_z = (drop["upper_invert_m"] + axis_offset - layer_z) / factor
+            class_3d = class_name(pipe, preferences, "_3D")
+            if upper_z > lower_z + 1e-9:
+                # Upper inlet arm, external vertical fall and lower shaft arm
+                # overlap at their axes to form one continuous drop assembly.
+                _draw_pipe_3d(
+                    (wall_point[0], wall_point[1], upper_z),
+                    (center[0], center[1], upper_z),
+                    outside_radius, class_3d, pipe_color)
+                _draw_pipe_3d(
+                    (center[0], center[1], lower_z),
+                    (center[0], center[1], upper_z),
+                    outside_radius, class_3d, pipe_color)
+                _draw_pipe_3d(
+                    (center[0], center[1], lower_z),
+                    (wall_point[0], wall_point[1], lower_z),
+                    outside_radius, class_3d, pipe_color)
 
 
 def draw_shaft(handle, data):
@@ -1895,6 +2234,9 @@ def draw_shaft(handle, data):
     elif structure == "stub":
         _draw_hidden_join(shaft, data)
         _draw_stub_symbol(shaft, data, class_value, color, factor)
+        if any(row["pipe"].get("draw_3d", True) for row in _junction_rows(shaft)):
+            _draw_stub_3d(handle, shaft, data, factor)
+            vs.ResetOrientation3D()
     else:
         _draw_hidden_join(shaft, data)
     _draw_drops(handle, shaft, preferences, class_value, color, factor)
@@ -1904,18 +2246,145 @@ def draw_shaft(handle, data):
     _live().write_data(handle, updated)
     _reset_labels(updated)
     if moved:
-        for pipe_handle, _pipe in _connected_pipes(shaft["id"]):
+        connected = _connected_pipes(shaft["id"])
+        for pipe_handle, _pipe in connected:
             vs.ResetObject(pipe_handle)
             other_id = _pipe["end_id"] if _pipe["start_id"] == shaft["id"] else _pipe["start_id"]
             other_handle = _handle_by_id(core.SHAFT_PREFIX, other_id)
             if other_handle:
                 vs.ResetObject(other_handle)
+        _reset_holding_dependents(
+            tuple(pipe for _pipe_handle, pipe in connected), handle)
 
 
 def _pipe_anchor(pipe):
     (_a, start), (_b, end) = _endpoints(pipe)
     return ((start["x_m"] + end["x_m"]) * 0.5,
             (start["y_m"] + end["y_m"]) * 0.5)
+
+
+def _holding_component(pipe):
+    """Return the live pipe component that constitutes one real holding."""
+    current = core.validate_pipe(pipe)
+    pipe_map = {current["id"]: current}
+    for _handle, data in objects("sewer_pipe"):
+        raw = data.get("pipe") if isinstance(data, dict) else None
+        if not isinstance(raw, dict):
+            continue
+        try:
+            value = core.validate_pipe(raw)
+        except core.SewerError:
+            continue
+        pipe_map[value["id"]] = value
+    shaft_map = {}
+    for shaft_handle, data in objects("sewer_shaft"):
+        raw = data.get("shaft") if isinstance(data, dict) else None
+        if not isinstance(raw, dict):
+            continue
+        try:
+            value = read_shaft(shaft_handle, data)
+        except core.SewerError:
+            continue
+        shaft_map[value["id"]] = value
+    at_node = {}
+    for value in pipe_map.values():
+        at_node.setdefault(value["start_id"], []).append(value["id"])
+        at_node.setdefault(value["end_id"], []).append(value["id"])
+    neighbours = {identity: set() for identity in pipe_map}
+    for identity, pipe_ids in at_node.items():
+        shaft = shaft_map.get(identity)
+        pairs = ()
+        if shaft and shaft.get("structure_type") == "stub":
+            main_ids = [value for value in shaft.get("stub", {}).get("main_pipe_ids", ())
+                        if value in pipe_map and value in pipe_ids]
+            if len(main_ids) == 2:
+                pairs = ((main_ids[0], main_ids[1]),)
+        elif shaft and not shaft.get("visible", True) and len(pipe_ids) == 2:
+            pairs = ((pipe_ids[0], pipe_ids[1]),)
+        for first, second in pairs:
+            neighbours[first].add(second)
+            neighbours[second].add(first)
+    component = set()
+    pending = [current["id"]]
+    while pending:
+        identity = pending.pop()
+        if identity in component:
+            continue
+        component.add(identity)
+        pending.extend(neighbours.get(identity, ()) - component)
+    return current, pipe_map, component
+
+
+def _reset_holding_dependents(seed_pipes, current_shaft_handle=None):
+    """Invalidate complete labels and stations after any axis-node move."""
+    affected_pipe_ids = set()
+    for pipe in seed_pipes:
+        _current, _pipe_map, component = _holding_component(pipe)
+        affected_pipe_ids.update(component)
+    if not affected_pipe_ids:
+        return
+    for _pipe_handle, data in objects("sewer_pipe"):
+        raw = data.get("pipe") if isinstance(data, dict) else None
+        if isinstance(raw, dict) and raw.get("id") in affected_pipe_ids:
+            _reset_labels(data)
+    for shaft_handle in _station_dependent_shaft_handles(affected_pipe_ids):
+        if shaft_handle != current_shaft_handle:
+            vs.ResetObject(shaft_handle)
+
+
+def _station_dependent_shaft_handles(affected_pipe_ids):
+    """Find every station whose local or cached axis touches a holding."""
+    affected_pipe_ids = set(str(identity) for identity in affected_pipe_ids)
+    result = []
+    for shaft_handle, shaft in shaft_records():
+        references = []
+        if shaft.get("structure_type") == "stub" and shaft.get("stub"):
+            references.append(shaft["stub"])
+        if shaft.get("connection_station"):
+            references.append(shaft["connection_station"])
+        if any(affected_pipe_ids.intersection(
+                set(reference.get("main_pipe_ids", ())).union(
+                    reference.get("station_pipe_ids", ())))
+                for reference in references):
+            result.append(shaft_handle)
+    return tuple(result)
+
+
+def _holding_label_pipe(pipe):
+    """Return one dynamically labelled representative per real holding.
+
+    Invisible two-way bends pass the holding through. At a stub, only its two
+    recorded main-pipe arms pass through; the branch starts/ends its own
+    holding. Visible shafts always separate holdings. This removes duplicate
+    labels after repeated fitting splits without combining genuine holdings
+    that have a visible intermediate shaft. Consequently a house connection
+    or floor-drain branch receives one label regardless of its bend count.
+    """
+    current, pipe_map, component = _holding_component(pipe)
+
+    def live_length(value):
+        try:
+            first_handle = _handle_by_id(core.SHAFT_PREFIX, value["start_id"])
+            second_handle = _handle_by_id(core.SHAFT_PREFIX, value["end_id"])
+            first = read_shaft(first_handle) if first_handle else None
+            second = read_shaft(second_handle) if second_handle else None
+            if first and second:
+                return math.dist((first["x_m"], first["y_m"]),
+                                 (second["x_m"], second["y_m"]))
+        except core.SewerError:
+            pass
+        return value["length_m"]
+
+    lengths = {identity: live_length(pipe_map[identity]) for identity in component}
+    # Owner identity must not change merely because a bend moved and made a
+    # different segment longer. All new/edited segments persist the same
+    # holding-level presentation, so this deterministic owner keeps manual
+    # label transforms stable across ordinary geometry updates.
+    owner_id = max(component)
+    result = dict(current)
+    result["label_suppressed"] = current["id"] != owner_id
+    result["label_length_m"] = sum(lengths.values())
+    return core.validate_pipe(result)
 
 
 def _create_text(text, angle, preferences, wrap_width=0.0):
@@ -2026,13 +2495,17 @@ def draw_label(handle, data):
     wrap_width = 0.0
     shaft_label = False
     shaft_name = ""
+    pipe_name = ""
     if owner_data["role"] == "sewer_pipe":
         pipe = read_pipe(owner, owner_data)
+        pipe = _holding_label_pipe(pipe)
         (_a, start), (_b, end) = _endpoints(pipe)
         # Reader direction follows the deep point while remaining line-parallel.
         high, low = ((start, end) if pipe["start_invert_m"] >= pipe["end_invert_m"] else (end, start))
         angle = math.degrees(math.atan2(low["y_m"] - high["y_m"], low["x_m"] - high["x_m"]))
+        angle += pipe.get("label_rotation_deg", 0.0)
         text = core.pipe_label(pipe, preferences)
+        pipe_name = pipe.get("name", "") if preferences.get("pipe_name_visible", True) else ""
         anchor_m = _pipe_anchor(pipe)
         wrap_width = pipe.get("label_width_m", 0.0) / factor
     else:
@@ -2044,8 +2517,15 @@ def draw_label(handle, data):
         anchor_m = shaft["x_m"], shaft["y_m"]
     if not text:
         return
-    text_handle = _create_text(
-        text, angle - float(vs.GetSymRot(handle) or 0.0), preferences, wrap_width)
+    # Keep the line-parallel angle in the label object's local coordinates.
+    # Rotating the parametric label with Vectorworks' normal Rotate command
+    # now adds the user's angle instead of being cancelled during every reset.
+    rotation = float(vs.GetSymRot(handle) or 0.0)
+    text_handle = _create_text(text, angle, preferences, wrap_width)
+    if pipe_name and text.startswith(pipe_name):
+        vs.SetTextSize(
+            text_handle, 0, len(pipe_name),
+            preferences.get("pipe_name_point_size", preferences["point_size"]))
     if shaft_label and shaft_name and text.startswith(shaft_name):
         # Vectorworks text styles are bit flags: bold=1, underline=4.
         style = {"normal": 0, "bold": 1, "underline": 4,
@@ -2058,8 +2538,11 @@ def draw_label(handle, data):
     box = _bbox(vs.GetBBox(text_handle))
     scale = max(1.0, float(vs.GetLScale(vs.GetLayer(handle)) or 1.0))
     padding = 0.0008 * scale / factor
-    anchor = (anchor_m[0] / factor - label_position[0],
-              anchor_m[1] / factor - label_position[1])
+    anchor_world = (anchor_m[0] / factor - label_position[0],
+                    anchor_m[1] / factor - label_position[1])
+    radians = math.radians(-rotation)
+    anchor = (anchor_world[0] * math.cos(radians) - anchor_world[1] * math.sin(radians),
+              anchor_world[0] * math.sin(radians) + anchor_world[1] * math.cos(radians))
     if shaft_label:
         _frame, framed_box = _shaft_label_frame(box, preferences, padding)
         _leader(anchor, framed_box, preferences, 0.0)
@@ -2096,10 +2579,25 @@ def _prepare_network_updates(pipe_updates, shaft_updates):
     for pipe in final_pipes.values():
         endpoint_values.setdefault(pipe["start_id"], []).append(pipe["start_invert_m"])
         endpoint_values.setdefault(pipe["end_id"], []).append(pipe["end_invert_m"])
+    pipes_by_id = {pipe["id"]: pipe for pipe in final_pipes.values()}
     for shaft_handle, shaft in tuple(final_shafts.items()):
-        if shaft["id"] in affected_ids and endpoint_values.get(shaft["id"]):
-            value = dict(shaft, ks_m=min(endpoint_values[shaft["id"]]))
-            final_shafts[shaft_handle] = core.validate_shaft(value, allow_hidden=True)
+        if shaft["id"] not in affected_ids:
+            continue
+        drops = []
+        for drop in shaft.get("drops", ()):
+            incoming = pipes_by_id.get(drop["pipe_id"])
+            # A confirmed flow reversal can turn the former inlet into an
+            # outlet. Such a drop is no longer physically applicable.
+            if not incoming or incoming["end_id"] != shaft["id"]:
+                continue
+            drops.append(dict(
+                drop, upper_invert_m=incoming["end_invert_m"]))
+        soil_values = list(endpoint_values.get(shaft["id"], ()))
+        soil_values.extend(drop["lower_invert_m"] for drop in drops)
+        value = dict(shaft, drops=drops)
+        if soil_values:
+            value["ks_m"] = min(soil_values)
+        final_shafts[shaft_handle] = core.validate_shaft(value, allow_hidden=True)
     core.validate_network(tuple(final_pipes.values()), tuple(final_shafts.values()))
     return ({handle: value for handle, value in final_pipes.items()
              if value != original_pipes[handle]},
@@ -2109,6 +2607,18 @@ def _prepare_network_updates(pipe_updates, shaft_updates):
 
 def _commit_network_updates(pipe_updates, shaft_updates, preferences, undo_name):
     requested_resets = list(dict.fromkeys(tuple(shaft_updates) + tuple(pipe_updates)))
+    renamed_ids = set()
+    for handle, updated in shaft_updates.items():
+        original_data = _live().data_of(handle) or {}
+        original = original_data.get("shaft") or {}
+        if original.get("name") != updated.get("name"):
+            renamed_ids.add(updated["id"])
+    # Diameter, construction and cover changes alter every connected pipe trim
+    # and the associated labels even when the pipe payload itself is unchanged.
+    for updated in shaft_updates.values():
+        for pipe_handle, _pipe in _connected_pipes(updated["id"]):
+            if pipe_handle not in requested_resets:
+                requested_resets.append(pipe_handle)
     # Direction changes alter inlet/outlet text and stub stationing at both
     # endpoint structures even when the shaft's numeric payload stays equal.
     for pipe_handle, updated in pipe_updates.items():
@@ -2122,6 +2632,40 @@ def _commit_network_updates(pipe_updates, shaft_updates, preferences, undo_name)
             shaft_handle = _handle_by_id(core.SHAFT_PREFIX, identity)
             if shaft_handle and shaft_handle not in requested_resets:
                 requested_resets.append(shaft_handle)
+    # A station may refer to a remote segment of the same holding. Height
+    # changes and confirmed flow reversals do not move geometry, so they do
+    # not pass through draw_shaft's geometry-move invalidation. Reset every
+    # dependent connection explicitly; its draw event then reconstructs the
+    # current lower station zero, name and distance from the updated network.
+    affected_station_pipe_ids = set()
+    for pipe_handle, updated in pipe_updates.items():
+        original_data = _live().data_of(pipe_handle) or {}
+        original = original_data.get("pipe") or updated
+        try:
+            _current, _pipe_map, component = _holding_component(original)
+            affected_station_pipe_ids.update(component)
+        except core.SewerError:
+            affected_station_pipe_ids.add(updated["id"])
+    for shaft_handle in _station_dependent_shaft_handles(
+            affected_station_pipe_ids):
+        if shaft_handle not in requested_resets:
+            requested_resets.append(shaft_handle)
+    if renamed_ids:
+        # Holding names may pass through invisible bends and stubs. Redraw the
+        # complete connected component after a shaft rename so no upstream
+        # segment keeps an obsolete H-<Schachtname> label.
+        pipe_rows = tuple(pipe_records())
+        component_nodes = set(renamed_ids)
+        changed = True
+        while changed:
+            changed = False
+            for pipe_handle, pipe in pipe_rows:
+                if pipe["start_id"] in component_nodes or pipe["end_id"] in component_nodes:
+                    before = len(component_nodes)
+                    component_nodes.update((pipe["start_id"], pipe["end_id"]))
+                    changed = changed or len(component_nodes) != before
+                    if pipe_handle not in requested_resets:
+                        requested_resets.append(pipe_handle)
     requested_resets = tuple(requested_resets)
     pipes, shafts = _prepare_network_updates(pipe_updates, shaft_updates)
     rows = tuple(dict.fromkeys(tuple(shafts) + tuple(pipes)))
@@ -2371,6 +2915,20 @@ def edit(handle, preferences):
             pipe_updates = _confirmed_pipe_directions(pipe_updates)
             if pipe_updates is None:
                 return False
+        # Layout and wrapping describe the single holding label, not merely
+        # the geometric segment that happened to be clicked. Propagate both
+        # fields through invisible bends up to the next real terminal. This
+        # guarantees one consistently one- or two-line label for floor drains
+        # and house connections even when their route contains many bends.
+        _current, _pipe_map, holding_ids = _holding_component(original)
+        for related_handle, related_pipe in pipe_records():
+            if related_pipe["id"] not in holding_ids:
+                continue
+            base = pipe_updates.get(related_handle, related_pipe)
+            pipe_updates[related_handle] = core.validate_pipe(dict(
+                base, label_layout=updated["label_layout"],
+                label_width_m=updated["label_width_m"],
+                label_rotation_deg=updated["label_rotation_deg"]))
         _commit_network_updates(pipe_updates, {}, preferences, "PD Kanalstrecke bearbeiten")
         return True
     if data["role"] == "sewer_shaft":
@@ -2387,7 +2945,9 @@ def edit(handle, preferences):
         _unique_shaft_name(updated["name"], original["id"])
         changed_pipes = {}
         old_outlet = min(outgoing) if outgoing else choice["outlet_invert_m"]
-        delta = choice["outlet_invert_m"] - old_outlet
+        outlet_changed = choice.get("outlet_changed", True)
+        inlet_changed = choice.get("inlet_changed", True)
+        delta = choice["outlet_invert_m"] - old_outlet if outlet_changed else 0.0
         following = _downstream_pipes(original["id"]) if abs(delta) > 1e-9 else ()
         propagation = "slope"
         if following:
@@ -2403,11 +2963,12 @@ def edit(handle, preferences):
                 following, original["id"], delta, propagation))
         for pipe_handle, pipe in connected:
             changed = dict(changed_pipes.get(pipe_handle, pipe))
-            if pipe["end_id"] == original["id"]:
+            if inlet_changed and pipe["end_id"] == original["id"]:
                 changed["end_invert_m"] = choice["inlet_invert_m"]
-            if pipe["start_id"] == original["id"]:
+            if outlet_changed and pipe["start_id"] == original["id"]:
                 changed["start_invert_m"] = choice["outlet_invert_m"]
-            changed_pipes[pipe_handle] = changed
+            if changed != pipe:
+                changed_pipes[pipe_handle] = changed
         changed_pipes = _confirmed_pipe_directions(changed_pipes)
         if changed_pipes is None:
             return False
@@ -2415,6 +2976,94 @@ def edit(handle, preferences):
             changed_pipes, {handle: updated}, preferences, "PD Kanalschacht bearbeiten")
         return True
     return False
+
+
+def edit_shafts(handles, preferences):
+    """Stage full individual dialogs for several shafts and commit once.
+
+    Every selected shaft keeps its own name, heights and construction data.
+    The user receives the same complete editor as for a single shaft, once per
+    selected shaft.  Nothing is written when any dialog is cancelled or when
+    the prospective network is invalid.
+    """
+    requested = tuple(dict.fromkeys(tuple(handles or ())))
+    if len(requested) < 2:
+        raise core.SewerError("Für die Mehrfachbearbeitung mindestens zwei Schächte markieren.")
+    rows = []
+    for handle in requested:
+        data = _live().data_of(handle)
+        if not is_sewer_data(data) or data.get("role") != "sewer_shaft":
+            raise core.SewerError("Für die Mehrfachbearbeitung ausschließlich Kanalschächte markieren.")
+        shaft = read_shaft(handle, data)
+        if (not shaft.get("visible", True) or
+                shaft.get("structure_type", "round") not in ("round", "special")):
+            raise core.SewerError("Nur sichtbare runde Schächte und Sonderschächte gemeinsam bearbeiten.")
+        rows.append((handle, shaft))
+
+    pipe_rows = tuple(pipe_records())
+    staged_pipes = {}
+    shaft_updates = {}
+    for handle, original in rows:
+        connected = []
+        for pipe_handle, persisted in pipe_rows:
+            pipe = staged_pipes.get(pipe_handle, persisted)
+            if original["id"] in (pipe["start_id"], pipe["end_id"]):
+                connected.append((pipe_handle, pipe))
+        incoming = tuple(pipe["end_invert_m"] for _pipe_handle, pipe in connected
+                         if pipe["end_id"] == original["id"])
+        outgoing = tuple(pipe["start_invert_m"] for _pipe_handle, pipe in connected
+                         if pipe["start_id"] == original["id"])
+        choice = sewer_ui.shaft_dialog(original, preferences, incoming, outgoing)
+        if choice is None:
+            return False
+        shaft_updates[handle] = choice["shaft"]
+        inlet_changed = choice.get("inlet_changed", True)
+        outlet_changed = choice.get("outlet_changed", True)
+        old_outlet = min(outgoing) if outgoing else choice["outlet_invert_m"]
+        delta = choice["outlet_invert_m"] - old_outlet if outlet_changed else 0.0
+        if abs(delta) > 1e-9:
+            following = tuple(
+                (pipe_handle, staged_pipes.get(pipe_handle, pipe))
+                for pipe_handle, pipe in _downstream_pipes(original["id"]))
+            if following:
+                propagation = sewer_ui.downstream_height_dialog(delta, len(following))
+                if propagation is None:
+                    return False
+                if propagation == "shift" and any(
+                        abs(value - old_outlet) > 1e-6 for value in outgoing):
+                    raise core.SewerError(
+                        "Die vorhandenen Ablaufsohlen sind unterschiedlich. "
+                        "Bitte 'Gefälle der nächsten Haltung ändern' wählen.")
+                staged_pipes.update(_downstream_height_changes(
+                    following, original["id"], delta, propagation))
+        for pipe_handle, pipe in connected:
+            changed = copy.deepcopy(staged_pipes.get(pipe_handle, pipe))
+            if inlet_changed and pipe["end_id"] == original["id"]:
+                changed["end_invert_m"] = choice["inlet_invert_m"]
+            if outlet_changed and pipe["start_id"] == original["id"]:
+                changed["start_invert_m"] = choice["outlet_invert_m"]
+            if changed != pipe:
+                staged_pipes[pipe_handle] = changed
+
+    # Validate names and every other shaft/pipe invariant before prompting for
+    # a possible flow reversal and before touching the document.
+    prospective_shafts = [shaft_updates.get(handle, shaft)
+                          for handle, shaft in shaft_records()]
+    prospective_pipes = [staged_pipes.get(handle, pipe)
+                         for handle, pipe in pipe_rows]
+    directions = {}
+    for pipe_handle, pipe in zip((row[0] for row in pipe_rows), prospective_pipes):
+        if pipe_handle in staged_pipes:
+            directions[pipe_handle] = pipe
+    directions = _confirmed_pipe_directions(directions)
+    if directions is None:
+        return False
+    final_pipes = [directions.get(handle, pipe)
+                   for handle, pipe in pipe_rows]
+    core.validate_network(final_pipes, prospective_shafts)
+    _commit_network_updates(
+        directions, shaft_updates, preferences, "PD Mehrere Kanalschächte bearbeiten")
+    return True
 
 
 def batch_edit(handles, preferences):

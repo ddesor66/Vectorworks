@@ -32,6 +32,8 @@ DEFAULTS = {
     "shaft_cover_rotation_deg": 0.0,
     "cover_offset_m": 1.5,
     "point_size": 9.0,
+    "pipe_name_visible": True,
+    "pipe_name_point_size": 9.0,
     "shaft_name_point_size": 10.0,
     "shaft_name_text_style": "bold",
     "text_offset_mm": 3.0,
@@ -39,6 +41,7 @@ DEFAULTS = {
     "slope_decimals": 2,
     "length_decimals": 2,
     "label_layout": "one_line",
+    "label_rotation_deg": 0.0,
     "graphics_mode": "double_line",
     "single_line_type": 1,
     "axis_line_type": 2,
@@ -123,10 +126,12 @@ def validate(value):
             ("shaft_wall_thickness_m", "Schachtwandstärke", 0.0, 1.0),
             ("shaft_cover_diameter_m", "Schachtdeckeldurchmesser", 0.1, 20.0),
             ("shaft_cover_rotation_deg", "Schachtdeckeldrehung", -36000.0, 36000.0),
+            ("label_rotation_deg", "Beschriftungsdrehung", -36000.0, 36000.0),
             ("fillet_radius_m", "Ausrundungsradius", 0.01, 20.0),
             ("flow_arrow_scale", "Fließrichtungspfeil-Skalierung", 0.1, 20.0),
             ("cover_offset_m", "Deckelabstand", 0.0, 100.0),
             ("point_size", "Schriftgröße", 1.0, 200.0),
+            ("pipe_name_point_size", "Schriftgröße des Haltungsnamens", 1.0, 200.0),
             ("shaft_name_point_size", "Schriftgröße des Schachtnamens", 1.0, 200.0),
             ("text_offset_mm", "Textabstand", 0.0, 100.0)):
         result[key] = core.number(result.get(key), label)
@@ -137,6 +142,7 @@ def validate(value):
     if not 0.1 <= result["pipe_wall_thickness_mm"] <= 1000.0:
         raise core.SewerError("Die Standard-Rohrwandstärke muss zwischen 0,1 und 1000 mm liegen.")
     result["hollow_3d"] = bool(result.get("hollow_3d", True))
+    result["pipe_name_visible"] = bool(result.get("pipe_name_visible", True))
     result["shaft_name_text_style"] = str(
         result.get("shaft_name_text_style", "bold"))
     if result["shaft_name_text_style"] not in (
@@ -153,6 +159,7 @@ def validate(value):
     if (outside > 0.0 and result["shaft_cover_diameter_m"] > outside):
         raise core.SewerError("Der Schachtdeckel darf nicht größer als der Schacht sein.")
     result["shaft_cover_rotation_deg"] %= 360.0
+    result["label_rotation_deg"] %= 360.0
     result["shaft_cover_symbol"] = str(result.get("shaft_cover_symbol") or "").strip()
     if len(result["shaft_cover_symbol"]) > 255 or any(
             character in result["shaft_cover_symbol"] for character in "\r\n\t"):

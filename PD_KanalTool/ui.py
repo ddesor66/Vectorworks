@@ -416,6 +416,7 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
               (42, "Ausrundungsradius [m]:"),
               (46, "Fließpfeil – Skalierungsfaktor:"),
               (44, "Beschriftungsbreite [m] (0 = auto):"),
+              (70, "Beschriftungsdrehung [°]:"),
               (40, "Freie Bezeichnung:"),
               (61, "Darstellung der Haltung:"),
               (63, "Linienart Einliniengrafik:"),
@@ -441,6 +442,7 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
             (43, current.get("fillet_radius_m", preferences["fillet_radius_m"]), 18),
             (47, current.get("flow_arrow_scale", preferences["flow_arrow_scale"]), 18),
             (45, current.get("label_width_m", 0.0), 18),
+            (71, current.get("label_rotation_deg", preferences["label_rotation_deg"]), 18),
              (41, current.get("name", ""), 34)):
         vs.CreateEditText(dialog, item, str(value).replace(".", ","), width)
     vs.CreateEditText(
@@ -490,7 +492,8 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
     vs.SetRightItem(dialog, 67, 68, 8, 0)
     vs.SetBelowItem(dialog, 67, 69, 0, 5)
     previous = None
-    for label, field in ((31, 32), (42, 43), (46, 47), (33, 34), (44, 45)):
+    for label, field in ((31, 32), (42, 43), (46, 47), (33, 34), (44, 45),
+                         (70, 71)):
         if previous is not None:
             vs.SetBelowItem(dialog, previous, label, 0, 7)
         else:
@@ -606,6 +609,7 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
                 "flow_arrow_scale": _float(dialog, 47, "Fließrichtungspfeil-Skalierung"),
                 "label_layout": layouts[_choice(dialog, 34)][1],
                 "label_width_m": _float(dialog, 45, "Beschriftungsbreite"),
+                "label_rotation_deg": _float(dialog, 71, "Beschriftungsdrehung"),
                 "graphics_mode": graphics[_choice(dialog, 62)][1],
                 "line_type": _line_type_choice(
                     dialog, 64, current.get("line_type", preferences["single_line_type"])),
@@ -656,6 +660,8 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
     vs.CreateResourcePopup(dialog, 31, 42)
     vs.CreateStaticText(dialog, 32, "Bauart in der Beschriftung (B, PP oder freier Text):", -1)
     vs.CreateEditText(dialog, 33, current["construction_label"], 42)
+    vs.CreateStaticText(dialog, 42, "Zusatztext unter dem Schachtnamen:", -1)
+    vs.CreateEditText(dialog, 43, current.get("note", ""), 42)
     vs.CreateCheckBox(dialog, 36, "Zu- und Ablauf mit gleicher Höhe")
     vs.CreateStaticText(
         dialog, 37,
@@ -669,6 +675,9 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
         vs.SetBelowItem(dialog, previous, label, 0, 6)
         vs.SetRightItem(dialog, label, field, 8, 0)
         previous = label
+    vs.SetBelowItem(dialog, previous, 42, 0, 6)
+    vs.SetRightItem(dialog, 42, 43, 8, 0)
+    previous = 42
     vs.SetBelowItem(dialog, previous, 32, 0, 6)
     vs.SetRightItem(dialog, 32, 33, 8, 0)
     previous = 32
@@ -798,6 +807,7 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
                         _float(dialog, 25, "Schachtdeckeldurchmesser"), outside_diameter)
                 value = dict(current)
                 value.update(name=name,
+                             note=str(vs.GetItemText(dialog, 43) or "").strip(),
                              construction_label=str(vs.GetItemText(dialog, 33) or "").strip(),
                              kind=kinds[_choice(dialog, 14)],
                              kd_m=_float(dialog, 16, "Deckelhöhe"),
@@ -816,6 +826,10 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
                     "inlet_invert_m": inlet,
                     "outlet_invert_m": outlet,
                     "equal_inverts": equal,
+                    "inlet_changed": bool(incoming) and (
+                        equal or abs(inlet - inlet_value) > 1e-9),
+                    "outlet_changed": bool(outgoing) and (
+                        equal or abs(outlet - outlet_value) > 1e-9),
                 }
             except core.SewerError as error:
                 vs.AlrtDialog(str(error))
@@ -910,7 +924,7 @@ def batch_pipe_dialog(preferences):
     return result["value"] if _run(dialog, handler) == 1 else None
 
 
-def preferences_dialog(preferences):
+def preferences_dialog(preferences, default_scope="save"):
     current = copy.deepcopy(preferences)
     dialog = vs.CreateResizableLayout(_title("Kanalanlage – Voreinstellungen"), True,
                                       "Speichern", "Abbrechen", True, True)
@@ -949,6 +963,12 @@ def preferences_dialog(preferences):
     vs.CreateLineStylePopup(dialog, 42)
     vs.CreateStaticText(dialog, 43, "Gestrichelte schwarze Achslinie:", -1)
     vs.CreateLineStylePopup(dialog, 44)
+
+    vs.CreateGroupBox(dialog, 104, "Beschriftung", False)
+    vs.CreateCheckBox(dialog, 57, "Automatischen Haltungsnamen anzeigen")
+    vs.CreateStaticText(dialog, 58, "Schriftgröße Haltungsname [pt]:", -1)
+    vs.CreateEditText(
+        dialog, 59, str(current["pipe_name_point_size"]).replace(".", ","), 14)
 
     vs.CreateGroupBox(dialog, 103, "Schächte und Schachtdeckel", False)
     vs.CreateStaticText(dialog, 45, "Standard-Schachtbauart:", -1)
@@ -995,10 +1015,9 @@ def preferences_dialog(preferences):
         vs.SetRightItem(dialog, label, field, 8, 0)
         previous = label
 
-    # Pane 2: all drawing defaults.
+    # Pane 2: drawing geometry defaults.
     previous = None
-    for label, field in ((21, 22), (53, 54), (55, 56), (23, 24), (27, 28), (37, 38),
-                         (39, 40), (41, 42), (43, 44)):
+    for label, field in ((27, 28), (37, 38), (39, 40), (41, 42), (43, 44)):
         if previous is None:
             vs.SetFirstGroupItem(dialog, 102, label)
         else:
@@ -1006,7 +1025,20 @@ def preferences_dialog(preferences):
         vs.SetRightItem(dialog, label, field, 8, 0)
         previous = label
 
-    # Pane 3: shaft defaults.
+    # Pane 3: text and name defaults.
+    previous = None
+    for label, field in ((21, 22), (53, 54), (55, 56), (23, 24)):
+        if previous is None:
+            vs.SetFirstGroupItem(dialog, 104, label)
+        else:
+            vs.SetBelowItem(dialog, previous, label, 0, 6)
+        vs.SetRightItem(dialog, label, field, 8, 0)
+        previous = label
+    vs.SetBelowItem(dialog, previous, 57, 0, 6)
+    vs.SetBelowItem(dialog, 57, 58, 0, 6)
+    vs.SetRightItem(dialog, 58, 59, 8, 0)
+
+    # Pane 4: shaft defaults.
     previous = None
     for label, field in ((45, 46), (47, 48), (29, 30), (31, 32), (33, 34)):
         if previous is None:
@@ -1019,6 +1051,7 @@ def preferences_dialog(preferences):
     vs.SetBelowItem(dialog, 35, 36, 0, 4)
     vs.CreateTabPane(dialog, 100, 101)
     vs.CreateTabPane(dialog, 100, 102)
+    vs.CreateTabPane(dialog, 100, 104)
     vs.CreateTabPane(dialog, 100, 103)
     vs.SetBelowItem(dialog, 100, 49, 0, 7)
     vs.SetRightItem(dialog, 49, 50, 8, 0)
@@ -1033,6 +1066,10 @@ def preferences_dialog(preferences):
         ("Angeschlossene Kanalsysteme der Markierung aktualisieren", "systems"),
         ("Alle Kanalobjekte der Zeichnung aktualisieren", "drawing"),
     )
+    scope_values = [row[1] for row in update_scopes]
+    default_scope = str(default_scope or "save")
+    if default_scope not in scope_values:
+        default_scope = "save"
     shaft_name_styles = (
         ("Normal", "normal"),
         ("Fett", "bold"),
@@ -1064,6 +1101,9 @@ def preferences_dialog(preferences):
             vs.SelectChoice(dialog, 40, 0 if current["graphics_mode"] == "double_line" else 1, True)
             vs.SetLineTypeChoice(dialog, 42, current["single_line_type"])
             vs.SetLineTypeChoice(dialog, 44, current["axis_line_type"])
+            vs.SetBooleanItem(dialog, 57, current["pipe_name_visible"])
+            vs.EnableItem(dialog, 58, current["pipe_name_visible"])
+            vs.EnableItem(dialog, 59, current["pipe_name_visible"])
             for index, row in enumerate(shaft_name_styles):
                 vs.AddChoice(dialog, 56, row[0], index)
             vs.SelectChoice(
@@ -1078,12 +1118,18 @@ def preferences_dialog(preferences):
                     current["shaft_construction_material"]), True)
             for index, row in enumerate(update_scopes):
                 vs.AddChoice(dialog, 50, row[0], index)
-            vs.SelectChoice(dialog, 50, 0, True)
+            # Existing drawings should visibly adopt a changed drawing mode on
+            # Save.  The caller selects the safest useful scope: current
+            # selection, whole drawing, or defaults only for an empty drawing.
+            vs.SelectChoice(dialog, 50, scope_values.index(default_scope), True)
             update_shaft_material()
         elif item == 35:
             vs.EnableItem(dialog, 36, _selected(dialog, 35))
         elif item == 46:
             update_shaft_material()
+        elif item == 57:
+            vs.EnableItem(dialog, 58, _selected(dialog, 57))
+            vs.EnableItem(dialog, 59, _selected(dialog, 57))
         elif item == 1:
             try:
                 value = copy.deepcopy(current)
@@ -1092,6 +1138,9 @@ def preferences_dialog(preferences):
                 value["dns"] = [core._dn(row) for row in split(18)]
                 value["materials"] = [core._material(row) for row in split(20)]
                 value["point_size"] = _float(dialog, 22, "Schriftgröße")
+                value["pipe_name_visible"] = _selected(dialog, 57)
+                value["pipe_name_point_size"] = _float(
+                    dialog, 59, "Schriftgröße des Haltungsnamens")
                 value["shaft_name_point_size"] = _float(
                     dialog, 54, "Schriftgröße des Schachtnamens")
                 value["shaft_name_text_style"] = shaft_name_styles[_choice(dialog, 56)][1]

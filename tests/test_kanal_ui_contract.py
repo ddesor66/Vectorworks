@@ -50,6 +50,11 @@ class DialogAPI(object):
         self._control(dialog, item)
         self.text[(dialog, item)] = str(value)
 
+    def CreateStaticText(self, dialog, item, value, width):
+        del width
+        self._control(dialog, item)
+        self.text[(dialog, item)] = str(value)
+
     def CreateGroupBox(self, dialog, item, title, framed):
         del title, framed
         self._control(dialog, item)
@@ -237,12 +242,24 @@ def pipe(identity, start, end, start_m, end_m):
 
 
 class KanalDialogTests(unittest.TestCase):
+    def test_unchanged_shaft_dialog_preserves_distinct_connection_heights(self):
+        api = DialogAPI()
+        api.on_run = lambda _dialog, handler: handler(1, 0)
+        ui = load_ui(api)
+        core = importlib.import_module("PD_KanalTool.core")
+        settings = importlib.import_module("PD_KanalTool.settings").validate({})
+        current = core.validate_shaft(
+            shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True)
+        choice = ui.shaft_dialog(current, settings, (100.2, 100.1), (100.0,))
+        self.assertFalse(choice["inlet_changed"])
+        self.assertFalse(choice["outlet_changed"])
+
     def test_preferences_use_three_compact_tabs_and_return_update_scope(self):
         api = DialogAPI()
 
         def accept(dialog, handler):
-            self.assertEqual([101, 102, 103], api.tab_panes[(dialog, 100)])
-            self.assertEqual({101, 102, 103}, {
+            self.assertEqual([101, 102, 104, 103], api.tab_panes[(dialog, 100)])
+            self.assertEqual({101, 102, 103, 104}, {
                 group for current_dialog, group in api.group_first
                 if current_dialog == dialog})
             # Apply the saved settings to the connected system of the selection.
@@ -256,6 +273,590 @@ class KanalDialogTests(unittest.TestCase):
         self.assertEqual("systems", scope)
         self.assertEqual(10.0, updated["shaft_name_point_size"])
         self.assertEqual("bold", updated["shaft_name_text_style"])
+        self.assertTrue(updated["pipe_name_visible"])
+        self.assertEqual(9.0, updated["pipe_name_point_size"])
+
+    def test_preferences_apply_single_line_to_existing_drawing_by_default(self):
+        api = DialogAPI()
+
+        def accept(dialog, handler):
+            # The user changes only the drawing mode.  With existing channel
+            # objects, the caller-selected drawing scope must already be
+            # active; no second, easily missed scope choice is required.
+            self.assertEqual(3, api.choice_selection[(dialog, 50)])
+            api.choice_selection[(dialog, 40)] = 1
+            return handler(1, 0)
+
+        api.on_run = accept
+        ui = load_ui(api)
+        settings = importlib.import_module("PD_KanalTool.settings").validate({})
+        updated, scope = ui.preferences_dialog(settings, "drawing")
+        self.assertEqual("single_line", updated["graphics_mode"])
+        self.assertEqual("drawing", scope)
+
+    def test_settings_default_scope_prefers_selection_then_drawing(self):
+        api = DialogAPI()
+        load_ui(api)
+        app = importlib.import_module("PD_KanalTool.app")
+        self.assertEqual("selection", app._preference_default_scope((("P1", {}),), True))
+        self.assertEqual(
+            "systems",
+            app._preference_default_scope((("S1", {"role": "sewer_shaft"}),), True))
+        self.assertEqual("drawing", app._preference_default_scope((), True))
+        self.assertEqual("save", app._preference_default_scope((), False))
+
+    def test_multiple_selected_shafts_use_complete_shaft_editing(self):
+        api = DialogAPI()
+        load_ui(api)
+        app = importlib.import_module("PD_KanalTool.app")
+        preferences = importlib.import_module("PD_KanalTool.settings").validate({})
+        managed = (
+            ("S1", {"role": "sewer_shaft"}),
+            ("S2", {"role": "sewer_shaft"}),
+        )
+        calls = []
+        app.sewer_live.edit_shafts = lambda handles, current: (
+            calls.append((tuple(handles), current)) or True)
+        app.adapter.alert = lambda _message: None
+        app._edit(preferences, managed)
+        self.assertEqual(("S1", "S2"), calls[0][0])
+
+    def test_multiple_shaft_dialogs_stage_properties_and_pipe_ends_once(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        preferences = importlib.import_module("PD_KanalTool.settings").validate({})
+        shafts = {
+            "S1": core.validate_shaft(shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True),
+            "S2": core.validate_shaft(shaft("s2", "RW.002", 10.0, 99.9), allow_hidden=True),
+        }
+        pipes = {"P1": core.validate_pipe(pipe("p1", "s1", "s2", 100.0, 99.9))}
+
+        class Store(object):
+            @staticmethod
+            def data_of(handle):
+                return {"schema": 1, "role": "sewer_shaft", "shaft": shafts[handle]}
+
+        live._live = lambda: Store()
+        live.read_shaft = lambda handle, data=None: dict(shafts[handle])
+        live.shaft_records = lambda: tuple(shafts.items())
+        live.pipe_records = lambda: tuple(pipes.items())
+        choices = iter((
+            {"shaft": core.validate_shaft(dict(shafts["S1"], diameter_m=1.2), allow_hidden=True),
+             "inlet_invert_m": 100.0, "outlet_invert_m": 100.0},
+            {"shaft": core.validate_shaft(dict(shafts["S2"], construction_material="PP",
+                                                wall_thickness_m=0.0), allow_hidden=True),
+             "inlet_invert_m": 99.8, "outlet_invert_m": 99.9},
+        ))
+        live.sewer_ui.shaft_dialog = lambda *_args: next(choices)
+        live._confirmed_pipe_directions = lambda values: values
+        commits = []
+        live._commit_network_updates = lambda pipe_updates, shaft_updates, current, undo: (
+            commits.append((pipe_updates, shaft_updates, current, undo)))
+
+        self.assertTrue(live.edit_shafts(("S1", "S2"), preferences))
+        self.assertEqual(1, len(commits))
+        self.assertEqual(100.0, commits[0][0]["P1"]["start_invert_m"])
+        self.assertEqual(99.8, commits[0][0]["P1"]["end_invert_m"])
+        self.assertEqual(1.2, commits[0][1]["S1"]["diameter_m"])
+        self.assertEqual("PP", commits[0][1]["S2"]["construction_material"])
+
+    def test_drop_updates_incoming_holding_and_stores_one_valid_drop(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        preferences = importlib.import_module("PD_KanalTool.settings").validate({})
+        current_shaft = core.validate_shaft(
+            shaft("s2", "RW.002", 10.0, 99.0), allow_hidden=True)
+        current_pipe = core.validate_pipe(pipe("p1", "s1", "s2", 100.0, 99.5))
+
+        class Store(object):
+            @staticmethod
+            def data_of(_handle):
+                return {"schema": 1, "role": "sewer_shaft", "shaft": current_shaft}
+
+        live._live = lambda: Store()
+        live.read_shaft = lambda *_args: dict(current_shaft)
+        live._connected_pipes = lambda _identity: (("P1", current_pipe),)
+        commits = []
+        live._commit_network_updates = lambda pipes, shafts, current, undo: (
+            commits.append((pipes, shafts, current, undo)))
+        live.set_drop(
+            "S2", {"pipe_id": "p1", "upper_invert_m": 99.4,
+                   "lower_invert_m": 99.0}, preferences)
+        self.assertEqual(99.4, commits[0][0]["P1"]["end_invert_m"])
+        self.assertEqual("p1", commits[0][1]["S2"]["drops"][0]["pipe_id"])
+        with self.assertRaisesRegex(core.SewerError, "eindeutig über"):
+            live.set_drop(
+                "S2", {"pipe_id": "p1", "upper_invert_m": 99.0,
+                       "lower_invert_m": 99.0}, preferences)
+
+    def test_stub_and_drop_build_continuous_three_arm_3d_geometry(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        preferences = importlib.import_module("PD_KanalTool.settings").validate({})
+        main_a = core.validate_pipe(pipe("ma", "s1", "stub", 100.0, 99.5))
+        main_b = core.validate_pipe(pipe("mb", "stub", "s2", 99.5, 99.0))
+        branch = core.validate_pipe(dict(
+            pipe("br", "s3", "stub", 99.8, 99.5), dn_mm=150,
+            outside_diameter_mm=150))
+        rows = (
+            {"pipe": main_a, "direction": (-1.0, 0.0), "length_m": 5.0},
+            {"pipe": main_b, "direction": (1.0, 0.0), "length_m": 5.0},
+            {"pipe": branch, "direction": (0.0, 1.0), "length_m": 3.0},
+        )
+        current_shaft = core.validate_shaft(dict(
+            shaft("stub", "RW.099", 5.0, 99.5), diameter_m=0.0,
+            structure_type="stub",
+            stub={"alignment": "invert", "main_dn_mm": 300,
+                  "branch_dn_mm": 150, "connection_invert_m": 99.5,
+                  "station_enabled": False, "main_start_id": "",
+                  "main_end_id": "", "main_pipe_ids": ["ma", "mb"]}),
+            allow_hidden=True)
+        live._junction_rows = lambda _shaft: rows
+        live._layer_z_m = lambda _handle: 0.0
+        live._connection_profile = lambda *_args: (0.2, 0.3, False)
+        live.color_for = lambda *_args: (0, 0, 65535)
+        live.ensure_pipe_classes = lambda *_args: None
+        live.class_name = lambda value, _prefs, suffix="": value["id"] + suffix
+        meshes = []
+        live._draw_pipe_3d = lambda *args, **kwargs: meshes.append((args, kwargs))
+        live._draw_stub_3d(
+            "STUB", current_shaft,
+            {"role": "sewer_shaft", "shaft": current_shaft,
+             "preferences": preferences}, 1.0)
+        self.assertEqual(3, len(meshes))
+        self.assertEqual({meshes[0][0][0], meshes[1][0][0], meshes[2][0][0]},
+                         {meshes[0][0][0]})
+        branch_2d = core.validate_pipe(dict(branch, draw_3d=False))
+        live._junction_rows = lambda _shaft: (rows[0], rows[1], dict(
+            rows[2], pipe=branch_2d))
+        meshes[:] = []
+        live._draw_stub_3d(
+            "STUB", current_shaft,
+            {"role": "sewer_shaft", "shaft": current_shaft,
+             "preferences": preferences}, 1.0)
+        self.assertEqual(2, len(meshes))
+
+        live._connected_pipes = lambda _identity: (("P1", main_a),)
+        live._handle_by_id = lambda _prefix, _identity: "OTHER"
+        live.read_shaft = lambda *_args: core.validate_shaft(
+            shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True)
+        live._draw_open_polyline = lambda *_args, **_kwargs: None
+        live._set_graphics = lambda *_args, **_kwargs: None
+        meshes[:] = []
+        drop_shaft = core.validate_shaft(dict(
+            shaft("stub", "RW.002", 5.0, 99.0),
+            drops=[{"pipe_id": "ma", "upper_invert_m": 99.5,
+                    "lower_invert_m": 99.0}]), allow_hidden=True)
+        live._draw_drops(
+            "S2", drop_shaft, preferences, "SHAFT", (0, 0, 65535), 1.0)
+        self.assertEqual(3, len(meshes))
+
+    def test_dynamic_labels_cross_hidden_bends_but_stop_at_real_shafts(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        shafts = {
+            "s1": core.validate_shaft(shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True),
+            "j": core.validate_shaft(dict(
+                shaft("j", "", 4.0, 99.6), visible=False, diameter_m=0.0,
+                structure_type="junction"), allow_hidden=True),
+            "s2": core.validate_shaft(shaft("s2", "RW.002", 10.0, 99.0), allow_hidden=True),
+        }
+        p1 = core.validate_pipe(dict(pipe("p1", "s1", "j", 100.0, 99.6), length_m=4.0))
+        p2 = core.validate_pipe(dict(pipe("p2", "j", "s2", 99.6, 99.0), length_m=6.0))
+        pipe_data = (("P1", {"pipe": p1}), ("P2", {"pipe": p2}))
+        shaft_data = tuple((identity, {"shaft": value}) for identity, value in shafts.items())
+        live.objects = lambda role=None: pipe_data if role == "sewer_pipe" else shaft_data
+        live._handle_by_id = lambda _prefix, identity: identity
+        live.read_shaft = lambda handle, _data=None: dict(shafts[handle])
+        self.assertTrue(live._holding_label_pipe(p1)["label_suppressed"])
+        labelled = live._holding_label_pipe(p2)
+        self.assertFalse(labelled["label_suppressed"])
+        self.assertAlmostEqual(10.0, labelled["label_length_m"])
+
+        shafts["j"] = core.validate_shaft(dict(
+            shafts["j"], name="RW.010", visible=True, diameter_m=1.0,
+            structure_type="round"), allow_hidden=True)
+        self.assertFalse(live._holding_label_pipe(p1)["label_suppressed"])
+        self.assertAlmostEqual(4.0, live._holding_label_pipe(p1)["label_length_m"])
+        self.assertFalse(live._holding_label_pipe(p2)["label_suppressed"])
+        self.assertAlmostEqual(6.0, live._holding_label_pipe(p2)["label_length_m"])
+
+    def test_repeated_split_retargets_existing_stub_main_reference(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        existing_stub = core.validate_shaft(dict(
+            shaft("stub", "RW.099", 10.0, 99.0), diameter_m=0.0,
+            structure_type="stub",
+            stub={"alignment": "invert", "main_dn_mm": 300,
+                  "branch_dn_mm": 150, "connection_invert_m": 99.0,
+                  "station_enabled": False, "main_start_id": "",
+                  "main_end_id": "", "main_pipe_ids": ["old", "next"]}),
+            allow_hidden=True)
+        original = core.validate_pipe(pipe("old", "s1", "stub", 100.0, 99.0))
+        first, second = core.split_pipe(
+            original, "new", 0.5, identity_factory=iter(("a", "b")).__next__)
+        live.shaft_records = lambda: (("STUB", existing_stub),)
+        updated = live._stub_reference_updates(original, first, second)
+        self.assertEqual(["b", "next"], updated["STUB"]["stub"]["main_pipe_ids"])
+
+    def test_repeated_split_retargets_normal_connection_station(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        connection = core.validate_shaft(dict(
+            shaft("connection", "RW.010", 10.0, 99.0),
+            connection_station={
+                "station_enabled": True,
+                "main_start_id": "s1", "main_end_id": "s2",
+                "main_pipe_ids": ["old", "next"],
+                "station_m": 10.0, "station_zero_id": "s2",
+                "station_zero_name": "RW.002",
+                "station_equal_inverts": False,
+                "station_basis": "lower_invert",
+            }), allow_hidden=True)
+        original = core.validate_pipe(pipe("old", "s1", "connection", 100.0, 99.0))
+        first, second = core.split_pipe(
+            original, "new", 0.5, identity_factory=iter(("a", "b")).__next__)
+        live.shaft_records = lambda: (("CONNECTION", connection),)
+        updated = live._stub_reference_updates(original, first, second)
+        self.assertEqual(
+            ["b", "next"],
+            updated["CONNECTION"]["connection_station"]["main_pipe_ids"])
+        self.assertEqual(
+            ["a", "b", "next"],
+            updated["CONNECTION"]["connection_station"]["station_pipe_ids"])
+
+    def test_normal_holding_connection_station_refreshes_from_lower_shaft(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        shafts = {
+            "s1": core.validate_shaft(shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True),
+            "s2": core.validate_shaft(shaft("s2", "RW.002", 10.0, 99.0), allow_hidden=True),
+        }
+        connection = core.validate_shaft(dict(
+            shaft("connection", "RW.010", 4.0, 99.6),
+            connection_station={
+                "station_enabled": True,
+                "main_start_id": "s1", "main_end_id": "s2",
+                "main_pipe_ids": ["p1", "p2"],
+                "station_m": None, "station_zero_id": "",
+                "station_zero_name": "",
+                "station_equal_inverts": False, "station_basis": "",
+            }), allow_hidden=True)
+        pipes = {
+            "p1": core.validate_pipe(dict(
+                pipe("p1", "s1", "connection", 100.0, 99.6), length_m=4.0)),
+            "p2": core.validate_pipe(dict(
+                pipe("p2", "connection", "s2", 99.6, 99.0), length_m=6.0)),
+        }
+        all_shafts = dict(shafts, connection=connection)
+        live.objects = lambda role=None: (
+            tuple((identity, {"pipe": value}) for identity, value in pipes.items())
+            if role == "sewer_pipe" else
+            tuple((identity, {"shaft": value}) for identity, value in all_shafts.items()))
+        live._handle_by_id = lambda prefix, identity: identity
+        live.read_shaft = lambda handle, data=None: all_shafts[handle]
+        live.read_pipe = lambda handle, data=None: pipes[handle]
+        refreshed = live._refresh_stub_stationing(connection)
+        station = refreshed["connection_station"]
+        self.assertAlmostEqual(6.0, station["station_m"])
+        self.assertEqual("s2", station["station_zero_id"])
+        self.assertEqual("RW.002", station["station_zero_name"])
+
+    def test_connection_station_uses_complete_bent_holding_axis(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        shafts = {
+            "s1": core.validate_shaft(shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True),
+            "j1": core.validate_shaft(dict(
+                shaft("j1", "", 2.0, 99.8), y_m=3.0, visible=False,
+                diameter_m=0.0, structure_type="junction"), allow_hidden=True),
+            "j2": core.validate_shaft(dict(
+                shaft("j2", "", 8.0, 99.3), y_m=3.0, visible=False,
+                diameter_m=0.0, structure_type="junction"), allow_hidden=True),
+            "s2": core.validate_shaft(shaft("s2", "RW.002", 10.0, 99.0), allow_hidden=True),
+        }
+        connection = core.validate_shaft(dict(
+            shaft("connection", "RW.010", 4.0, 99.6), y_m=3.0,
+            connection_station={
+                "station_enabled": True,
+                "main_start_id": "s1", "main_end_id": "s2",
+                "main_pipe_ids": ["p2", "p3"],
+                "station_m": None, "station_zero_id": "",
+                "station_zero_name": "", "station_equal_inverts": False,
+                "station_basis": "",
+            }), allow_hidden=True)
+        pipes = {
+            "p1": core.validate_pipe(dict(
+                pipe("p1", "s1", "j1", 100.0, 99.8), length_m=3.6055512755)),
+            "p2": core.validate_pipe(dict(
+                pipe("p2", "j1", "connection", 99.8, 99.6), length_m=2.0)),
+            "p3": core.validate_pipe(dict(
+                pipe("p3", "connection", "j2", 99.6, 99.3), length_m=4.0)),
+            "p4": core.validate_pipe(dict(
+                pipe("p4", "j2", "s2", 99.3, 99.0), length_m=3.6055512755)),
+        }
+        all_shafts = dict(shafts, connection=connection)
+        live.objects = lambda role=None: (
+            tuple((identity, {"pipe": value}) for identity, value in pipes.items())
+            if role == "sewer_pipe" else
+            tuple((identity, {"shaft": value}) for identity, value in all_shafts.items()))
+        live._handle_by_id = lambda prefix, identity: identity
+        live.read_shaft = lambda handle, data=None: all_shafts[handle]
+        live.read_pipe = lambda handle, data=None: pipes[handle]
+        refreshed = live._refresh_stub_stationing(connection)
+        self.assertAlmostEqual(
+            4.0 + 3.6055512755,
+            refreshed["connection_station"]["station_m"], places=8)
+
+    def test_visible_inserted_shaft_becomes_new_station_boundary(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        shafts = {
+            "s1": core.validate_shaft(shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True),
+            "new": core.validate_shaft(shaft("new", "RW.010", 8.0, 99.2), allow_hidden=True),
+            "s2": core.validate_shaft(shaft("s2", "RW.002", 10.0, 99.0), allow_hidden=True),
+        }
+        connection = core.validate_shaft(dict(
+            shaft("connection", "RW.099", 4.0, 99.6), diameter_m=0.0,
+            structure_type="stub",
+            stub={
+                "alignment": "invert", "main_dn_mm": 300,
+                "branch_dn_mm": 150, "connection_invert_m": 99.6,
+                "station_enabled": True,
+                "main_start_id": "s1", "main_end_id": "s2",
+                "main_pipe_ids": ["p1", "p2"],
+                "station_pipe_ids": ["p1", "p2", "p3"],
+                "station_m": 6.0, "station_zero_id": "s2",
+                "station_zero_name": "RW.002",
+                "station_equal_inverts": False,
+                "station_basis": "lower_invert",
+            }), allow_hidden=True)
+        pipes = {
+            "p1": core.validate_pipe(dict(
+                pipe("p1", "s1", "connection", 100.0, 99.6), length_m=4.0)),
+            "p2": core.validate_pipe(dict(
+                pipe("p2", "connection", "new", 99.6, 99.2), length_m=4.0)),
+            "p3": core.validate_pipe(dict(
+                pipe("p3", "new", "s2", 99.2, 99.0), length_m=2.0)),
+        }
+        all_shafts = dict(shafts, connection=connection)
+        live.objects = lambda role=None: (
+            tuple((identity, {"pipe": value}) for identity, value in pipes.items())
+            if role == "sewer_pipe" else
+            tuple((identity, {"shaft": value}) for identity, value in all_shafts.items()))
+        live._handle_by_id = lambda prefix, identity: identity
+        live.read_shaft = lambda handle, data=None: all_shafts[handle]
+        live.read_pipe = lambda handle, data=None: pipes[handle]
+        refreshed = live._refresh_stub_stationing(connection)
+        station = refreshed["stub"]
+        self.assertEqual("new", station["station_zero_id"])
+        self.assertEqual("RW.010", station["station_zero_name"])
+        self.assertEqual({"p1", "p2"}, set(station["station_pipe_ids"]))
+        self.assertAlmostEqual(4.0, station["station_m"])
+
+    def test_house_or_floor_branch_has_one_label_across_all_hidden_bends(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        shafts = {
+            "stub": core.validate_shaft(dict(
+                shaft("stub", "RW.099", 0.0, 99.0), diameter_m=0.0,
+                structure_type="stub",
+                stub={"alignment": "invert", "main_dn_mm": 300,
+                      "branch_dn_mm": 150, "connection_invert_m": 99.0,
+                      "station_enabled": False, "main_start_id": "",
+                      "main_end_id": "", "main_pipe_ids": []}), allow_hidden=True),
+            "j1": core.validate_shaft(dict(
+                shaft("j1", "", 3.0, 99.1), visible=False, diameter_m=0.0,
+                structure_type="junction"), allow_hidden=True),
+            "j2": core.validate_shaft(dict(
+                shaft("j2", "", 7.0, 99.2), visible=False, diameter_m=0.0,
+                structure_type="junction"), allow_hidden=True),
+            "house": core.validate_shaft(dict(
+                shaft("house", "HA.001", 12.0, 99.3), diameter_m=0.0,
+                structure_type="house"), allow_hidden=True),
+        }
+        pipes = (
+            core.validate_pipe(dict(
+                pipe("b1", "house", "j2", 99.3, 99.2), length_m=5.0,
+                label_layout="two_line")),
+            core.validate_pipe(dict(
+                pipe("b2", "j2", "j1", 99.2, 99.1), length_m=4.0,
+                label_layout="two_line")),
+            core.validate_pipe(dict(
+                pipe("b3", "j1", "stub", 99.1, 99.0), length_m=3.0,
+                label_layout="two_line")),
+        )
+        live.objects = lambda role=None: (
+            tuple((value["id"], {"pipe": value}) for value in pipes)
+            if role == "sewer_pipe" else
+            tuple((identity, {"shaft": value}) for identity, value in shafts.items()))
+        live._handle_by_id = lambda _prefix, identity: identity
+        live.read_shaft = lambda handle, _data=None: shafts[handle]
+        labelled = [live._holding_label_pipe(value) for value in pipes]
+        shown = [value for value in labelled if not value["label_suppressed"]]
+        self.assertEqual(1, len(shown))
+        self.assertAlmostEqual(12.0, shown[0]["label_length_m"])
+        self.assertEqual("two_line", shown[0]["label_layout"])
+
+    def test_moved_axis_node_invalidates_complete_label_and_remote_station(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        shafts = {
+            "s1": core.validate_shaft(shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True),
+            "j": core.validate_shaft(dict(
+                shaft("j", "", 3.0, 99.7), visible=False, diameter_m=0.0,
+                structure_type="junction"), allow_hidden=True),
+            "c": core.validate_shaft(dict(
+                shaft("c", "RW.099", 7.0, 99.3), diameter_m=0.0,
+                structure_type="stub",
+                stub={"alignment": "invert", "main_dn_mm": 300,
+                      "branch_dn_mm": 150, "connection_invert_m": 99.3,
+                      "station_enabled": True, "main_start_id": "s1",
+                      "main_end_id": "s2", "main_pipe_ids": ["p2", "p3"],
+                      "station_pipe_ids": ["p1", "p2", "p3"],
+                      "station_m": 3.0, "station_zero_id": "s2",
+                      "station_zero_name": "RW.002",
+                      "station_equal_inverts": False,
+                      "station_basis": "lower_invert"}), allow_hidden=True),
+            "s2": core.validate_shaft(shaft("s2", "RW.002", 10.0, 99.0), allow_hidden=True),
+        }
+        pipes = {
+            "p1": core.validate_pipe(dict(
+                pipe("p1", "s1", "j", 100.0, 99.7), length_m=3.0)),
+            "p2": core.validate_pipe(dict(
+                pipe("p2", "j", "c", 99.7, 99.3), length_m=4.0)),
+            "p3": core.validate_pipe(dict(
+                pipe("p3", "c", "s2", 99.3, 99.0), length_m=3.0)),
+        }
+        pipe_data = tuple((identity, {"role": "sewer_pipe", "pipe": value})
+                          for identity, value in pipes.items())
+        shaft_data = tuple((identity.upper(), {"role": "sewer_shaft", "shaft": value})
+                           for identity, value in shafts.items())
+        live.objects = lambda role=None: (
+            pipe_data if role == "sewer_pipe" else shaft_data)
+        live.shaft_records = lambda: tuple(
+            (handle, data["shaft"]) for handle, data in shaft_data)
+        live.read_shaft = lambda handle, data=None: shafts[handle.lower()]
+        reset_labels = []
+        reset_objects = []
+        live._reset_labels = lambda data: reset_labels.append(data["pipe"]["id"])
+        api.ResetObject = lambda handle: reset_objects.append(handle)
+        live._reset_holding_dependents((pipes["p1"],), "J")
+        self.assertEqual({"p1", "p2", "p3"}, set(reset_labels))
+        self.assertIn("C", reset_objects)
+
+    def test_remote_height_update_invalidates_dependent_station(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        shafts = {
+            "s1": core.validate_shaft(
+                shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True),
+            "j": core.validate_shaft(dict(
+                shaft("j", "", 3.0, 99.7), visible=False,
+                diameter_m=0.0, structure_type="junction"), allow_hidden=True),
+            "c": core.validate_shaft(dict(
+                shaft("c", "RW.099", 7.0, 99.3), diameter_m=0.0,
+                structure_type="stub",
+                stub={"alignment": "invert", "main_dn_mm": 300,
+                      "branch_dn_mm": 150, "connection_invert_m": 99.3,
+                      "station_enabled": True, "main_start_id": "s1",
+                      "main_end_id": "s2", "main_pipe_ids": ["p2", "p3"],
+                      "station_pipe_ids": ["p1", "p2", "p3"],
+                      "station_m": 3.0, "station_zero_id": "s2",
+                      "station_zero_name": "RW.002",
+                      "station_equal_inverts": False,
+                      "station_basis": "lower_invert"}), allow_hidden=True),
+            "s2": core.validate_shaft(
+                shaft("s2", "RW.002", 10.0, 99.0), allow_hidden=True),
+        }
+        pipes = {
+            "p1": core.validate_pipe(dict(
+                pipe("p1", "s1", "j", 100.0, 99.7), length_m=3.0)),
+            "p2": core.validate_pipe(dict(
+                pipe("p2", "j", "c", 99.7, 99.3), length_m=4.0)),
+            "p3": core.validate_pipe(dict(
+                pipe("p3", "c", "s2", 99.3, 99.0), length_m=3.0)),
+        }
+        store = {}
+        for identity, value in pipes.items():
+            store[identity.upper()] = {"role": "sewer_pipe", "pipe": value}
+        for identity, value in shafts.items():
+            store[identity.upper()] = {"role": "sewer_shaft", "shaft": value}
+
+        class Store(object):
+            def data_of(self, handle):
+                return store.get(handle)
+
+            def write_data(self, handle, data):
+                store[handle] = data
+
+        live._live = lambda: Store()
+        live.objects = lambda role=None: tuple(
+            (handle, data) for handle, data in store.items()
+            if data.get("role") == role)
+        live.pipe_records = lambda: tuple(
+            (handle, data["pipe"]) for handle, data in store.items()
+            if data.get("role") == "sewer_pipe")
+        live.shaft_records = lambda: tuple(
+            (handle, data["shaft"]) for handle, data in store.items()
+            if data.get("role") == "sewer_shaft")
+        live._handle_by_id = lambda _prefix, identity: identity.upper()
+        # Keep this contract test focused on reset propagation; validation and
+        # flow reversal are covered by the network-update tests below.
+        live._prepare_network_updates = lambda pipe_updates, shaft_updates: (
+            pipe_updates, shaft_updates)
+        resets = []
+        api.ResetObject = lambda handle: resets.append(handle)
+        api.ReDrawAll = lambda: None
+        api.NameUndoEvent = lambda _name: None
+        changed = dict(pipes["p1"], start_invert_m=100.1)
+        live._commit_network_updates(
+            {"P1": changed}, {}, {"channel_type": "RW"},
+            "PD Test Höhenänderung")
+        self.assertIn("C", resets)
+
+    def test_network_update_keeps_drop_attached_and_lower_soil(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        first = core.validate_shaft(shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True)
+        second = core.validate_shaft(dict(
+            shaft("s2", "RW.002", 10.0, 99.0),
+            drops=[{"pipe_id": "p1", "upper_invert_m": 99.5,
+                    "lower_invert_m": 99.0}]), allow_hidden=True)
+        current_pipe = core.validate_pipe(pipe("p1", "s1", "s2", 100.0, 99.5))
+        live.pipe_records = lambda: (("P1", current_pipe),)
+        live.shaft_records = lambda: (("S1", first), ("S2", second))
+        pipes, shafts = live._prepare_network_updates(
+            {"P1": core.validate_pipe(dict(current_pipe, end_invert_m=99.4))}, {})
+        self.assertEqual(99.4, pipes["P1"]["end_invert_m"])
+        self.assertEqual(99.4, shafts["S2"]["drops"][0]["upper_invert_m"])
+        self.assertEqual(99.0, shafts["S2"]["ks_m"])
 
     def test_preference_system_scope_follows_only_connected_component(self):
         api = DialogAPI()
@@ -359,6 +960,17 @@ class KanalDialogTests(unittest.TestCase):
         self.assertEqual(10.0, result["wall_thickness_mm"])
         self.assertTrue(result["hollow_3d"])
         self.assertTrue(result["draw_3d"])
+
+    def test_pipe_dialog_exposes_persistent_label_rotation(self):
+        api = DialogAPI()
+        api.on_run = lambda _dialog, handler: handler(1, 0)
+        ui = load_ui(api)
+        settings = importlib.import_module("PD_KanalTool.settings").validate({
+            "label_rotation_deg": 27.5})
+        result = ui.pipe_properties_dialog(settings, editing=False)
+        self.assertEqual(27.5, result["label_rotation_deg"])
+        self.assertTrue(any("Beschriftungsdrehung" in value
+                            for value in api.text.values()))
 
     def test_chain_accepts_two_holdings_and_applies_common_slope(self):
         api = DialogAPI()

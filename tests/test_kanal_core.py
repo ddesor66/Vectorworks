@@ -133,6 +133,21 @@ class ShaftLabelTests(unittest.TestCase):
         self.assertNotIn("Ablauf", label)
         self.assertEqual(5, len(label.splitlines()))
 
+    def test_holding_connection_station_is_part_of_normal_shaft_label(self):
+        value = core.validate_shaft(dict(
+            shaft("connection", "RW.010", 4.0, 99.6),
+            connection_station={
+                "station_enabled": True,
+                "main_start_id": "s1", "main_end_id": "s2",
+                "main_pipe_ids": ["p1", "p2"],
+                "station_m": 6.0, "station_zero_id": "s2",
+                "station_zero_name": "RW.002",
+                "station_equal_inverts": False,
+                "station_basis": "lower_invert",
+            }), allow_hidden=True)
+        label = core.shaft_label(value, (), preferences())
+        self.assertIn("Station = 6,00 m ab RW.002", label)
+
     def test_connection_names_reject_invalid_roles(self):
         self.assertEqual("Zulauf", core.connection_plan_name("in", "Z1", 1))
         self.assertEqual("Z1 Zulauf", core.connection_plan_name("in", "Z1", 2))
@@ -142,6 +157,73 @@ class ShaftLabelTests(unittest.TestCase):
 
 
 class ShaftConnectionTests(unittest.TestCase):
+    def test_holding_name_uses_visible_downstream_shaft(self):
+        first = shaft("s1", "RW.001", 0.0, 100.0)
+        bend = dict(shaft("bend", "BEND", 5.0, 99.5),
+                    name="", visible=False, diameter_m=0.0,
+                    structure_type="junction")
+        bend = core.validate_shaft(bend, allow_hidden=True)
+        end = shaft("s2", "RW.002", 10.0, 99.0)
+        def segment(identity, start_id, end_id, start_m, end_m):
+            value = dict(connection_options())
+            value.update(schema=core.SCHEMA, id=identity, network_id="RW", name="",
+                         start_id=start_id, end_id=end_id,
+                         start_invert_m=start_m, end_invert_m=end_m,
+                         length_m=5.0)
+            return core.validate_pipe(value)
+        first_pipe = segment("p1", "s1", "bend", 100.0, 99.5)
+        second_pipe = segment("p2", "bend", "s2", 99.5, 99.0)
+        self.assertEqual(
+            "H-RW.002",
+            core.holding_name(first_pipe, (first, bend, end),
+                              (first_pipe, second_pipe)))
+
+    def test_holding_name_can_be_hidden_without_changing_technical_label(self):
+        first = shaft("s1", "RW.001", 0.0, 100.0)
+        second = shaft("s2", "RW.002", 10.0, 99.0)
+        value = core.pipe_between_shafts(
+            first, second, connection_options(), identity_factory=lambda: "p1")
+        value = dict(value, name=core.holding_name(value, (first, second)))
+        shown = dict(preferences(), pipe_name_visible=True)
+        hidden = dict(preferences(), pipe_name_visible=False)
+        self.assertTrue(core.pipe_label(value, shown).startswith("H-RW.002 | "))
+        self.assertFalse(core.pipe_label(value, hidden).startswith("H-RW.002"))
+
+    def test_geometric_branch_segments_have_one_two_line_total_label(self):
+        first = shaft("s1", "RW.001", 0.0, 100.0)
+        second = shaft("s2", "RW.002", 10.0, 99.0)
+        value = core.pipe_between_shafts(
+            first, second, connection_options(), identity_factory=lambda: "p1")
+        value.update(name="H-RW.002", label_layout="two_line", label_length_m=12.5,
+                     label_rotation_deg=37.5)
+        value = core.validate_pipe(value)
+        shown = dict(preferences(), pipe_name_visible=True)
+        self.assertEqual(2, len(core.pipe_label(value, shown).splitlines()))
+        self.assertIn("12,50 m", core.pipe_label(value, shown))
+        self.assertEqual(37.5, value["label_rotation_deg"])
+        value.update(label_suppressed=True)
+        self.assertEqual("", core.pipe_label(value, shown))
+
+    def test_stub_is_not_a_holding_name_terminal(self):
+        first = shaft("s1", "RW.001", 0.0, 100.0)
+        fitting = dict(shaft("stub", "RW.099", 5.0, 99.5),
+                       structure_type="stub", diameter_m=0.0,
+                       stub={"alignment": "invert", "main_dn_mm": 300,
+                             "branch_dn_mm": 150, "connection_invert_m": 99.5,
+                             "station_enabled": False, "main_start_id": "",
+                             "main_end_id": "", "main_pipe_ids": []})
+        fitting = core.validate_shaft(fitting, allow_hidden=True)
+        end = shaft("s2", "RW.002", 10.0, 99.0)
+        options = connection_options()
+        first_pipe = core.pipe_between_shafts(
+            first, fitting, options, identity_factory=lambda: "p1")
+        second_pipe = core.pipe_between_shafts(
+            fitting, end, options, identity_factory=lambda: "p2")
+        self.assertEqual(
+            "H-RW.002",
+            core.holding_name(first_pipe, (first, fitting, end),
+                              (first_pipe, second_pipe)))
+
     def test_orients_height_changed_pipe_downhill_without_moving_endpoints(self):
         first = shaft("s1", "RW.001", 0.0, 100.0)
         second = shaft("s2", "RW.002", 10.0, 99.0)

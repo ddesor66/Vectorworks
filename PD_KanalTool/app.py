@@ -22,7 +22,20 @@ def _drawing_defaults(options, preferences):
     value.setdefault("graphics_mode", preferences["graphics_mode"])
     value.setdefault("line_type", preferences["single_line_type"])
     value.setdefault("axis_line_type", preferences["axis_line_type"])
+    value.setdefault("label_rotation_deg", preferences["label_rotation_deg"])
     return value
+
+
+def _preference_default_scope(managed, has_channel_objects):
+    """Choose an immediately visible but bounded settings-update scope."""
+    if managed:
+        # A shaft has no line representation of its own.  Applying a changed
+        # one-/double-line standard only to that shaft would appear to do
+        # nothing, so include its connected system by default.
+        if all(data.get("role") == "sewer_shaft" for _handle, data in managed):
+            return "systems"
+        return "selection"
+    return "drawing" if has_channel_objects else "save"
 
 
 def _create(preferences, paths=None):
@@ -49,6 +62,13 @@ def _edit(preferences, managed):
     if len(managed) == 1:
         if sewer_live.edit(managed[0][0], preferences):
             adapter.alert("Kanalobjekt und angeschlossene Darstellung wurden aktualisiert.")
+        return
+    if all(data.get("role") == "sewer_shaft" for _handle, data in managed):
+        if sewer_live.edit_shafts(
+                tuple(handle for handle, _data in managed), preferences):
+            adapter.alert(
+                "%d Schächte mit sämtlichen gewählten Einzelwerten und angeschlossenen Haltungen aktualisiert."
+                % len(managed))
         return
     if sewer_live.edit_network_chain(
             tuple(handle for handle, _data in managed), preferences):
@@ -90,6 +110,7 @@ def _connect(preferences, managed):
             "flow_arrow_scale": preferences["flow_arrow_scale"],
             "label_layout": preferences["label_layout"],
             "label_width_m": 0.0,
+            "label_rotation_deg": preferences["label_rotation_deg"],
             "draw_3d": preferences["draw_3d"],
         }
     initial.update(
@@ -215,6 +236,7 @@ def _connect_shafts(preferences, managed):
         "flow_arrow_scale": preferences["flow_arrow_scale"],
         "label_layout": preferences["label_layout"],
         "label_width_m": 0.0,
+        "label_rotation_deg": preferences["label_rotation_deg"],
         "draw_3d": selected["draw_3d"],
         "graphics_mode": selected["graphics_mode"],
         "color_override": None,
@@ -251,7 +273,8 @@ def _stub(preferences, managed):
         cover_placement="center", cover_rotation_deg=0.0,
         join_style=preferences["join_style"], fillet_radius_m=preferences["fillet_radius_m"],
         flow_arrow_scale=preferences["flow_arrow_scale"], label_layout=preferences["label_layout"],
-        label_width_m=0.0, draw_3d=preferences["draw_3d"])
+        label_width_m=0.0, label_rotation_deg=preferences["label_rotation_deg"],
+        draw_3d=preferences["draw_3d"])
     dialog_preferences = dict(preferences)
     dialog_preferences["dns"] = sorted(set(preferences["dns"] + [preferences["stub_dn_mm"]]))
     options = sewer_ui.pipe_properties_dialog(
@@ -443,7 +466,12 @@ def run(action=None):
             from PD_KanalLeitungMengen import app as quantities_app
             quantities_app.run()
         elif action == "settings":
-            updated, update_scope = sewer_ui.preferences_dialog(preferences)
+            has_channel_objects = bool(
+                sewer_live.objects("sewer_pipe") or
+                sewer_live.objects("sewer_shaft"))
+            updated, update_scope = sewer_ui.preferences_dialog(
+                preferences,
+                _preference_default_scope(managed, has_channel_objects))
             if updated is not None:
                 preferences = sewer_settings.save(updated)
                 sewer_live.ensure_classes(preferences)

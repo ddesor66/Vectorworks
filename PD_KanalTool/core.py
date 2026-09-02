@@ -386,6 +386,8 @@ def build_network(paths, options, existing_shafts=(), next_numbers=None,
                     options.get("flow_arrow_scale", 1.0), "Fließrichtungspfeil-Skalierung"),
                 "label_layout": str(options.get("label_layout", "one_line")),
                 "label_width_m": number(options.get("label_width_m", 0.0), "Beschriftungsbreite"),
+                "label_rotation_deg": number(
+                    options.get("label_rotation_deg", 0.0), "Beschriftungsdrehung") % 360.0,
                 "draw_3d": bool(options.get("draw_3d", True)),
                 "graphics_mode": str(options.get("graphics_mode", "double_line")),
                 "line_type": int(options.get("line_type", 1)),
@@ -461,6 +463,10 @@ def validate_pipe(value):
     result["end_id"] = _identity(result.get("end_id"), "Endschacht")
     if result["start_id"] == result["end_id"]:
         raise SewerError("Eine Kanalstrecke benötigt zwei verschiedene Knoten.")
+    result["name"] = str(result.get("name") or "").strip()
+    if len(result["name"]) > 96 or any(
+            character in result["name"] for character in "\r\n\t"):
+        raise SewerError("Der Haltungsname ist ungültig oder zu lang.")
     result["kind"] = _kind(result.get("kind"))
     result["dn_mm"] = _dn(result.get("dn_mm"))
     supplied_outside = result.get("outside_diameter_mm")
@@ -494,6 +500,18 @@ def validate_pipe(value):
     result["label_width_m"] = number(result.get("label_width_m", 0.0), "Beschriftungsbreite")
     if not 0.0 <= result["label_width_m"] <= 100.0:
         raise SewerError("Beschriftungsbreite muss zwischen 0,00 m und 100,00 m liegen.")
+    result["label_rotation_deg"] = number(
+        result.get("label_rotation_deg", 0.0), "Beschriftungsdrehung") % 360.0
+    # A holding may consist of several geometric pipe segments, for example
+    # when a branch fitting splits an otherwise continuous main pipe.  The
+    # engineering lengths stay on the individual segments while these two
+    # fields control the single plan label for the complete holding.
+    result["label_suppressed"] = bool(result.get("label_suppressed", False))
+    label_length = result.get("label_length_m")
+    result["label_length_m"] = (
+        None if label_length is None else number(label_length, "Beschriftete Haltungslänge"))
+    if result["label_length_m"] is not None and result["label_length_m"] <= 1e-6:
+        raise SewerError("Die beschriftete Haltungslänge muss größer als null sein.")
     result["join_style"] = str(result.get("join_style", "round"))
     if result["join_style"] not in ("round", "bevel", "miter"):
         raise SewerError("Ungültige Eckverbindung.")
@@ -523,6 +541,38 @@ def validate_pipe(value):
     return result
 
 
+def holding_name(pipe, shafts, pipes=()):
+    """Return ``H-<downstream shaft name>`` along the stored flow direction."""
+    current_pipe = validate_pipe(pipe)
+    shaft_map = {
+        value["id"]: validate_shaft(value, allow_hidden=True)
+        for value in shafts
+    }
+    pipe_values = [validate_pipe(value) for value in pipes]
+    current_id = current_pipe["end_id"]
+    visited = {current_pipe["id"]}
+    while current_id:
+        downstream = shaft_map.get(current_id)
+        if (downstream and downstream.get("visible", True) and
+                downstream.get("structure_type") not in ("junction", "stub") and
+                downstream.get("name")):
+            return "H-" + downstream["name"]
+        following = sorted(
+            (value for value in pipe_values
+             if value["start_id"] == current_id and value["id"] not in visited),
+            key=lambda value: value["id"])
+        if len(following) != 1:
+            break
+        current_pipe = following[0]
+        visited.add(current_pipe["id"])
+        current_id = current_pipe["end_id"]
+    # Existing documents may contain a still unnamed hidden terminal.  Keep a
+    # stable unique fallback until a visible downstream shaft is available.
+    if current_pipe.get("name"):
+        return current_pipe["name"]
+    return "H-" + str(current_id or current_pipe["end_id"])
+
+
 def pipe_flow_reversal_required(pipe, tolerance=1e-9):
     """Return whether the physical endpoint elevations require reverse flow."""
     if not isinstance(pipe, dict):
@@ -548,6 +598,51 @@ def orient_pipe_downhill(pipe):
         result["start_invert_m"], result["end_invert_m"] = (
             result.get("end_invert_m"), result.get("start_invert_m"))
     return validate_pipe(result), reversed_flow
+
+
+def _validate_station_reference(value, label):
+    """Validate the persisted link from a holding connection to its main."""
+    if not isinstance(value, dict):
+        raise SewerError("Daten der %s fehlen." % label)
+    main_start_id = str(value.get("main_start_id") or "").strip()
+    main_end_id = str(value.get("main_end_id") or "").strip()
+    main_pipe_ids = tuple(str(identity or "").strip()
+                          for identity in value.get("main_pipe_ids", ()))
+    if any(not identity for identity in main_pipe_ids):
+        raise SewerError("Ungültige Hauptleitungsreferenz der %s." % label)
+    station_pipe_ids = tuple(str(identity or "").strip()
+                             for identity in value.get(
+                                 "station_pipe_ids", main_pipe_ids))
+    if any(not identity for identity in station_pipe_ids):
+        raise SewerError("Ungültige Achsenreferenz der %s." % label)
+    enabled = bool(value.get(
+        "station_enabled", bool(main_start_id and main_end_id and main_pipe_ids)))
+    if enabled and (not main_start_id or not main_end_id or
+                    len(main_pipe_ids) != 2 or len(station_pipe_ids) < 2):
+        raise SewerError("Die %s ist nicht vollständig verknüpft." % label)
+    station_m = value.get("station_m")
+    if station_m is not None:
+        station_m = number(station_m, "Station der %s" % label)
+        if station_m < 0.0:
+            raise SewerError("Die Station der %s darf nicht negativ sein." % label)
+    basis = str(value.get("station_basis") or "")
+    if basis not in ("", "lower_invert", "equal_invert_end"):
+        raise SewerError("Ungültige Bezugsregel der %s." % label)
+    zero_name = str(value.get("station_zero_name") or "").strip()
+    if len(zero_name) > 64 or any(character in zero_name for character in "\r\n\t"):
+        raise SewerError("Ungültige Bezeichnung des Stationierungsnullpunkts.")
+    return {
+        "station_enabled": enabled,
+        "main_start_id": main_start_id,
+        "main_end_id": main_end_id,
+        "main_pipe_ids": list(main_pipe_ids),
+        "station_pipe_ids": list(station_pipe_ids),
+        "station_m": station_m,
+        "station_zero_id": str(value.get("station_zero_id") or "").strip(),
+        "station_zero_name": zero_name,
+        "station_equal_inverts": bool(value.get("station_equal_inverts", False)),
+        "station_basis": basis,
+    }
 
 
 def validate_shaft(value, allow_hidden=False):
@@ -627,46 +722,21 @@ def validate_shaft(value, allow_hidden=False):
     if result["structure_type"] == "stub":
         if not isinstance(stub, dict):
             raise SewerError("Daten des Kanalstutzens fehlen.")
-        main_start_id = str(stub.get("main_start_id") or "").strip()
-        main_end_id = str(stub.get("main_end_id") or "").strip()
-        main_pipe_ids = tuple(str(value or "").strip()
-                              for value in stub.get("main_pipe_ids", ()))
-        if any(not value for value in main_pipe_ids):
-            raise SewerError("Ungültige Hauptleitungsreferenz am Kanalstutzen.")
-        station_enabled = bool(stub.get(
-            "station_enabled", bool(main_start_id and main_end_id and main_pipe_ids)))
-        if station_enabled and (not main_start_id or not main_end_id or len(main_pipe_ids) != 2):
-            raise SewerError("Die Stationierung des Kanalstutzens ist nicht vollständig verknüpft.")
-        station_m = stub.get("station_m")
-        if station_m is not None:
-            station_m = number(station_m, "Station des Kanalstutzens")
-            if station_m < 0.0:
-                raise SewerError("Die Station des Kanalstutzens darf nicht negativ sein.")
-        station_basis = str(stub.get("station_basis") or "")
-        if station_basis not in ("", "lower_invert", "equal_invert_end"):
-            raise SewerError("Ungültige Bezugsregel der Stutzenstationierung.")
-        station_zero_name = str(stub.get("station_zero_name") or "").strip()
-        if len(station_zero_name) > 64 or any(
-                character in station_zero_name for character in "\r\n\t"):
-            raise SewerError("Ungültige Bezeichnung des Stationierungsnullpunkts.")
+        station = _validate_station_reference(stub, "Stationierung des Kanalstutzens")
         result["stub"] = {
             "alignment": str(stub.get("alignment", "invert")),
             "main_dn_mm": _dn(stub.get("main_dn_mm")),
             "branch_dn_mm": _dn(stub.get("branch_dn_mm")),
             "connection_invert_m": number(stub.get("connection_invert_m"), "Anschlusshöhe"),
-            "station_enabled": station_enabled,
-            "main_start_id": main_start_id,
-            "main_end_id": main_end_id,
-            "main_pipe_ids": list(main_pipe_ids),
-            "station_m": station_m,
-            "station_zero_id": str(stub.get("station_zero_id") or "").strip(),
-            "station_zero_name": station_zero_name,
-            "station_equal_inverts": bool(stub.get("station_equal_inverts", False)),
-            "station_basis": station_basis,
+            **station,
         }
         connection_alignment_label(result["stub"]["alignment"])
     else:
         result["stub"] = None
+    connection_station = result.get("connection_station")
+    result["connection_station"] = (
+        _validate_station_reference(connection_station, "Anschlussstationierung")
+        if connection_station is not None else None)
     drops = []
     for value in result.get("drops", ()):
         if not isinstance(value, dict):
@@ -891,11 +961,17 @@ def readable_line_angle(dx, dy):
 
 def pipe_label(pipe, preferences):
     pipe = validate_pipe(pipe)
+    if pipe.get("label_suppressed", False):
+        return ""
     slope = format_number(pipe["slope_percent"], preferences["slope_decimals"])
-    length = format_number(pipe["length_m"], preferences["length_decimals"])
+    length = format_number(
+        pipe.get("label_length_m") or pipe["length_m"], preferences["length_decimals"])
     first = "%s %% | %s m" % (slope, length)
     second = "DN %d %s" % (pipe["dn_mm"], pipe["material"])
-    return first + ("\n" if pipe["label_layout"] == "two_line" else " | ") + second
+    technical = first + ("\n" if pipe["label_layout"] == "two_line" else " | ") + second
+    if preferences.get("pipe_name_visible", True) and pipe["name"]:
+        return pipe["name"] + " | " + technical
+    return technical
 
 
 def connection_plan_name(role, tag, role_count):
@@ -913,6 +989,17 @@ def shaft_label(shaft, endpoint_rows, preferences):
         return ""
     def height(value):
         return format_number(value, preferences["height_decimals"])
+    def station_text(reference):
+        if not reference or not reference.get("station_enabled") or reference.get(
+                "station_m") is None:
+            return ""
+        zero = (reference.get("station_zero_name") or
+                reference.get("station_zero_id") or "Endschacht")
+        text = "Station = %s m ab %s" % (
+            format_number(reference["station_m"], preferences["length_decimals"]), zero)
+        if reference.get("station_equal_inverts"):
+            text += " (gleichsohlig: Fließ-/Objektrichtung)"
+        return text
     detailed = bool(endpoint_rows and isinstance(endpoint_rows[0], dict))
     if detailed:
         rows = []
@@ -941,12 +1028,8 @@ def shaft_label(shaft, endpoint_rows, preferences):
         lines = ["Stutzen DN %d" % stub["branch_dn_mm"],
                  connection_alignment_label(stub["alignment"]),
                  "Anschluss KS = %s m" % height(stub["connection_invert_m"])]
-        if stub.get("station_enabled") and stub.get("station_m") is not None:
-            zero = stub.get("station_zero_name") or stub.get("station_zero_id") or "Endschacht"
-            station = "Station = %s m ab %s" % (
-                format_number(stub["station_m"], preferences["length_decimals"]), zero)
-            if stub.get("station_equal_inverts"):
-                station += " (gleichsohlig: Fließ-/Objektrichtung)"
+        station = station_text(stub)
+        if station:
             lines.append(station)
         return "\n".join(lines)
     if shaft["structure_type"] == "floor_drain":
@@ -957,19 +1040,28 @@ def shaft_label(shaft, endpoint_rows, preferences):
     if shaft["diameter_m"] == 0.0:
         if detailed:
             if len(rows) == 1:
-                return "KS = %s m" % height(rows[0]["height"])
-            return "\n".join(
+                lines = ["KS = %s m" % height(rows[0]["height"])]
+            else:
+                lines = [
                 "%s %s | KS = %s m" %
                 (row["tag"], row["role_label"], height(row["height"]))
-                for row in rows)
-        values = incoming + [value for value in outgoing if value not in incoming]
-        return "KS = %s m" % height(min(values) if values else shaft["ks_m"])
+                for row in rows]
+        else:
+            values = incoming + [value for value in outgoing if value not in incoming]
+            lines = ["KS = %s m" % height(min(values) if values else shaft["ks_m"])]
+        station = station_text(shaft.get("connection_station"))
+        if station:
+            lines.append(station)
+        return "\n".join(lines)
     depth = format_number(shaft["kd_m"] - shaft["ks_m"], preferences["length_decimals"])
     lines = [shaft["name"], "Bauart: %s" % shaft["construction_label"]]
     if shaft["structure_type"] != "special":
         diameter = format_number(shaft["diameter_m"], preferences["length_decimals"])
         lines.append("D.= %s m" % diameter)
     lines.append("KD = %s m" % height(shaft["kd_m"]))
+    station = station_text(shaft.get("connection_station"))
+    if station:
+        lines.append(station)
     if detailed:
         # Connection rows are useful only where the displayed elevations
         # differ. Tags such as Z1/A1 are reserved for multiple connections of

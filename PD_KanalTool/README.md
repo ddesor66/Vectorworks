@@ -1,4 +1,4 @@
-# PD Kanaltool 1.1.1
+# PD Kanaltool 1.1.2
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und
@@ -38,6 +38,13 @@ greift nicht in das Datenmodell oder die Bedienoberfläche des Gefälletools ein
 - Ein neuer Kanalstrang kann an einer markierten Haltung oder direkt an einem
   markierten Schacht beginnen. Die grafische Auswahl ist auch ohne
   Vorselektion möglich.
+- Ein einzelner markierter Schacht öffnet seinen vollständigen Eigenschaftsdialog.
+  Bei mehreren markierten runden Schächten oder Sonderschächten werden dieselben
+  vollständigen Dialoge nacheinander geöffnet und erst anschließend gemeinsam
+  übernommen. Damit bleiben Namen und Höhen individuell, während Durchmesser,
+  Bauart/Material, Wandstärke, Schachtdeckel, Zusatztext und alle übrigen
+  Schachtwerte gezielt je Schacht geändert werden können. Angeschlossene
+  Haltungen und Beschriftungen werden danach automatisch neu aufgebaut.
 
 ## Kanalhaltungen
 
@@ -55,12 +62,25 @@ Gefälle, DN, Material, Ausrundungsradius und ein- oder zweizeilige
 Beschriftungen bleiben über das Kanalobjekt editierbar. Die 3D-Rohrachse liegt
 einen halben DN über der Sohle.
 
+Jede Haltung erhält automatisch den Namen `H-<unterer Schachtname>`, zum
+Beispiel `H-RW.003`. Maßgebend ist der in gespeicherter Fließrichtung tiefer
+liegende Schacht; unsichtbare Zwischenknoten werden bis zum nächsten sichtbaren
+Schacht durchlaufen. Nach einer bestätigten Fließrichtungsänderung oder einer
+Umbenennung des unteren Schachts wird der Haltungsname automatisch erneuert.
+Anzeige und Schriftgröße des Haltungsnamens sind in den Voreinstellungen unter
+`Beschriftung` unabhängig voneinander einstellbar.
+
 Die Voreinstellungen sind in die kompakten Register `Kataloge und Farben`,
-`Darstellung` sowie `Schächte und Schachtdeckel` gegliedert. Beim Speichern kann
+`Darstellung`, `Beschriftung` sowie `Schächte und Schachtdeckel` gegliedert. Beim Speichern kann
 gezielt gewählt werden, ob die Vorgaben nur für neue Objekte, für die aktuelle
 Markierung, für die vollständigen verbundenen Kanalsysteme der Markierung oder
 für alle Kanalobjekte der Zeichnung gelten. Eine Bestandsaktualisierung erhält
-Sohlhöhen, Schachtnamen, DN, Material, Lage und individuelle Farben.
+Sohlhöhen, Schachtnamen, DN, Material, Lage und individuelle Farben. Ist bereits
+eine Haltung markiert, wird deren Aktualisierung vorausgewählt; bei einer reinen
+Schachtmarkierung das verbundene Kanalsystem und ohne Markierung wird bei einem
+vorhandenen Kanalnetz die gesamte Zeichnung vorausgewählt. Damit
+wird ein Wechsel auf Einliniengrafik beim Speichern sofort sichtbar. Die reine
+Voreinstellung für nur neu zu zeichnende Objekte bleibt ausdrücklich wählbar.
 
 Für den Schachtnamen sind eine eigene Schriftgröße und die Stile `Normal`,
 `Fett`, `Unterstrichen` und `Fett und unterstrichen` wählbar. Nur die erste
@@ -81,14 +101,25 @@ Anschlusslage. Die neue Anschlussleitung hat standardmäßig DN 150, ist
 änderbar und kann sohl-, achs-, kämpfer- oder scheitelgleich angeschlossen
 werden. Die daraus berechnete Anschlusshöhe wird beschriftet. Die Hauptleitung
 wird transaktional in zwei Resthaltungen geteilt; die überlagerte alte Haltung
-wird erst nach erfolgreichem Aufbau gelöscht.
+wird erst nach erfolgreichem Aufbau und mit anschließender Löschkontrolle
+entfernt. Die beiden geometrischen Restsegmente erhalten zusammen nur eine
+Beschriftung mit der Gesamtlänge. Dasselbe gilt für eine aus mehreren
+Knicksegmenten bestehende Abzweigleitung; die ein- oder zweizeilige Darstellung
+wird aus den Haltungseinstellungen übernommen. Im 3D verbindet ein durchgängiges
+T-/Y-Formstück beide Hauptleitungsseiten mit dem höhengerecht angesetzten
+Abzweig, sodass keine offenen oder losgelösten Rohrstücke verbleiben.
 
-Jeder neu erzeugte Kanalstutzen erhält automatisch eine Station. Nullpunkt ist
-der Bezugspunkt des Schachts mit der tieferen Hauptleitungssohle; bei gleicher
-Sohle gilt reproduzierbar der Endschacht der gespeicherten Fließ- bzw.
-Objektrichtung. Gemessen wird entlang der zugehörigen Hauptleitungsachse bis
-zum Stutzen. Stationswert und Nullpunktschacht stehen in der
-Stutzenbeschriftung und werden nach Lage- oder Höhenänderungen neu berechnet.
+Jeder neu erzeugte Anschluss auf einer vorhandenen Haltung erhält automatisch
+eine Station. Das gilt für normale Abzweige, Kanalstutzen, Hausanschlüsse und
+Bodenabläufe. Nullpunkt ist der Bezugspunkt des Schachts mit der tieferen
+Hauptleitungssohle; bei gleicher Sohle gilt reproduzierbar der Endschacht der
+gespeicherten Fließ- bzw. Objektrichtung. Gemessen wird entlang der zugehörigen
+Hauptleitungsachse bis zum Anschluss. Stationswert und Nullpunktschacht stehen
+in der Anschlussbeschriftung, werden nach Lage- oder Höhenänderungen neu
+berechnet und bleiben nach einem späteren Teilen der Haltung verknüpft. Die
+Achse wird bis zu den aktuell begrenzenden sichtbaren Schächten neu aufgebaut;
+damit werden auch ältere Stutzendaten und später eingefügte Schächte korrekt
+berücksichtigt.
 
 Beim Hausanschluss ist die Höhe des freien Endpunkts zwingend anzugeben. Beim
 Bodenablauf kann die Oberkante eingegeben oder von der Deckelhöhe des nächsten
@@ -97,6 +128,13 @@ Schachts übernommen werden. Ohne Bibliothekssymbol entsteht in 2D ein
 änderbar. Bei einem reinen 2D-Symbol wird der Ersatzkasten zusätzlich erzeugt,
 bei einem Hybrid-/3D-Symbol kann er abgeschaltet werden. Die Leitung beginnt an
 der Unterkante des Ablaufs und fällt gleichmäßig zur Hauptleitung.
+Hausanschluss- und Bodenablaufleitungen erhalten unabhängig von ihrer Anzahl
+an Knicken genau eine gemeinsame Leitungsbeschriftung. Die Einstellung für
+eine oder zwei Zeilen und die numerische Beschriftungsdrehung gelten für die
+komplette Leitung. Die Drehung ist im Dialog `Kanalstrecke bearbeiten`
+dauerhaft einstellbar. Zusätzlich kann die Beschriftung mit dem normalen
+Vectorworks-Drehwerkzeug frei gedreht werden; diese grafische Drehung bleibt
+beim gewöhnlichen Aktualisieren desselben Beschriftungsobjekts erhalten.
 
 ## Schächte und Sonderbauwerke
 
@@ -110,10 +148,16 @@ dann an der tatsächlichen Kontur; in der Beschriftung entfällt der runde
 Schachtdurchmesser.
 
 `Absturz vor Schacht` speichert und beschriftet die obere Sohle der
-ankommenden Haltung sowie die Unterkante der Absturzleitung. Wird ein Schacht
+ankommenden Haltung sowie die Unterkante der Absturzleitung. Eine Nullhöhe wird
+vor dem Speichern abgewiesen. In 3D entsteht eine zusammenhängende Baugruppe
+aus oberem Anschlussarm, senkrechtem Fallrohr und unterem Anschlussarm zum
+Schacht; wiederholtes Bearbeiten ersetzt den vorhandenen Absturz derselben
+Haltung. Wird ein Schacht
 in eine Haltung eingesetzt, wird die darunterliegende Haltung entfernt und in
 zwei sauber am Schacht endende Resthaltungen aufgeteilt. Beschriftungen,
-Fließrichtungspfeile und 3D-Rohre werden dabei gemeinsam neu aufgebaut.
+Fließrichtungspfeile und 3D-Rohre werden dabei gemeinsam neu aufgebaut. Die
+ursprüngliche Haltung wird erst nach dem vollständigen Ersatz gelöscht; ihr
+Verschwinden und das Löschen ihrer Beschriftung werden anschließend geprüft.
 
 Jede angeschlossene Haltung wird am Schacht als eigener Anschluss geführt.
 Die stabile Anschlussidentität besteht aus Haltungs-ID und Endpunkt; DN,

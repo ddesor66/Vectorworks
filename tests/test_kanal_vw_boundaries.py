@@ -52,6 +52,26 @@ class PageAPI(object):
                 self.values[(layer, 166)] / 0.0254)
 
 
+class DeleteAPI(object):
+    def __init__(self, keep_owner=False, keep_label=False):
+        self.objects = {"PIPE": "PIPE", "LABEL": "LABEL"}
+        self.keep_owner = bool(keep_owner)
+        self.keep_label = bool(keep_label)
+
+    def GetName(self, handle):
+        return str(handle)
+
+    def GetObject(self, name):
+        return self.objects.get(str(name))
+
+    def DelObject(self, handle):
+        if str(handle) == "PIPE" and self.keep_owner:
+            return
+        if str(handle) == "LABEL" and self.keep_label:
+            return
+        self.objects.pop(str(handle), None)
+
+
 class VectorworksBoundaryTests(unittest.TestCase):
     def test_track_object_none_is_a_clean_cancel(self):
         api = TrackAPI(None)
@@ -78,6 +98,26 @@ class VectorworksBoundaryTests(unittest.TestCase):
         self.assertEqual(
             {165, 166},
             {selector for layer, selector in api.values if layer == "LAYER"})
+
+    def test_verified_replacement_delete_removes_pipe_and_label(self):
+        api = DeleteAPI()
+        live = load_module(api, "PD_KanalTool.live")
+        live._delete_with_labels("PIPE", {"labels": ["LABEL"]}, verify=True)
+        self.assertEqual({}, api.objects)
+
+    def test_verified_replacement_delete_rejects_remaining_old_pipe(self):
+        api = DeleteAPI(keep_owner=True)
+        live = load_module(api, "PD_KanalTool.live")
+        with self.assertRaisesRegex(Exception, "konnte nicht gelöscht werden"):
+            live._delete_with_labels("PIPE", {"labels": ["LABEL"]}, verify=True)
+        self.assertEqual({"PIPE": "PIPE", "LABEL": "LABEL"}, api.objects)
+
+    def test_verified_replacement_delete_reports_remaining_old_label(self):
+        api = DeleteAPI(keep_label=True)
+        live = load_module(api, "PD_KanalTool.live")
+        with self.assertRaisesRegex(Exception, "LABEL$"):
+            live._delete_with_labels("PIPE", {"labels": ["LABEL"]}, verify=True)
+        self.assertNotIn("PIPE", api.objects)
 
 
 if __name__ == "__main__":

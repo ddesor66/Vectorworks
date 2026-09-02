@@ -100,6 +100,23 @@ class KanalOIPTests(unittest.TestCase):
         self.assertEqual(0, api.deselected)
         self.assertEqual(["TARGET"], api.selected)
 
+    def test_edit_button_preserves_multi_shaft_selection_and_uses_dispatcher(self):
+        api = OIPAPI(event=35)
+        events = load_events(api)
+        api.button = events.EDIT
+        events.owner = lambda _handle: ("TARGET", {"role": "sewer_shaft"})
+        events.live.selected_managed = lambda: (
+            ("TARGET", {"role": "sewer_shaft"}),
+            ("SECOND", {"role": "sewer_shaft"}),
+        )
+        actions = []
+        events.app.run = lambda action=None: actions.append(action)
+        events.run()
+        self.assertEqual(["edit"], actions)
+        self.assertEqual(0, api.deselected)
+        self.assertEqual([], api.selected)
+        self.assertEqual(0, api.result)
+
 
 if __name__ == "__main__":
     unittest.main()

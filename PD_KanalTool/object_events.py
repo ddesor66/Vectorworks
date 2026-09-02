@@ -73,12 +73,12 @@ def run():
             selected = [row_handle for row_handle, _row_data in live.selected_managed()]
             selected_names = {str(vs.GetName(row_handle) or "") for row_handle in selected}
             if str(vs.GetName(target) or "") not in selected_names:
-                selected.append(target)
-            changed = live.edit_network_chain(tuple(selected), settings.load())
-            if changed:
-                from PD_KanalLeitungMengen import reporting as quantity_reporting
-                quantity_reporting.refresh_existing(force=True)
-            vs.vsoSetEventResult(0 if changed else -5)
+                vs.SetSelect(target)
+            # Route through the normal command dispatcher.  It opens the full
+            # object editor for one shaft, the staged full editors for several
+            # shafts, and the chain editor only for pipe/mixed selections.
+            app.run("edit")
+            vs.vsoSetEventResult(0)
             return
         # Multi-object commands keep the current document selection. All
         # other buttons operate solely on the OIP owner to avoid accidental
