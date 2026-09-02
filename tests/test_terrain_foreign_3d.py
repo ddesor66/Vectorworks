@@ -153,6 +153,11 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual(6059, adapter.selected_object_count())
         self.assertEqual("(SEL=TRUE)", fake.count_criteria)
 
+    def test_layer_criterion_escapes_apostrophes(self):
+        fake = FakeVS()
+        adapter = load_adapter(fake)
+        self.assertEqual("Import''DGM", adapter._criterion_literal("Import'DGM"))
+
     def test_imported_arc_uses_direct_geometry_fallback(self):
         fake = FakeVS()
         fake.types["arc"] = 6

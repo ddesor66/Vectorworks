@@ -43,7 +43,7 @@ OUTPUT_FIELD = "Daten"
 CLASS_SOURCE_POINT = "PD-GB-Quelldaten-Punkt"
 CLASS_SOURCE_LINE = "PD-GB-Quelldaten-Bruchkante"
 COLOR_SOURCE_POINT = (0, 50000, 0)
-COLOR_SOURCE_LINE = (0, 35000, 55000)
+COLOR_SOURCE_LINE = (0, 60000, 12000)
 TEXT_NUMBER = re.compile(r"(?<![0-9.,])[-+]?\d+(?:[.,]\d+)?(?![0-9.,])")
 CLASS_PIT = "PD-GB-Baugrube"
 CLASS_SLOPE = "PD-GB-Boeschung"
@@ -595,6 +595,10 @@ def _unique_name(base):
     return "%s-%d" % (base, index)
 
 
+def _criterion_literal(value):
+    return str(value or "").replace("'", "''")
+
+
 def _record(name, field):
     if not vs.GetObject(name):
         vs.NewField(name, field, "", 4, 0)
@@ -673,16 +677,52 @@ def create_source_layer(review, layer_name="PD-GB-Quelldaten"):
                 vs.SetFPat(handle, 0)
                 vs.SetClass(handle, CLASS_SOURCE_LINE)
                 vs.SetPenFore(handle, COLOR_SOURCE_LINE)
-                vs.SetLW(handle, 20)
+                vs.SetLW(handle, 40)
         if len(created) != review["usable_count"]:
             raise core.TerrainError("Nicht alle Quelldaten wurden erzeugt.")
         vs.DSelectAll()
-        for handle in created:
-            vs.SetSelect(handle)
+        layer_value = _criterion_literal(target_name)
+        layer_criterion = "(L='%s')" % layer_value
+        try:
+            # Native criteria selection avoids losing objects in a long
+            # Python SetSelect loop and is the selection used by the DGM step.
+            vs.SelectObj(layer_criterion)
+        except (AttributeError, TypeError):
+            for handle in created:
+                vs.SetSelect(handle)
+        expected_points = sum(1 for value in review["usable"]
+                              if value["kind"] == "point")
+        expected_lines = review["usable_count"] - expected_points
+        try:
+            actual_points = int(vs.Count(
+                "((L='%s') & (T=%d))" % (layer_value, TYPE_LOCUS_3D)) or 0)
+            actual_lines = int(vs.Count(
+                "((L='%s') & (T=%d))" % (layer_value, TYPE_POLYGON_3D)) or 0)
+            actual_selected = int(vs.Count(
+                "((L='%s') & (SEL=TRUE))" % layer_value) or 0)
+            selection_verified = True
+        except (AttributeError, TypeError, ValueError):
+            actual_points = expected_points
+            actual_lines = expected_lines
+            actual_selected = sum(1 for handle in created if vs.Selected(handle))
+            selection_verified = False
+        if actual_points != expected_points or actual_lines != expected_lines:
+            raise core.TerrainError(
+                "Die grafische Ausgabe ist unvollständig: erwartet %d Punkte und %d Linien, "
+                "gefunden %d Punkte und %d Linien."
+                % (expected_points, expected_lines, actual_points, actual_lines))
+        if selection_verified and actual_selected != len(created):
+            raise core.TerrainError(
+                "Die Ausgabe wurde erzeugt, aber nur %d von %d Quellobjekten tatsächlich markiert."
+                % (actual_selected, len(created)))
+        verification = {
+            "points": actual_points, "lines": actual_lines,
+            "selected": actual_selected, "selection_verified": selection_verified,
+        }
         vs.NameUndoEvent("PD Gelände-Quelldaten vorbereiten")
         vs.ReDrawAll()
         completed = True
-        return target_name, tuple(created)
+        return target_name, tuple(created), verification
     except Exception:
         for handle in created:
             if handle:

@@ -98,17 +98,21 @@ def _preview_sources(options):
     if not adapter.confirm(message + "\n\nQuelldaten-Ebene jetzt erzeugen?",
                            "Originalobjekte werden weder verändert noch gelöscht."):
         return
-    layer_name, created = adapter.create_source_layer(review, options["layer_name"])
+    layer_name, created, verification = adapter.create_source_layer(
+        review, options["layer_name"])
     model_class = adapter.ensure_class(options["model_class"])
     adapter.alert(
         "%d geprüfte 3D-Quellobjekte wurden auf der aktiven Ebene „%s“ angelegt, "
-        "sichtbar eingefärbt und markiert.\n\n"
+        "sichtbar eingefärbt und markiert.\n"
+        "Tatsächlich auf der Zielebene gezählt: %d Punkte, %d Bruchkanten; "
+        "%d Objekte markiert.\n\n"
         "Nächster nativer Vectorworks-Schritt: Landschaft > Geländemodell > "
         "Geländemodell aus Ausgangsdaten. Dieser Befehl ist über die geprüfte Python-API "
         "nicht belastbar automatisierbar.\n\n"
         "Vorgaben für den nativen Dialog:\nName: %s\nKlasse: %s\n"
         "Höhenlinien-Äquidistanz: %.3f m\nHöheneinheit der Modulauswertung: Meter."
-        % (len(created), layer_name, options["model_name"], model_class,
+        % (len(created), layer_name, verification["points"], verification["lines"],
+           verification["selected"], options["model_name"], model_class,
            options["contour_interval_m"]))
 
 
