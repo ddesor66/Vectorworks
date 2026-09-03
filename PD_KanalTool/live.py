@@ -1055,11 +1055,12 @@ def split_selected(handle, point_m, preferences):
     """Split one selected pipe at an interior click and add a connected shaft."""
     data = _live().data_of(handle)
     pipe = read_pipe(handle, data)
-    (_start_handle, start), (_end_handle, end) = _endpoints(pipe)
+    (start_handle, start), (end_handle, end) = _endpoints(pipe)
     fraction, xy = core.project_on_pipe(
         (start["x_m"], start["y_m"]), (end["x_m"], end["y_m"]), point_m)
     shaft_id = str(uuid.uuid4())
-    first, second = core.split_pipe(pipe, shaft_id, fraction)
+    first, second = core.split_pipe(
+        pipe, shaft_id, fraction, preserve_first_identity=True)
     stub_updates = _stub_reference_updates(pipe, first, second)
     ks_m = first["end_invert_m"]
     next_number = _next_numbers()[pipe["kind"]]
@@ -1084,16 +1085,26 @@ def split_selected(handle, point_m, preferences):
     core.validate_network(prospective_pipes, prospective_shafts)
     vs.NameUndoEvent("PD Kanalstrecke teilen")
     created = []
-    old_owner_name = _name(handle)
+    owner_snapshot = copy.deepcopy(data)
+    original_endpoint_handles = {
+        pipe["start_id"]: start_handle, pipe["end_id"]: end_handle}
+    owner_mutated = False
     snapshots = {existing_handle: copy.deepcopy(_live().data_of(existing_handle))
                  for existing_handle in stub_updates}
     try:
         shaft_handle = _new_object(xy, "sewer_shaft", shaft, preferences, created)
-        pipe_handles = []
-        for value in (first, second):
-            new_handle = _new_object((0.0, 0.0), "sewer_pipe", value, preferences, created)
-            pipe_handles.append(new_handle)
-            _associate_pipe(new_handle, value)
+        pipe_handles = [handle]
+        new_handle = _new_object(
+            (0.0, 0.0), "sewer_pipe", second, preferences, created)
+        pipe_handles.append(new_handle)
+        _associate_pipe(new_handle, second)
+        owner_mutated = True
+        _detach_pipe_endpoint_associations(handle, owner_snapshot)
+        _live().write_data(handle, dict(
+            owner_snapshot, pipe=first,
+            preferences=copy.deepcopy(preferences)))
+        _sync_pipe_associations(handle, first, {
+            first["start_id"]: start_handle, first["end_id"]: shaft_handle})
         for owner in (shaft_handle,) + tuple(pipe_handles):
             ensure_label(owner, _live().data_of(owner), created)
         for existing_handle, value in stub_updates.items():
@@ -1102,24 +1113,20 @@ def split_selected(handle, point_m, preferences):
                 preferences=copy.deepcopy(preferences)))
         for created_handle in created:
             _reset_checked(created_handle)
+        _reset_checked(handle)
         for existing_handle in stub_updates:
             _reset_checked(existing_handle)
-        # Delete only after every replacement is valid, but keep the deletion
-        # inside the guarded transaction.  The name lookup proves that the old
-        # parametric holding and its labels no longer overlap the replacements.
-        _delete_with_labels(handle, data, verify=True)
     except Exception:
-        # A verified deletion failure keeps or restores the complete old
-        # owner, so the new objects can be discarded without losing geometry.
-        # If the native host removed the owner before a later error, preserve
-        # the complete replacement instead of losing both versions.
-        if not old_owner_name or vs.GetObject(old_owner_name):
-            for existing_handle, snapshot in snapshots.items():
-                _live().write_data(existing_handle, snapshot)
-                vs.ResetObject(existing_handle)
-            for created_handle in reversed(created):
-                if created_handle:
-                    vs.DelObject(created_handle)
+        if owner_mutated:
+            _live().write_data(handle, owner_snapshot)
+            _sync_pipe_associations(handle, pipe, original_endpoint_handles)
+            vs.ResetObject(handle)
+        for existing_handle, snapshot in snapshots.items():
+            _live().write_data(existing_handle, snapshot)
+            vs.ResetObject(existing_handle)
+        for created_handle in reversed(created):
+            if created_handle:
+                vs.DelObject(created_handle)
         raise
     vs.DSelectAll()
     for pipe_handle in pipe_handles:
@@ -1132,14 +1139,15 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
     """Split one pipe and add a height-matched branch in one transaction."""
     data = _live().data_of(handle)
     original = read_pipe(handle, data)
-    (_start_handle, start), (_end_handle, end) = _endpoints(original)
+    (start_handle, start), (end_handle, end) = _endpoints(original)
     fraction, xy = core.project_on_pipe(
         (start["x_m"], start["y_m"]), (end["x_m"], end["y_m"]), point_m)
     paths = tuple(core.path(value) for value in branch_paths)
     if not paths or math.dist(paths[0][0], xy) > 0.001:
         raise core.SewerError("Die neue Leitung beginnt nicht am gewählten Anschlusspunkt.")
     shaft_id = str(uuid.uuid4())
-    first, second = core.split_pipe(original, shaft_id, fraction)
+    first, second = core.split_pipe(
+        original, shaft_id, fraction, preserve_first_identity=True)
     stub_updates = _stub_reference_updates(original, first, second)
     station_reference = _new_connection_station(original, first, second)
     main_connection_invert = first["end_invert_m"]
@@ -1232,7 +1240,11 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
     ensure_classes(preferences)
     vs.NameUndoEvent("PD Leitung an Kanalstrecke anschließen")
     created = []
-    old_owner_name = _name(handle)
+    owner_snapshot = copy.deepcopy(data)
+    original_endpoint_handles = {
+        original["start_id"]: start_handle,
+        original["end_id"]: end_handle}
+    owner_mutated = False
     snapshots = {existing_handle: copy.deepcopy(_live().data_of(existing_handle))
                  for existing_handle in stub_updates}
     try:
@@ -1242,11 +1254,17 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
             new_handle = _new_object((value["x_m"], value["y_m"]), "sewer_shaft",
                                      value, preferences, created)
             shaft_handles[value["id"]] = new_handle
-        pipe_handles = []
-        for value in new_pipes:
+        pipe_handles = [handle]
+        for value in new_pipes[1:]:
             new_handle = _new_object((0.0, 0.0), "sewer_pipe", value, preferences, created)
             pipe_handles.append(new_handle)
             _sync_pipe_associations(new_handle, value, shaft_handles)
+        owner_mutated = True
+        _detach_pipe_endpoint_associations(handle, owner_snapshot)
+        _live().write_data(handle, dict(
+            owner_snapshot, pipe=first,
+            preferences=copy.deepcopy(preferences)))
+        _sync_pipe_associations(handle, first, shaft_handles)
         owners = [shaft_handles[value["id"]] for value in new_shafts if value["visible"]]
         # Every segment owns a label PIO. The label itself decides dynamically
         # whether this segment is the one representative of its complete
@@ -1260,20 +1278,21 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
                 preferences=copy.deepcopy(preferences)))
         for created_handle in created:
             _reset_checked(created_handle)
+        _reset_checked(handle)
         for existing_handle in stub_updates:
             _reset_checked(existing_handle)
-        # The original must disappear before the transaction is accepted.
-        # This prevents the duplicated main holding reported for branch and
-        # stub connections.
-        _delete_with_labels(handle, data, verify=True)
     except Exception:
-        if not old_owner_name or vs.GetObject(old_owner_name):
-            for existing_handle, snapshot in snapshots.items():
-                _live().write_data(existing_handle, snapshot)
-                vs.ResetObject(existing_handle)
-            for created_handle in reversed(created):
-                if created_handle:
-                    vs.DelObject(created_handle)
+        if owner_mutated:
+            _live().write_data(handle, owner_snapshot)
+            _sync_pipe_associations(
+                handle, original, original_endpoint_handles)
+            vs.ResetObject(handle)
+        for existing_handle, snapshot in snapshots.items():
+            _live().write_data(existing_handle, snapshot)
+            vs.ResetObject(existing_handle)
+        for created_handle in reversed(created):
+            if created_handle:
+                vs.DelObject(created_handle)
         raise
     for identity in (original["start_id"], original["end_id"]):
         existing_handle = _handle_by_id(core.SHAFT_PREFIX, identity)

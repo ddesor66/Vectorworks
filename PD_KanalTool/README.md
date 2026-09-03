@@ -1,4 +1,4 @@
-# PD Kanaltool 1.3.3
+# PD Kanaltool 1.3.4
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und
@@ -62,6 +62,11 @@ Berechnungen behalten ihre volle Genauigkeit.
   Objektcallback. Eine vorhandene Mengentabelle wird nach dem vollständig
   aufgebauten Kanalnetz nur als veraltet vorgemerkt. Der zeitaufwendige
   Neuaufbau erfolgt erst beim nächsten Öffnen oder Export der Massenermittlung.
+- Beim Anschließen eines neuen Strangs an eine Haltung und beim Einsetzen eines
+  Schachts wird die über die Objekt-Info-Palette aktive Haltung nicht mehr aus
+  ihrem eigenen Plug-in-Callback gelöscht. Ihr erster Teil behält Objekt und
+  Identität; nur der zweite Teil und der neue Anschluss werden ergänzt. Alte
+  Endverknüpfungen werden dabei vollständig auf den Teilungsknoten umgehängt.
 - Ein einzelner markierter Schacht öffnet seinen vollständigen Eigenschaftsdialog.
   Bei mehreren markierten runden Schächten oder Sonderschächten werden dieselben
   vollständigen Dialoge nacheinander geöffnet und erst anschließend gemeinsam

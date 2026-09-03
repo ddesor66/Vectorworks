@@ -427,6 +427,30 @@ class VectorworksBoundaryTests(unittest.TestCase):
         self.assertEqual([], api.associations["END"])
         self.assertEqual([], api.associations["PIPE"])
 
+    def test_reused_active_pipe_moves_association_from_old_end_to_split_node(self):
+        api = DeleteAPI()
+        api.objects.update({
+            "PD-KAN-S-start": "START", "PD-KAN-S-end": "END",
+            "PD-KAN-S-split": "SPLIT"})
+        api.associations = {
+            "START": [(4, "PIPE")], "END": [(4, "PIPE")],
+            "PIPE": [(5, "START"), (5, "END")]}
+        live = load_module(api, "PD_KanalTool.live")
+        original_data = {
+            "schema": live.core.SCHEMA, "role": "sewer_pipe",
+            "pipe": {"start_id": "start", "end_id": "end"},
+            "labels": ["LABEL"],
+        }
+        live._detach_pipe_endpoint_associations("PIPE", original_data)
+        live._sync_pipe_associations(
+            "PIPE", {"start_id": "start", "end_id": "split"},
+            {"start": "START", "split": "SPLIT"})
+        self.assertEqual([(4, "PIPE")], api.associations["START"])
+        self.assertEqual([], api.associations["END"])
+        self.assertEqual([(4, "PIPE")], api.associations["SPLIT"])
+        self.assertEqual([(5, "START"), (5, "SPLIT")],
+                         api.associations["PIPE"])
+
     def test_failed_replacement_restores_both_endpoint_associations(self):
         api = DeleteAPI(keep_owner=True)
         api.objects.update({

@@ -244,6 +244,25 @@ class ShaftConnectionTests(unittest.TestCase):
             first, second, connection_options(), identity_factory=lambda: "p1")
         self.assertAlmostEqual(0.14, core.pipe_axis_offset_m(value))
 
+    def test_split_can_reuse_active_owner_identity(self):
+        first_shaft = shaft("s1", "RW.001", 0.0, 100.0)
+        second_shaft = shaft("s2", "RW.002", 10.0, 99.0)
+        original = core.pipe_between_shafts(
+            first_shaft, second_shaft, connection_options(),
+            identity_factory=lambda: "existing-pipe")
+        first, second = core.split_pipe(
+            original, "new-junction", 0.4,
+            identity_factory=lambda: "new-second-pipe",
+            preserve_first_identity=True)
+        self.assertEqual("existing-pipe", first["id"])
+        self.assertEqual("new-second-pipe", second["id"])
+        self.assertEqual(("s1", "new-junction"),
+                         (first["start_id"], first["end_id"]))
+        self.assertEqual(("new-junction", "s2"),
+                         (second["start_id"], second["end_id"]))
+        self.assertAlmostEqual(original["length_m"],
+                               first["length_m"] + second["length_m"])
+
     def test_network_rejects_duplicate_pipe_ids_and_mixed_endpoint_kind(self):
         first = shaft("s1", "RW.001", 0.0, 100.0)
         second = shaft("s2", "RW.002", 10.0, 99.0)

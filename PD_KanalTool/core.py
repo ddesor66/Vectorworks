@@ -1123,7 +1123,8 @@ def project_on_pipe(start_xy, end_xy, point_xy, tolerance_m=0.25):
     return fraction, projected
 
 
-def split_pipe(pipe, new_shaft_id, fraction, identity_factory=None):
+def split_pipe(pipe, new_shaft_id, fraction, identity_factory=None,
+               preserve_first_identity=False):
     """Split a pipe into two direction-preserving pipes at an interpolated invert."""
     original = validate_pipe(pipe)
     ratio = number(fraction, "Teilungsposition")
@@ -1134,7 +1135,8 @@ def split_pipe(pipe, new_shaft_id, fraction, identity_factory=None):
     middle = original["start_invert_m"] + (
         original["end_invert_m"] - original["start_invert_m"]) * ratio
     first = copy.deepcopy(original)
-    first.update(id=_identity(factory(), "Rohridentität"), end_id=node_id,
+    first_identity = original["id"] if preserve_first_identity else factory()
+    first.update(id=_identity(first_identity, "Rohridentität"), end_id=node_id,
                  end_invert_m=middle, length_m=original["length_m"] * ratio)
     second = copy.deepcopy(original)
     second.update(id=_identity(factory(), "Rohridentität"), start_id=node_id,

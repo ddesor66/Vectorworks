@@ -330,3 +330,14 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   Ereignis- und Verzögerungsregressionen erhöhen den Gesamtumfang nach der
   Zusammenführung mit dem aktuellen Gelände-/Baugrubenstand auf 194
   automatisierte Tests.
+- Kanaltool und gemeinsamer Kanal-/Leitungsaufruf 1.3.4: Das Anschließen eines
+  neuen Kanalstrangs an eine vorhandene Haltung sowie das Einsetzen eines
+  Schachts löschen nicht länger das gerade über die Objekt-Info-Palette aktive
+  Haltungsobjekt aus dessen eigenem Plug-in-Callback. Die vorhandene Haltung
+  wird als erster Teil mit stabiler Identität weiterverwendet; der zweite Teil,
+  der neue Knoten und der Anschluss werden transaktional ergänzt. Dabei werden
+  sämtliche alten Schachtverknüpfungen des wiederverwendeten Objekts entfernt
+  und auf den neuen Teilungsknoten umgehängt. Bei einem Folgefehler werden
+  Ursprungsdaten und ursprüngliche Endverknüpfungen wiederhergestellt. Zwei
+  neue Identitäts- und Verknüpfungstests erhöhen den Gesamtumfang auf 196
+  automatisierte Tests.
