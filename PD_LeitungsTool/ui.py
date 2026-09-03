@@ -154,6 +154,8 @@ def route_dialog(preferences, initial=None, source_count=0):
                 ("Gefüllte Doppellinie mit gestrichelter Achslinie", "double_line"))
     elevation_modes = (("Feste Höhe / Gefälle", "fixed"),
                        ("DGM-Überdeckung, geprüft in Abständen bis 1,00 m", "surface_cover"))
+    label_layouts = (("Eine Zeile", "one_line"),
+                     ("Zwei Zeilen", "two_line"))
     dialog = vs.CreateResizableLayout(
         _title("Leitungstrasse bearbeiten" if editing else "Leitungstrasse anlegen"),
         True, "Übernehmen" if editing else "Zeichnen", "Abbrechen", True, True)
@@ -288,7 +290,6 @@ def route_dialog(preferences, initial=None, source_count=0):
 
     def handler(item, _data):
         if item == INIT:
-            label_layouts = (("Eine Zeile", "one_line"), ("Zwei Zeilen", "two_line"))
             for control, rows in ((13, types), (17, materials),
                                   (27, references), (29, graphics), (41, elevation_modes),
                                   (78, label_layouts)):

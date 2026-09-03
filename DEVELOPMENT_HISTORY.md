@@ -409,3 +409,11 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   geometrisch richtigen Reststück zu. Sechs neue sowie ein erweiterter
   Rechen-, Stations-, System-, 3D- und Verknüpfungstest erhöhen den
   Gesamtumfang auf 224 automatisierte Tests.
+- Leitungstool 1.0.8 und gemeinsamer Kanal-/Leitungsaufruf 1.4.1: Die
+  Werteliste für die ein- oder zweizeilige Leitungsbeschriftung wird jetzt
+  außerhalb des Vectorworks-Dialogcallbacks initialisiert. Damit steht sie
+  sowohl beim Initialisieren als auch beim Bestätigen des Dialogs sicher zur
+  Verfügung; das Zeichnen einer neuen Leitung endet nicht mehr mit
+  `UnboundLocalError: label_layouts`. Ein zusätzlicher Dialogereignistest
+  bildet die reale Reihenfolge aus Initialisierung, Auswahl und Bestätigung
+  nach und erhöht den Gesamtumfang auf 225 automatisierte Tests.

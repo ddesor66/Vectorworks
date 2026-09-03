@@ -3,7 +3,7 @@
 Quellstand der Vectorworks-2026-Plug-ins aus der Gesamtinstallation **1.30.22**.
 
 Der Branch `main` enthält darüber hinaus das weiterentwickelte Kanaltool 1.4.0,
-das Leitungsmodul 1.0.7, das Gefälletool 1.18.2 und die Mengenausgabe 1.2.7. Die Änderungen sind in
+das Leitungsmodul 1.0.8, das Gefälletool 1.18.2 und die Mengenausgabe 1.2.7. Die Änderungen sind in
 `ST_COMPARISON.md` und `DEVELOPMENT_HISTORY.md` dokumentiert.
 
 ## Herkunft und Integritaet

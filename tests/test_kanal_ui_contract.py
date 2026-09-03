@@ -570,6 +570,22 @@ class KanalDialogTests(unittest.TestCase):
         self.assertEqual("L=12,35m", labels.annotation(
             "length", 12.345, {"length_decimals": 6}))
 
+    def test_utility_route_dialog_accepts_selected_label_layout(self):
+        api = DialogAPI()
+
+        def accept(dialog, handler):
+            handler(-1, 0)
+            api.SelectChoice(dialog, 78, 1, True)
+            return handler(1, 0)
+
+        api.on_run = accept
+        ui = load_ui(api, "PD_LeitungsTool")
+        settings = importlib.import_module("PD_LeitungsTool.settings").validate({})
+
+        result = ui.route_dialog(settings)
+
+        self.assertEqual("two_line", result["label_layout"])
+
     def test_shaft_dialog_can_override_contour_fill_and_transparency(self):
         api = DialogAPI()
 
