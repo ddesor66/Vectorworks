@@ -182,7 +182,7 @@ class SewerResetRegressionTests(unittest.TestCase):
 
 
 class SewerAsyncQuantityTests(unittest.TestCase):
-    def test_native_completion_batches_geometry_before_one_report_refresh(self):
+    def test_native_completion_marks_report_dirty_without_synchronous_rebuild(self):
         app = importlib.import_module("PD_KanalTool.app")
         reporting = importlib.import_module("PD_KanalLeitungMengen.reporting")
         events = []
@@ -191,10 +191,11 @@ class SewerAsyncQuantityTests(unittest.TestCase):
         with mock.patch.object(
                 reporting, "begin_changes", side_effect=lambda: events.append("begin")), mock.patch.object(
                 reporting, "end_changes",
-                side_effect=lambda refresh=False: events.append(("end", refresh))):
+                side_effect=lambda refresh=False, mark_dirty=False:
+                events.append(("end", refresh, mark_dirty))):
             self.assertEqual("created", callback("branch"))
         self.assertEqual(
-            ["begin", ("geometry", "branch"), ("end", True)], events)
+            ["begin", ("geometry", "branch"), ("end", False, True)], events)
 
 
 class SewerCloneTests(unittest.TestCase):

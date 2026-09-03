@@ -4,9 +4,12 @@ Das Modul liest ausschließlich die persistenten Fachobjekte des Kanal- und
 Leitungstools. Gezeichnete Hilfsgeometrie, Beschriftungen, Achsen und
 3D-Darstellungen werden nicht nochmals gezählt.
 
-Ein dokumentinterner Löschbeobachter aktualisiert bestehende Detail- und
-Summenblätter auch nach dem normalen Vectorworks-Löschen. Gelöschte Haltungen,
-Schächte, Rigolen und Leitungstrassen werden deshalb nicht weiter mitgeführt.
+Ein dokumentinterner Löschbeobachter merkt bestehende Detail- und Summenblätter
+nach dem normalen Vectorworks-Löschen als veraltet vor. Der eigentliche
+Neuaufbau erfolgt erst beim Öffnen oder Export der Massenermittlung und wertet
+dann ausschließlich den aktuellen Objektbestand aus. Gelöschte Haltungen,
+Schächte, Rigolen und Leitungstrassen werden deshalb nicht weiter mitgeführt,
+ohne den Zeichenbefehl durch tausende Arbeitsblattzugriffe zu blockieren.
 
 ## Aufruf
 
@@ -15,8 +18,8 @@ Auswahl `Massenermittlung`. Derselbe Befehl ist in beiden Fachdialogen
 enthalten. Vor der Ausgabe wird zwischen der kompakten `Summenliste` und
 `Alle Einzelmassen mit Summenzeilen` gewählt. Die Einzelmassen erscheinen im
 Arbeitsblatt `PD Kanal- und Leitungsmengen`; die Summenliste im Arbeitsblatt
-`PD Kanal- und Leitungssummen`. Automatische Aktualisierungen bauen nur die im
-Dokument bereits vorhandene Ausgabeart neu auf.
+`PD Kanal- und Leitungssummen`. Beim nächsten Aufruf wird nur die gewählte
+Ausgabeart aus den aktuellen Objekten neu aufgebaut.
 
 Die Oberbaustärke wird vollständig in Metern eingegeben, gespeichert und im
 Bericht ausgegeben. Eine ältere, noch in Zentimetern gespeicherte Einstellung

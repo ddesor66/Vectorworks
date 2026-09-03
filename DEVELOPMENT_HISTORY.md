@@ -318,3 +318,15 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   gesetztem Vectorworks-Auswahlstatus übernommen. Wiederholte Läufe erzeugen
   getrennte, eindeutig benannte Quell- und Kontrollebenen sowie eigenständige
   DGM, ohne bereits vorhandene Modelle zu verändern.
+- Kanaltool und gemeinsamer Kanal-/Leitungsaufruf 1.3.3, Leitungstool 1.0.7
+  und Mengenausgabe 1.2.5: Änderungen an Kanalhaltungen, Schächten, Rigolen und
+  Leitungstrassen bauen vorhandene Mengen-Arbeitsblätter nicht mehr synchron
+  im Abschlusscallback jedes Zeichenbefehls auf. Sie markieren den Bericht
+  lediglich als veraltet; Öffnen oder Exportieren der Massenermittlung liest
+  anschließend den aktuellen Objektbestand vollständig neu ein. Dadurch
+  entfallen die bei großen Detailtabellen beobachteten 30–60 Sekunden zwischen
+  Punktabschluss und sichtbarer Kanalhaltung, ohne gelöschte oder ergänzte
+  Objekte in der nächsten Mengenausgabe weiterzuführen. Zwei zusätzliche
+  Ereignis- und Verzögerungsregressionen erhöhen den Gesamtumfang nach der
+  Zusammenführung mit dem aktuellen Gelände-/Baugrubenstand auf 194
+  automatisierte Tests.

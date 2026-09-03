@@ -18,29 +18,29 @@ sewer_ui = ui
 
 
 def _with_quantity_refresh(callback):
-    """Keep report rebuilding outside an asynchronous drawing transaction.
+    """Keep reporting outside an asynchronous drawing transaction.
 
-    Native VST callbacks run after ``app.run`` has returned.  The former
-    command-level batch therefore ended too early and every PIO reset could
-    rebuild the quantity worksheets while a branch was only half-created.
-    Wrapping the actual completion callback makes the complete network change
-    one atomic reporting batch in both native and fallback tool modes.
+    Native VST callbacks run after ``app.run`` has returned.  Rebuilding a
+    large worksheet synchronously here can delay the visible result by up to a
+    minute.  The complete network change is therefore one reporting batch and
+    only marks an existing report stale.  Opening or exporting quantities
+    always rebuilds it from the current objects.
     """
     def complete(*args, **kwargs):
         from PD_KanalLeitungMengen import reporting as quantity_reporting
         quantity_reporting.begin_changes()
+        succeeded = False
         try:
-            return callback(*args, **kwargs)
+            result = callback(*args, **kwargs)
+            succeeded = True
+            return result
         finally:
             try:
-                quantity_reporting.end_changes(refresh=True)
-            except Exception as error:
-                # A worksheet failure must never undo or cancel geometry that
-                # was already built successfully.  The report can be renewed
-                # independently from the quantity command.
-                adapter.alert(
-                    "Kanalobjekte wurden erstellt; die Mengenliste konnte nicht aktualisiert werden: %s"
-                    % error)
+                quantity_reporting.end_changes(
+                    refresh=False, mark_dirty=succeeded)
+            except Exception:
+                # Reporting state must never undo or delay valid geometry.
+                pass
     return complete
 
 
@@ -94,7 +94,9 @@ def _edit(preferences, managed):
             changed = sewer_ui.rigole_dialog(current)
             if changed is not None and sewer_live.update_rigole(
                     handle, changed, preferences):
-                adapter.alert("Rigolenbauwerk und Mengen wurden aktualisiert.")
+                adapter.alert(
+                    "Rigolenbauwerk wurde aktualisiert. Eine vorhandene Mengenliste "
+                    "wird beim nächsten Öffnen oder Export neu berechnet.")
             return
         if sewer_live.edit(managed[0][0], preferences):
             adapter.alert("Kanalobjekt und angeschlossene Darstellung wurden aktualisiert.")
@@ -634,7 +636,7 @@ def run(action=None):
         else:
             raise core.SewerError("Unbekannte Kanalaktion.")
         if quantity_batch:
-            quantity_reporting.end_changes(refresh=True)
+            quantity_reporting.end_changes(refresh=False, mark_dirty=True)
             quantity_batch = False
     except (core.SewerError, RuntimeError, ValueError) as error:
         adapter.alert(error)

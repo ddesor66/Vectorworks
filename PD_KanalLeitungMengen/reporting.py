@@ -28,6 +28,7 @@ _REFRESHING = False
 _LAST_REFRESH = None
 _SUSPEND_DEPTH = 0
 _PENDING_REFRESH = False
+_REPORT_DIRTY = False
 DELETE_OBSERVER_NAME = "PD-MENGEN-LOESCHBEOBACHTER"
 DELETE_OBSERVER_CLASS = "PD-Systemdaten"
 RESET_ON_OWNER_DELETE = 5
@@ -639,6 +640,7 @@ def _update_named_worksheet(name, rows, show=False):
 
 def update_worksheet(report=None, show=True, report_mode="all"):
     """Replace the selected worksheet set as one recoverable transaction."""
+    global _REPORT_DIRTY
     report = report or collect_live()
     report_mode = _validated_report_mode(report_mode)
     specs = []
@@ -683,6 +685,7 @@ def update_worksheet(report=None, show=True, report_mode="all"):
         synchronize_delete_observer()
         for old, _backup_name, _final_name in backups:
             vs.DelObject(old)
+        _REPORT_DIRTY = False
         return by_name[shown_name] if show else prepared[0][0]
     except Exception:
         for worksheet, temporary_name, _final_name in reversed(installed):
@@ -709,29 +712,44 @@ def begin_changes():
     _SUSPEND_DEPTH += 1
 
 
-def end_changes(refresh=False):
-    """Resume reporting and perform at most one pending rebuild."""
+def mark_existing_dirty():
+    """Mark existing reports stale without rebuilding them in an object event."""
+    global _REPORT_DIRTY
+    if not (vs.GetObject(WORKSHEET_NAME) or
+            vs.GetObject(SUMMARY_WORKSHEET_NAME)):
+        return False
+    _REPORT_DIRTY = True
+    return True
+
+
+def end_changes(refresh=False, mark_dirty=False):
+    """Resume reporting; defer expensive rebuilds unless explicitly requested."""
     global _SUSPEND_DEPTH, _PENDING_REFRESH
     if _SUSPEND_DEPTH <= 0:
         return False
     _SUSPEND_DEPTH -= 1
     if _SUSPEND_DEPTH:
-        if refresh:
+        if refresh or mark_dirty:
             _PENDING_REFRESH = True
         return False
-    pending = bool(refresh or _PENDING_REFRESH)
+    pending = bool(_PENDING_REFRESH)
     _PENDING_REFRESH = False
-    return refresh_existing(force=True) if pending else False
+    if refresh:
+        return refresh_existing(force=True)
+    return mark_existing_dirty() if (mark_dirty or pending) else False
 
 
 def refresh_existing(force=False):
     """Refresh an already-created report; never creates one implicitly."""
-    global _REFRESHING, _LAST_REFRESH, _PENDING_REFRESH
+    global _REFRESHING, _LAST_REFRESH, _PENDING_REFRESH, _REPORT_DIRTY
     if _SUSPEND_DEPTH:
         _PENDING_REFRESH = True
+        _REPORT_DIRTY = True
         return False
     if _REFRESHING or not (
             vs.GetObject(WORKSHEET_NAME) or vs.GetObject(SUMMARY_WORKSHEET_NAME)):
+        return False
+    if not force and not _REPORT_DIRTY:
         return False
     now = datetime.datetime.now()
     if (not force and _LAST_REFRESH is not None and
@@ -751,6 +769,7 @@ def refresh_existing(force=False):
         # itself take longer than the cooldown; using its start time would let
         # the following reset event immediately rebuild the same report again.
         _LAST_REFRESH = datetime.datetime.now()
+        _REPORT_DIRTY = False
         return True
     finally:
         _REFRESHING = False

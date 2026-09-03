@@ -208,7 +208,7 @@ def run(action=None):
         else:
             raise core.UtilityError("Unbekannte Leitungsaktion.")
         if quantity_batch:
-            quantity_reporting.end_changes(refresh=True)
+            quantity_reporting.end_changes(refresh=False, mark_dirty=True)
             quantity_batch = False
     except (core.UtilityError, RuntimeError, ValueError) as error:
         adapter.alert(error)

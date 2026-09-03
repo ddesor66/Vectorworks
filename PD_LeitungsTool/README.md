@@ -1,4 +1,4 @@
-# PD Leitungstool 1.0.6
+# PD Leitungstool 1.0.7
 
 Das Modul verwaltet Versorgungstrassen getrennt vom Kanalnetz. Eine Trasse ist
 ein persistentes Vectorworks-Objekt und enthält eine oder mehrere Leitungen mit
@@ -9,8 +9,10 @@ Nachkommastellen ausgegeben; die Berechnung und Speicherung bleiben
 ungerundet.
 
 Eine Trasse darf mit dem normalen Vectorworks-Löschbefehl entfernt werden.
-Bereits angelegte Mengen- und Summenblätter erkennen das Löschen und werden aus
-den tatsächlich noch vorhandenen Trassen neu aufgebaut.
+Bereits angelegte Mengen- und Summenblätter werden dabei als veraltet
+vorgemerkt. Der Neuaufbau aus den tatsächlich noch vorhandenen Trassen erfolgt
+erst beim nächsten Öffnen oder Export der Massenermittlung, damit das Zeichnen
+und Bearbeiten nicht durch große Arbeitsblätter verzögert wird.
 
 Der übliche Ablauf ist: Typ wählen, eine gemeinsame Trassenachse zeichnen,
 Anzahl/Abstand/Achsbezug festlegen und mit Doppelklick abschließen. Ein

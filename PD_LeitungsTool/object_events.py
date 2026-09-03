@@ -36,7 +36,7 @@ def run():
             data = live_objects.data_of(handle) if valid and handle else None
             if data and data.get("role") == live_objects.ROLE:
                 from PD_KanalLeitungMengen import reporting as quantity_reporting
-                quantity_reporting.refresh_existing()
+                quantity_reporting.mark_existing_dirty()
         except Exception:
             pass
         return

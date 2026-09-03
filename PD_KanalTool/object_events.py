@@ -63,8 +63,7 @@ def run():
             if role in ("sewer_pipe", "sewer_shaft", "sewer_rigole",
                         live_objects.QUANTITY_OBSERVER_ROLE):
                 from PD_KanalLeitungMengen import reporting as quantity_reporting
-                quantity_reporting.refresh_existing(
-                    force=role == live_objects.QUANTITY_OBSERVER_ROLE)
+                quantity_reporting.mark_existing_dirty()
         except Exception:
             pass
         return

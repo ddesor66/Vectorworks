@@ -14,6 +14,7 @@ sys.modules.setdefault("vs", types.ModuleType("vs"))
 from PD_KanalLeitungMengen import app, core, reporting, ui
 from PD_KanalTool import object_events as canal_object_events
 from PD_KanalTool import settings as canal_settings
+from PD_LeitungsTool import object_events as utility_object_events
 
 
 def _shaft(identity, name, x_m, ks_m, visible=True, structure_type="round", stub=None):
@@ -252,6 +253,7 @@ class RefreshBatchTests(unittest.TestCase):
         reporting._LAST_REFRESH = None
         reporting._SUSPEND_DEPTH = 0
         reporting._PENDING_REFRESH = False
+        reporting._REPORT_DIRTY = False
 
     def test_many_object_resets_cause_exactly_one_refresh(self):
         fake_vs = types.SimpleNamespace(GetObject=lambda _name: object())
@@ -263,6 +265,16 @@ class RefreshBatchTests(unittest.TestCase):
             self.assertFalse(reporting.refresh_existing())
             self.assertTrue(reporting.end_changes(refresh=True))
         self.assertEqual([False], calls)
+
+    def test_completed_drawing_only_marks_existing_report_dirty(self):
+        fake_vs = types.SimpleNamespace(GetObject=lambda _name: object())
+        with mock.patch.object(reporting, "vs", fake_vs), mock.patch.object(
+                reporting, "update_worksheet") as update:
+            reporting.begin_changes()
+            self.assertTrue(reporting.end_changes(
+                refresh=False, mark_dirty=True))
+        update.assert_not_called()
+        self.assertTrue(reporting._REPORT_DIRTY)
 
     def test_delete_observer_is_attached_to_canal_and_utility_objects_once(self):
         associations = []
@@ -284,7 +296,7 @@ class RefreshBatchTests(unittest.TestCase):
             [("PIPE", 5, "OBSERVER"), ("ROUTE", 5, "OBSERVER")],
             associations)
 
-    def test_delete_observer_reset_forces_quantity_rebuild(self):
+    def test_delete_observer_reset_only_marks_quantity_report_dirty(self):
         api = types.SimpleNamespace(
             vsoGetEventInfo=lambda: (3, 0),
             GetCustomObjectInfo=lambda: (True, "PD KAN Objekt", "OBSERVER", None, None))
@@ -293,9 +305,27 @@ class RefreshBatchTests(unittest.TestCase):
                 canal_object_events.live_objects, "data_of", return_value={
                     "schema": 2,
                     "role": canal_object_events.live_objects.QUANTITY_OBSERVER_ROLE,
-                }), mock.patch.object(reporting, "refresh_existing", return_value=True) as refresh:
+                }), mock.patch.object(reporting, "mark_existing_dirty", return_value=True) as dirty, mock.patch.object(
+                reporting, "refresh_existing") as refresh:
             canal_object_events.run()
-        refresh.assert_called_once_with(force=True)
+        dirty.assert_called_once_with()
+        refresh.assert_not_called()
+
+    def test_utility_reset_only_marks_quantity_report_dirty(self):
+        api = types.SimpleNamespace(
+            vsoGetEventInfo=lambda: (3, 0),
+            GetCustomObjectInfo=lambda: (
+                True, "PD Leitung Objekt", "ROUTE", None, None))
+        with mock.patch.object(utility_object_events, "vs", api), mock.patch.object(
+                utility_object_events.live, "reset", return_value=None), mock.patch.object(
+                utility_object_events.live_objects, "data_of", return_value={
+                    "role": utility_object_events.live_objects.ROLE,
+                }), mock.patch.object(
+                reporting, "mark_existing_dirty", return_value=True) as dirty, mock.patch.object(
+                reporting, "refresh_existing") as refresh:
+            utility_object_events.run()
+        dirty.assert_called_once_with()
+        refresh.assert_not_called()
 
     def test_live_report_drops_a_normally_deleted_holding(self):
         shafts = (

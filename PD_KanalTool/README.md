@@ -1,4 +1,4 @@
-# PD Kanaltool 1.3.2
+# PD Kanaltool 1.3.3
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und
@@ -13,8 +13,10 @@ bevor sie in die vom Benutzer gewählte Datei geschrieben wird.
 Kanalobjekte können auch mit dem normalen Vectorworks-Löschbefehl entfernt
 werden. Beim Löschen eines Schachts verschwinden nur die davon abhängigen
 Haltungen; beim Löschen einer Haltung bleiben die Endschächte erhalten und
-werden aktualisiert. Vorhandene Mengenblätter werden aus dem verbleibenden
-Objektbestand neu aufgebaut.
+werden aktualisiert. Vorhandene Mengenblätter werden dabei nur als veraltet
+vorgemerkt und erst beim nächsten Öffnen oder Export aus dem verbleibenden
+Objektbestand neu aufgebaut. Dadurch blockiert eine große Mengentabelle das
+Zeichnen nicht.
 
 Alle sichtbaren Deckel-, Sohl-, Anschluss- und sonstigen Höhenwerte werden in
 Dialogen, Meldungen, Planbeschriftungen und Schachtblättern einheitlich mit
@@ -57,8 +59,9 @@ Berechnungen behalten ihre volle Genauigkeit.
   Vorselektion möglich.
 - Der Abschluss eines neuen Kanalstrangs und die direkte Verbindung zweier
   Schächte laufen ohne reentrante Schreibzugriffe im parametrischen
-  Objektcallback. Eine vorhandene Mengentabelle wird erst nach dem vollständig
-  aufgebauten Kanalnetz genau einmal aktualisiert.
+  Objektcallback. Eine vorhandene Mengentabelle wird nach dem vollständig
+  aufgebauten Kanalnetz nur als veraltet vorgemerkt. Der zeitaufwendige
+  Neuaufbau erfolgt erst beim nächsten Öffnen oder Export der Massenermittlung.
 - Ein einzelner markierter Schacht öffnet seinen vollständigen Eigenschaftsdialog.
   Bei mehreren markierten runden Schächten oder Sonderschächten werden dieselben
   vollständigen Dialoge nacheinander geöffnet und erst anschließend gemeinsam
@@ -313,7 +316,8 @@ Für die Grabenbreite wird der reale Rohraußendurchmesser verwendet. Ältere
 Haltungen ohne bestätigten Außendurchmesser bleiben auswertbar, werden aber
 im Arbeitsblatt und in Excel deutlich als vorläufige DN-Ersatzannahme
 gekennzeichnet. Nach erfolgreicher Objektänderung wird ein bereits vorhandenes
-Mengen-Arbeitsblatt automatisch neu aufgebaut. Der Excel-Export enthält
+Mengen-Arbeitsblatt ohne Neuaufbau als veraltet vorgemerkt und beim nächsten
+Öffnen oder Export vollständig neu berechnet. Der Excel-Export enthält
 getrennte Blätter für Übersicht, Haltungen, Schächte, Leitungen, Erdmassen und
 Prüfhinweise.
 
