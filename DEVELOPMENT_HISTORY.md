@@ -341,3 +341,17 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   Ursprungsdaten und ursprüngliche Endverknüpfungen wiederhergestellt. Zwei
   neue Identitäts- und Verknüpfungstests erhöhen den Gesamtumfang auf 196
   automatisierte Tests.
+- Kanaltool und gemeinsamer Kanal-/Leitungsaufruf 1.3.5, Gefälletool 1.18.2
+  und Mengenausgabe 1.2.6: Kanalstutzen werden persistent als eigener
+  Objekttyp `Stutzen` statt als Schacht geführt; vorhandene Stutzen werden
+  beim nächsten Objektaufbau identitäts- und geometrieneutral migriert. Die
+  Stutzenbearbeitung bietet Sohl-, Achs-, Kämpfer- und Scheitelgleichheit auch
+  nachträglich an und aktualisiert Anschlusssohle, Gefälle, 3D und Text in
+  einer geprüften Netztransaktion. Kanalbauteile, Deckel und Beschriftungen
+  besitzen eigene Klassen; Rohr- und Rohrtextklassen sind nach Kanalart, DN
+  und Material getrennt. Neu angeschlossene Haltungen gleichen sämtliche
+  berührten Bestandsschächte ab, sodass auch ein zweiter Zulauf zuverlässig
+  die Beschriftung `Z2` erhält. Das Gefälletool zeigt Höhen, Längen und
+  Prozentwerte fest mit zwei Nachkommastellen. Vier zusätzliche Rechen-,
+  Rollen-, Anschluss- und Klassenregressionen erhöhen den Gesamtumfang auf 200
+  automatisierte Tests.

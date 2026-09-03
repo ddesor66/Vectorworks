@@ -60,7 +60,7 @@ def run():
         try:
             data = live_objects.data_of(handle) if valid and handle else None
             role = data.get("role") if data else None
-            if role in ("sewer_pipe", "sewer_shaft", "sewer_rigole",
+            if role in ("sewer_pipe", "sewer_shaft", "sewer_fitting", "sewer_rigole",
                         live_objects.QUANTITY_OBSERVER_ROLE):
                 from PD_KanalLeitungMengen import reporting as quantity_reporting
                 quantity_reporting.mark_existing_dirty()

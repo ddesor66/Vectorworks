@@ -251,6 +251,23 @@ def pipe(identity, start, end, start_m, end_m):
     }
 
 
+def object_inventory(pipes, shafts):
+    """Return a realistic role-aware live.objects test double."""
+    pipe_values = pipes.values() if isinstance(pipes, dict) else pipes
+    shaft_values = shafts.values() if isinstance(shafts, dict) else shafts
+    rows = tuple(
+        (value["id"], {"role": "sewer_pipe", "pipe": value})
+        for value in pipe_values) + tuple(
+        (value["id"], {
+            "role": ("sewer_fitting"
+                     if value.get("structure_type") == "stub"
+                     else "sewer_shaft"),
+            "shaft": value,
+        }) for value in shaft_values)
+    return lambda role=None: tuple(
+        row for row in rows if role is None or row[1]["role"] == role)
+
+
 class KanalDialogTests(unittest.TestCase):
     def test_related_tool_dialog_helpers_stay_inside_small_screen(self):
         api = DialogAPI()
@@ -529,13 +546,20 @@ class KanalDialogTests(unittest.TestCase):
         api = DialogAPI()
         slope_ui = load_ui(api, "PD_GefaelleTool")
         slope_settings = importlib.import_module("PD_GefaelleTool.settings").validate(
-            {"height_decimals": 6})
+            {"height_decimals": 6, "slope_decimals": 5,
+             "length_decimals": 4})
         self.assertEqual(2, slope_settings["height_decimals"])
+        self.assertEqual(2, slope_settings["slope_decimals"])
+        self.assertEqual(2, slope_settings["length_decimals"])
         slope_ui.single_point_dialog(1, "Standard", default_height=98.766)
         self.assertEqual("98,77", api.text[(api.next_dialog, 12)])
         labels = importlib.import_module("PD_GefaelleTool.label_format")
         self.assertEqual("H=98,77m", labels.annotation(
             "height", 98.766, {"height_decimals": 6}))
+        self.assertEqual("1,24 %", labels.annotation(
+            "slope", 1.236, {"slope_decimals": 6}))
+        self.assertEqual("L=12,35m", labels.annotation(
+            "length", 12.345, {"length_decimals": 6}))
 
     def test_shaft_dialog_can_override_contour_fill_and_transparency(self):
         api = DialogAPI()
@@ -755,9 +779,7 @@ class KanalDialogTests(unittest.TestCase):
         }
         p1 = core.validate_pipe(dict(pipe("p1", "s1", "j", 100.0, 99.6), length_m=4.0))
         p2 = core.validate_pipe(dict(pipe("p2", "j", "s2", 99.6, 99.0), length_m=6.0))
-        pipe_data = (("P1", {"pipe": p1}), ("P2", {"pipe": p2}))
-        shaft_data = tuple((identity, {"shaft": value}) for identity, value in shafts.items())
-        live.objects = lambda role=None: pipe_data if role == "sewer_pipe" else shaft_data
+        live.objects = object_inventory((p1, p2), shafts)
         live._handle_by_id = lambda _prefix, identity: identity
         live.read_shaft = lambda handle, _data=None: dict(shafts[handle])
         self.assertTrue(live._holding_label_pipe(p1)["label_suppressed"])
@@ -847,10 +869,7 @@ class KanalDialogTests(unittest.TestCase):
                 pipe("p2", "connection", "s2", 99.6, 99.0), length_m=6.0)),
         }
         all_shafts = dict(shafts, connection=connection)
-        live.objects = lambda role=None: (
-            tuple((identity, {"pipe": value}) for identity, value in pipes.items())
-            if role == "sewer_pipe" else
-            tuple((identity, {"shaft": value}) for identity, value in all_shafts.items()))
+        live.objects = object_inventory(pipes, all_shafts)
         live._handle_by_id = lambda prefix, identity: identity
         live.read_shaft = lambda handle, data=None: all_shafts[handle]
         live.read_pipe = lambda handle, data=None: pipes[handle]
@@ -896,10 +915,7 @@ class KanalDialogTests(unittest.TestCase):
                 pipe("p4", "j2", "s2", 99.3, 99.0), length_m=3.6055512755)),
         }
         all_shafts = dict(shafts, connection=connection)
-        live.objects = lambda role=None: (
-            tuple((identity, {"pipe": value}) for identity, value in pipes.items())
-            if role == "sewer_pipe" else
-            tuple((identity, {"shaft": value}) for identity, value in all_shafts.items()))
+        live.objects = object_inventory(pipes, all_shafts)
         live._handle_by_id = lambda prefix, identity: identity
         live.read_shaft = lambda handle, data=None: all_shafts[handle]
         live.read_pipe = lambda handle, data=None: pipes[handle]
@@ -942,10 +958,7 @@ class KanalDialogTests(unittest.TestCase):
                 pipe("p3", "new", "s2", 99.2, 99.0), length_m=2.0)),
         }
         all_shafts = dict(shafts, connection=connection)
-        live.objects = lambda role=None: (
-            tuple((identity, {"pipe": value}) for identity, value in pipes.items())
-            if role == "sewer_pipe" else
-            tuple((identity, {"shaft": value}) for identity, value in all_shafts.items()))
+        live.objects = object_inventory(pipes, all_shafts)
         live._handle_by_id = lambda prefix, identity: identity
         live.read_shaft = lambda handle, data=None: all_shafts[handle]
         live.read_pipe = lambda handle, data=None: pipes[handle]
@@ -990,10 +1003,7 @@ class KanalDialogTests(unittest.TestCase):
                 pipe("b3", "j1", "stub", 99.1, 99.0), length_m=3.0,
                 label_layout="two_line")),
         )
-        live.objects = lambda role=None: (
-            tuple((value["id"], {"pipe": value}) for value in pipes)
-            if role == "sewer_pipe" else
-            tuple((identity, {"shaft": value}) for identity, value in shafts.items()))
+        live.objects = object_inventory(pipes, shafts)
         live._handle_by_id = lambda _prefix, identity: identity
         live.read_shaft = lambda handle, _data=None: shafts[handle]
         labelled = [live._holding_label_pipe(value) for value in pipes]
@@ -1038,8 +1048,7 @@ class KanalDialogTests(unittest.TestCase):
                           for identity, value in pipes.items())
         shaft_data = tuple((identity.upper(), {"role": "sewer_shaft", "shaft": value})
                            for identity, value in shafts.items())
-        live.objects = lambda role=None: (
-            pipe_data if role == "sewer_pipe" else shaft_data)
+        live.objects = object_inventory(pipes, shafts)
         live.shaft_records = lambda: tuple(
             (handle, data["shaft"]) for handle, data in shaft_data)
         live.read_shaft = lambda handle, data=None: shafts[handle.lower()]

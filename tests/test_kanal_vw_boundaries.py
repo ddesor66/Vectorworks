@@ -228,6 +228,55 @@ class ShaftGraphicsAPI(object):
 
 
 class VectorworksBoundaryTests(unittest.TestCase):
+    def test_legacy_stub_role_migrates_to_independent_fitting_type(self):
+        api = types.SimpleNamespace(
+            GetName=lambda _handle: "PD-KAN-S-stub-1")
+        live = load_module(api, "PD_KanalTool.live")
+        written = []
+        store = types.SimpleNamespace(
+            write_data=lambda handle, data: written.append((handle, data)))
+        legacy = {
+            "schema": live.core.SCHEMA,
+            "role": "sewer_shaft",
+            "shaft": {"id": "stub-1", "structure_type": "stub"},
+            "labels": [],
+        }
+        with mock.patch.object(live, "_live", return_value=store):
+            migrated = live._repair_duplicate("STUB", legacy)
+        self.assertEqual("sewer_fitting", migrated["role"])
+        self.assertEqual("sewer_fitting", written[0][1]["role"])
+
+    def test_new_pipe_reconciles_z2_labels_at_all_real_shaft_endpoints(self):
+        live = load_module(types.SimpleNamespace(), "PD_KanalTool.live")
+        preferences = {"shaft_connection_labels_visible": True}
+        rows = {
+            "S1": {"schema": live.core.SCHEMA, "role": "sewer_shaft",
+                   "shaft": {"id": "s1"}, "preferences": preferences},
+            "S2": {"schema": live.core.SCHEMA, "role": "sewer_shaft",
+                   "shaft": {"id": "s2"}, "preferences": preferences},
+            "STUB": {"schema": live.core.SCHEMA, "role": "sewer_fitting",
+                     "shaft": {"id": "stub"}, "preferences": preferences},
+        }
+        store = types.SimpleNamespace(data_of=lambda handle: rows.get(handle))
+        ensured = []
+        snapshots = {}
+        handle_by_id = {"s1": "S1", "s2": "S2", "stub": "STUB"}
+        with mock.patch.object(live, "_live", return_value=store), mock.patch.object(
+                live, "_handle_by_id",
+                side_effect=lambda _prefix, identity: handle_by_id.get(identity)), mock.patch.object(
+                live, "read_shaft", side_effect=lambda handle, _data=None: {
+                    "id": rows[handle]["shaft"]["id"], "visible": True,
+                    "structure_type": ("stub" if handle == "STUB" else "round")}), mock.patch.object(
+                live, "ensure_label",
+                side_effect=lambda handle, _data, _created: ensured.append(handle)):
+            touched = live._ensure_endpoint_labels((
+                {"start_id": "s1", "end_id": "stub"},
+                {"start_id": "stub", "end_id": "s2"},
+            ), [], snapshots)
+        self.assertEqual(("S1", "S2"), touched)
+        self.assertEqual(["S1", "S2"], ensured)
+        self.assertEqual({"S1", "S2"}, set(snapshots))
+
     def test_shaft_fill_transparency_keeps_contour_opaque(self):
         api = ShaftGraphicsAPI()
         live = load_module(api, "PD_KanalTool.live")

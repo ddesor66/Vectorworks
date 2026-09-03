@@ -1,4 +1,4 @@
-# PD Kanaltool 1.3.4
+# PD Kanaltool 1.3.5
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und
@@ -89,7 +89,10 @@ gewählt. Die Einliniengrafik verwendet eine wählbare Linienart. Die
 Doppelliniengrafik erhält zusätzlich eine schwarze gestrichelte Achslinie.
 Kanalart, DN und Material bilden getrennte Klassen, zum Beispiel
 `PD-KAN-RW-DN300-STB`; die 3D-Klasse endet mit `_3D`, die Achsklasse mit
-`-Achse`. RW, SW und MW besitzen einstellbare Farben. Füllflächen werden mit
+`-Achse`. Bauteile wie Rundschacht, Sonderschacht, Schachtdeckel, Knoten,
+Kanalstutzen, Bodenablauf und Hausanschluss sowie ihre Beschriftungen erhalten
+jeweils eigene Klassen. Rohrbeschriftungen werden zusätzlich nach Kanalart,
+DN und Material getrennt. RW, SW und MW besitzen einstellbare Farben. Füllflächen werden mit
 50 Prozent Deckkraft dargestellt, Umgrenzungslinien immer mit 100 Prozent.
 
 Jede Haltung besitzt auf der Klasse `PD-KAN-Fließrichtung` einen skalierbaren
@@ -167,7 +170,12 @@ Der Schachteditor ist zusätzlich in die kurzen Register `Allgemein`,
 `Kanalstutzen herstellen` verlangt zuerst eine vorhandene Haltung, danach die
 Anschlusslage. Die neue Anschlussleitung hat standardmäßig DN 150, ist
 änderbar und kann sohl-, achs-, kämpfer- oder scheitelgleich angeschlossen
-werden. Die daraus berechnete Anschlusshöhe wird beschriftet. Die Hauptleitung
+werden. Ein vorhandener Stutzen wird als eigener Objekttyp und nicht als
+Schacht geführt. Ältere Zeichnungen werden beim nächsten Objektaufbau ohne
+Änderung ihrer Geometrie auf diesen Typ umgestellt. Ein Doppelklick öffnet die
+Anschlussart erneut; eine Änderung aktualisiert Anschlusssohle, Gefälle,
+3D-Geometrie und Beschriftung der Anschlussleitung gemeinsam. Die daraus
+berechnete Anschlusshöhe wird beschriftet. Die Hauptleitung
 wird transaktional in zwei Resthaltungen geteilt; die überlagerte alte Haltung
 wird erst nach erfolgreichem Aufbau und mit anschließender Löschkontrolle
 entfernt. Die beiden geometrischen Restsegmente erhalten zusammen nur eine

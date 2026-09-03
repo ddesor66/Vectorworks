@@ -15,6 +15,14 @@ DEFAULT_MATERIALS = ("PP", "KG", "B", "STZ", "STB")
 GRAPHICS_MODES = ("single_line", "double_line")
 CONNECTION_ALIGNMENTS = ("invert", "axis", "springline", "crown")
 STRUCTURE_TYPES = ("round", "special", "junction", "stub", "floor_drain", "house")
+STRUCTURE_CLASS_TOKENS = {
+    "round": "Schacht",
+    "special": "Sonderschacht",
+    "junction": "Knoten",
+    "stub": "Kanalstutzen",
+    "floor_drain": "Bodenablauf",
+    "house": "Hausanschluss",
+}
 SHAFT_CONSTRUCTION_MATERIALS = ("PP", "concrete")
 DEFAULT_CONCRETE_WALL_THICKNESS_M = 0.15
 SHAFT_PREFIX = "PD-KAN-S-"
@@ -337,6 +345,48 @@ def pipe_class_name(prefix, pipe, suffix=""):
     return "%s-%s-DN%d-%s%s" % (
         class_token(prefix, "Kanal-Klassenpräfix"), value["kind"], value["dn_mm"],
         class_token(value["material"], "Material"), str(suffix))
+
+
+def structure_class_name(prefix, kind, structure_type="round", suffix=""):
+    """Return one component class per system and construction element."""
+    kind = _kind(kind)
+    structure_type = str(structure_type or "round")
+    if structure_type not in STRUCTURE_CLASS_TOKENS:
+        raise SewerError("Unbekanntes Kanalbauelement für die Klassenzuordnung.")
+    return "%s-%s-%s%s" % (
+        class_token(prefix, "Kanal-Klassenpräfix"), kind,
+        STRUCTURE_CLASS_TOKENS[structure_type], str(suffix))
+
+
+def cover_class_name(prefix, kind, suffix=""):
+    """Return the independent manhole-cover component class."""
+    return "%s-%s-Schachtdeckel%s" % (
+        class_token(prefix, "Kanal-Klassenpräfix"), _kind(kind), str(suffix))
+
+
+def pipe_label_class_name(text_prefix, pipe):
+    """Keep each holding annotation separate by kind, DN and material."""
+    value = validate_pipe(pipe)
+    return "%s-%s-DN%d-%s-Haltung" % (
+        class_token(text_prefix, "Kanal-Beschriftungsklasse"), value["kind"],
+        value["dn_mm"], class_token(value["material"], "Material"))
+
+
+def structure_label_class_name(text_prefix, kind, structure_type="round",
+                               connection=False):
+    """Return the annotation class matching one channel component type."""
+    structure_type = str(structure_type or "round")
+    if structure_type not in STRUCTURE_CLASS_TOKENS:
+        raise SewerError("Unbekanntes Kanalbauelement für die Beschriftungsklasse.")
+    suffix = "-Anschluss" if connection else ""
+    return "%s-%s-%s%s" % (
+        class_token(text_prefix, "Kanal-Beschriftungsklasse"), _kind(kind),
+        STRUCTURE_CLASS_TOKENS[structure_type], suffix)
+
+
+def rigole_label_class_name(text_prefix):
+    return "%s-Rigole" % class_token(
+        text_prefix, "Kanal-Beschriftungsklasse")
 
 
 def connection_invert(main_invert_m, main_dn_mm, branch_dn_mm, alignment):
@@ -971,6 +1021,58 @@ def validate_shaft(value, allow_hidden=False):
     if result["kd_m"] < result["ks_m"]:
         raise SewerError("Deckelhöhe KD muss über oder auf der Sohlhöhe KS liegen.")
     return result
+
+
+def change_stub_alignment(shaft, connected_pipes, alignment):
+    """Recalculate one fitting and its branch endpoint for a new alignment.
+
+    The two recorded main arms remain geometrically and vertically unchanged.
+    The returned branch pipe is intentionally not validated when its new end
+    would reverse the flow; the Vectorworks layer must ask for confirmation
+    before orienting that pipe downhill.
+    """
+    value = validate_shaft(shaft, allow_hidden=True)
+    if value.get("structure_type") != "stub" or not value.get("stub"):
+        raise SewerError("Das gewählte Kanalbauteil ist kein Stutzen.")
+    mode = str(alignment or "")
+    connection_alignment_label(mode)
+    rows = [validate_pipe(pipe) for pipe in connected_pipes]
+    if any(value["id"] not in (pipe["start_id"], pipe["end_id"])
+           for pipe in rows):
+        raise SewerError("Eine übergebene Haltung ist nicht mit dem Stutzen verbunden.")
+    by_id = {pipe["id"]: pipe for pipe in rows}
+    main_ids = tuple(value["stub"].get("main_pipe_ids", ()))
+    mains = [by_id.get(identity) for identity in main_ids]
+    if len(main_ids) != 2 or any(pipe is None for pipe in mains):
+        raise SewerError("Die beiden Hauptleitungsarme des Stutzens fehlen.")
+    main_id_set = set(main_ids)
+    branches = [pipe for pipe in rows if pipe["id"] not in main_id_set]
+    if len(branches) != 1:
+        raise SewerError("Ein Kanalstutzen benötigt genau eine Anschlussleitung.")
+
+    def endpoint_invert(pipe):
+        return (pipe["start_invert_m"] if pipe["start_id"] == value["id"]
+                else pipe["end_invert_m"])
+
+    main_inverts = [endpoint_invert(pipe) for pipe in mains]
+    if abs(main_inverts[0] - main_inverts[1]) > 0.001:
+        raise SewerError("Die Hauptleitungssohle am Stutzen ist nicht durchgängig.")
+    if mains[0]["dn_mm"] != mains[1]["dn_mm"]:
+        raise SewerError("Die Hauptleitungsarme am Stutzen besitzen unterschiedliche DN.")
+    branch = copy.deepcopy(branches[0])
+    invert = connection_invert(
+        sum(main_inverts) * 0.5, mains[0]["dn_mm"], branch["dn_mm"], mode)
+    if branch["start_id"] == value["id"]:
+        branch["start_invert_m"] = invert
+    else:
+        branch["end_invert_m"] = invert
+    stub = copy.deepcopy(value["stub"])
+    stub.update(alignment=mode, main_dn_mm=mains[0]["dn_mm"],
+                branch_dn_mm=branch["dn_mm"], connection_invert_m=invert)
+    endpoints = main_inverts + [invert]
+    changed_shaft = validate_shaft(
+        dict(value, stub=stub, ks_m=min(endpoints)), allow_hidden=True)
+    return changed_shaft, branch
 
 
 def round_join_geometry(first_direction, second_direction, radius, half_width,

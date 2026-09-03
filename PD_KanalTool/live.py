@@ -25,6 +25,7 @@ sewer_ui = ui
 
 
 ROLES = ("sewer_pipe", "sewer_shaft", "sewer_rigole", "sewer_label", "sewer_fitting")
+NODE_ROLES = ("sewer_shaft", "sewer_fitting")
 TEXT_COLOR = (0, 0, 0)
 RENDER_OK = "ok"
 RENDER_ERROR = "error"
@@ -118,7 +119,7 @@ def color_for(data, preferences):
     if data.get("role") == "sewer_rigole":
         return _rgb((data.get("rigole") or {}).get("fill_color"))
     payload = data.get("pipe") or data.get("shaft") or {}
-    if data.get("role") == "sewer_shaft":
+    if data.get("role") in NODE_ROLES:
         pen_colors = preferences.get("shaft_pen_colors", preferences["colors"])
         return _rgb(payload.get("pen_color_override") or
                     payload.get("color_override") or pen_colors[payload["kind"]])
@@ -149,7 +150,31 @@ def class_name(value, preferences, suffix=""):
     if isinstance(value, dict) and "dn_mm" in value:
         return core.pipe_class_name(preferences["class_prefix"], value, suffix)
     kind = value.get("kind") if isinstance(value, dict) else value
-    return "%s-%s-Schacht%s" % (preferences["class_prefix"], kind, suffix)
+    structure = value.get("structure_type", "round") if isinstance(value, dict) else "round"
+    return core.structure_class_name(
+        preferences["class_prefix"], kind, structure, suffix)
+
+
+def cover_class_name(shaft, preferences, suffix=""):
+    return core.cover_class_name(
+        preferences["class_prefix"], shaft["kind"], suffix)
+
+
+def label_class_name(owner_data, preferences, label_data=None):
+    """Return the independent class for one component annotation."""
+    role = owner_data.get("role")
+    if role == "sewer_pipe":
+        return core.pipe_label_class_name(
+            preferences["text_class"], owner_data["pipe"])
+    if role in NODE_ROLES:
+        shaft = owner_data["shaft"]
+        return core.structure_label_class_name(
+            preferences["text_class"], shaft["kind"],
+            shaft.get("structure_type", "round"),
+            connection=(label_data or {}).get("label_kind") == "connection_height")
+    if role == "sewer_rigole":
+        return core.rigole_label_class_name(preferences["text_class"])
+    return preferences["text_class"]
 
 
 def axis_class_name(pipe, preferences):
@@ -178,12 +203,27 @@ def ensure_classes(preferences):
             fill_color = _rgb(preferences.get(
                 "shaft_fill_colors", preferences.get(
                     "shaft_pen_colors", preferences["colors"]))[kind])
+            for structure in core.STRUCTURE_TYPES:
+                for suffix in ("", "_3D"):
+                    name = core.structure_class_name(
+                        preferences["class_prefix"], kind, structure, suffix)
+                    _ensure_class(name, color, fill_color=fill_color)
+                _ensure_class(core.structure_label_class_name(
+                    preferences["text_class"], kind, structure), TEXT_COLOR,
+                    fill=False)
             for suffix in ("", "_3D"):
-                name = class_name(kind, preferences, suffix)
-                _ensure_class(name, color, fill_color=fill_color)
+                _ensure_class(core.cover_class_name(
+                    preferences["class_prefix"], kind, suffix), color,
+                    fill_color=fill_color)
+            for structure in ("round", "special"):
+                _ensure_class(core.structure_label_class_name(
+                    preferences["text_class"], kind, structure, True),
+                    TEXT_COLOR, fill=False)
         for suffix in ("", "_3D"):
             _ensure_class("%s-Rigole%s" % (preferences["class_prefix"], suffix),
                           (36000, 52000, 65535))
+        _ensure_class(core.rigole_label_class_name(
+            preferences["text_class"]), TEXT_COLOR, fill=False)
         vs.NameClass(preferences["text_class"])
         vs.SetClUseGraphic(preferences["text_class"], True)
         vs.SetClFPat(preferences["text_class"], 0)
@@ -203,10 +243,17 @@ def ensure_classes(preferences):
 
 
 def ensure_pipe_classes(pipe, preferences, color):
-    _ensure_class(class_name(pipe, preferences), color)
-    _ensure_class(class_name(pipe, preferences, "_3D"), color)
-    _ensure_class(axis_class_name(pipe, preferences), TEXT_COLOR, fill=False,
-                  line_type=preferences["axis_line_type"])
+    active = str(vs.ActiveClass() or "")
+    try:
+        _ensure_class(class_name(pipe, preferences), color)
+        _ensure_class(class_name(pipe, preferences, "_3D"), color)
+        _ensure_class(axis_class_name(pipe, preferences), TEXT_COLOR, fill=False,
+                      line_type=preferences["axis_line_type"])
+        _ensure_class(core.pipe_label_class_name(
+            preferences["text_class"], pipe), TEXT_COLOR, fill=False)
+    finally:
+        if active:
+            vs.NameClass(active)
 
 
 def _name(handle):
@@ -310,9 +357,11 @@ def _sync_rigole_junction_association(rigole_handle, junction_handle):
 
 def read_shaft(handle, data=None):
     data = data or _live().data_of(handle)
-    if not is_sewer_data(data) or data["role"] != "sewer_shaft":
-        raise core.SewerError("Kanalschacht konnte nicht gelesen werden.")
+    if not is_sewer_data(data) or data["role"] not in NODE_ROLES:
+        raise core.SewerError("Kanalschacht oder Kanalstutzen konnte nicht gelesen werden.")
     shaft = core.validate_shaft(data["shaft"], allow_hidden=True)
+    if data["role"] == "sewer_fitting" and shaft["structure_type"] != "stub":
+        raise core.SewerError("Als Stutzen geführtes Kanalbauteil besitzt ungültige Daten.")
     if _name(handle) != core.SHAFT_PREFIX + shaft["id"]:
         raise core.SewerError("Schachtidentität wurde geändert oder kopiert.")
     factor = adapter.units_to_meters()
@@ -339,7 +388,8 @@ def read_rigole(handle, data=None):
 
 def shaft_records():
     return tuple((handle, read_shaft(handle, data))
-                 for handle, data in objects("sewer_shaft"))
+                 for handle, data in objects()
+                 if data.get("role") in NODE_ROLES)
 
 
 def rigole_records():
@@ -499,9 +549,11 @@ def _new_object(xy_m, role, payload, preferences, created):
     factor = adapter.units_to_meters()
     identity = payload["id"]
     prefixes = {"sewer_shaft": core.SHAFT_PREFIX,
+                "sewer_fitting": core.SHAFT_PREFIX,
                 "sewer_pipe": core.PIPE_PREFIX,
                 "sewer_rigole": core.RIGOLE_PREFIX}
-    keys = {"sewer_shaft": "shaft", "sewer_pipe": "pipe",
+    keys = {"sewer_shaft": "shaft", "sewer_fitting": "shaft",
+            "sewer_pipe": "pipe",
             "sewer_rigole": "rigole"}
     if role not in prefixes:
         raise core.SewerError("Unbekannter Kanalobjekttyp.")
@@ -514,6 +566,12 @@ def _new_object(xy_m, role, payload, preferences, created):
     return handle
 
 
+def _node_role(shaft):
+    """Stutzen are fittings, while every other network node is a shaft."""
+    return ("sewer_fitting" if shaft.get("structure_type") == "stub"
+            else "sewer_shaft")
+
+
 def _paper_offset_units(handle, preferences):
     factor = adapter.units_to_meters()
     scale = max(1.0, float(vs.GetLScale(vs.GetLayer(handle)) or 1.0))
@@ -524,7 +582,7 @@ def _default_label_position(owner, data):
     factor = adapter.units_to_meters()
     preferences = data["preferences"]
     offset = _paper_offset_units(owner, preferences)
-    if data["role"] == "sewer_shaft":
+    if data["role"] in NODE_ROLES:
         shaft = read_shaft(owner, data)
         return (shaft["x_m"] / factor + core.shaft_outer_diameter_m(shaft) / factor / 2.0 + offset,
                 shaft["y_m"] / factor + offset)
@@ -675,6 +733,37 @@ def ensure_label(owner, data, created):
     return label
 
 
+def _ensure_endpoint_labels(pipes, created, snapshots=None):
+    """Reconcile labels at every existing real shaft touched by new pipes.
+
+    New branches can terminate at an already existing shaft that is not part
+    of the newly created object list.  Without this explicit pass its second
+    inlet exists in the topology but the independent Z2 label PIO is missing.
+    Stutzen are deliberately ignored here: their one fitting label belongs to
+    the fitting itself and they are not shaft inlet/outlet annotations.
+    """
+    snapshots = snapshots if snapshots is not None else {}
+    touched = []
+    for identity in dict.fromkeys(
+            endpoint for pipe in pipes
+            for endpoint in (pipe["start_id"], pipe["end_id"])):
+        handle = _handle_by_id(core.SHAFT_PREFIX, identity)
+        if not handle:
+            continue
+        data = _live().data_of(handle)
+        if not is_sewer_data(data) or data.get("role") != "sewer_shaft":
+            continue
+        shaft = read_shaft(handle, data)
+        if (not shaft.get("visible", True) or
+                shaft.get("structure_type", "round") not in ("round", "special")):
+            continue
+        if handle not in created and handle not in snapshots:
+            snapshots[handle] = copy.deepcopy(data)
+        ensure_label(handle, data, created)
+        touched.append(handle)
+    return tuple(dict.fromkeys(touched))
+
+
 def _reset_labels(data):
     for name in data.get("labels", ()):
         handle = vs.GetObject(name)
@@ -711,7 +800,7 @@ def create(paths, options, preferences):
     try:
         shaft_handles = {}
         for shaft in built["shafts"]:
-            handle = _new_object((shaft["x_m"], shaft["y_m"]), "sewer_shaft", shaft,
+            handle = _new_object((shaft["x_m"], shaft["y_m"]), _node_role(shaft), shaft,
                                  preferences, created)
             shaft_handles[shaft["id"]] = handle
         for _handle, shaft in shaft_records():
@@ -730,9 +819,11 @@ def create(paths, options, preferences):
             if data["role"] == "sewer_shaft" and not data["shaft"]["visible"]:
                 continue
             ensure_label(owner, data, created)
+        touched_shafts = _ensure_endpoint_labels(
+            built["pipes"], created, existing_shaft_snapshots)
         for handle in created:
             _reset_checked(handle)
-        for shaft_handle in shaft_handles.values():
+        for shaft_handle in tuple(shaft_handles.values()) + touched_shafts:
             if shaft_handle not in created:
                 _reset_checked(shaft_handle)
         validate_document(preferences)
@@ -1092,7 +1183,7 @@ def split_selected(handle, point_m, preferences):
     snapshots = {existing_handle: copy.deepcopy(_live().data_of(existing_handle))
                  for existing_handle in stub_updates}
     try:
-        shaft_handle = _new_object(xy, "sewer_shaft", shaft, preferences, created)
+        shaft_handle = _new_object(xy, _node_role(shaft), shaft, preferences, created)
         pipe_handles = [handle]
         new_handle = _new_object(
             (0.0, 0.0), "sewer_pipe", second, preferences, created)
@@ -1107,6 +1198,8 @@ def split_selected(handle, point_m, preferences):
             first["start_id"]: start_handle, first["end_id"]: shaft_handle})
         for owner in (shaft_handle,) + tuple(pipe_handles):
             ensure_label(owner, _live().data_of(owner), created)
+        touched_shafts = _ensure_endpoint_labels(
+            (first, second), created, snapshots)
         for existing_handle, value in stub_updates.items():
             _live().write_data(existing_handle, dict(
                 snapshots[existing_handle], shaft=value,
@@ -1116,6 +1209,9 @@ def split_selected(handle, point_m, preferences):
         _reset_checked(handle)
         for existing_handle in stub_updates:
             _reset_checked(existing_handle)
+        for existing_handle in touched_shafts:
+            if existing_handle not in stub_updates:
+                _reset_checked(existing_handle)
     except Exception:
         if owner_mutated:
             _live().write_data(handle, owner_snapshot)
@@ -1251,7 +1347,7 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
         shaft_handles = {value["id"]: existing_handle
                          for existing_handle, value in shaft_records()}
         for value in new_shafts:
-            new_handle = _new_object((value["x_m"], value["y_m"]), "sewer_shaft",
+            new_handle = _new_object((value["x_m"], value["y_m"]), _node_role(value),
                                      value, preferences, created)
             shaft_handles[value["id"]] = new_handle
         pipe_handles = [handle]
@@ -1272,6 +1368,8 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
         owners += pipe_handles
         for owner in owners:
             ensure_label(owner, _live().data_of(owner), created)
+        touched_shafts = _ensure_endpoint_labels(
+            new_pipes, created, snapshots)
         for existing_handle, value in stub_updates.items():
             _live().write_data(existing_handle, dict(
                 snapshots[existing_handle], shaft=value,
@@ -1281,6 +1379,9 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
         _reset_checked(handle)
         for existing_handle in stub_updates:
             _reset_checked(existing_handle)
+        for existing_handle in touched_shafts:
+            if existing_handle not in stub_updates:
+                _reset_checked(existing_handle)
     except Exception:
         if owner_mutated:
             _live().write_data(handle, owner_snapshot)
@@ -1497,11 +1598,12 @@ def connect_from_shaft(handle, branch_paths, options, preferences):
     ensure_classes(preferences)
     vs.NameUndoEvent("PD Leitung an Kanalschacht anschließen")
     created = []
+    endpoint_snapshots = {}
     try:
         shaft_handles = {value["id"]: existing_handle
                          for existing_handle, value in shaft_records()}
         for value in built["shafts"]:
-            new_handle = _new_object((value["x_m"], value["y_m"]), "sewer_shaft",
+            new_handle = _new_object((value["x_m"], value["y_m"]), _node_role(value),
                                      value, preferences, created)
             shaft_handles[value["id"]] = new_handle
         pipe_handles = []
@@ -1513,13 +1615,20 @@ def connect_from_shaft(handle, branch_paths, options, preferences):
         owners.extend(pipe_handles)
         for owner in owners:
             ensure_label(owner, _live().data_of(owner), created)
+        touched_shafts = _ensure_endpoint_labels(
+            built["pipes"], created, endpoint_snapshots)
         for created_handle in created:
             _reset_checked(created_handle)
-        _reset_checked(handle)
+        for shaft_handle in touched_shafts:
+            if shaft_handle not in created:
+                _reset_checked(shaft_handle)
     except Exception:
         for created_handle in reversed(created):
             if created_handle:
                 vs.DelObject(created_handle)
+        for shaft_handle, snapshot in endpoint_snapshots.items():
+            _live().write_data(shaft_handle, snapshot)
+            vs.ResetObject(shaft_handle)
         raise
     vs.DSelectAll()
     for pipe_handle in pipe_handles:
@@ -1585,16 +1694,17 @@ def connect_from_rigole(handle, branch_paths, options, preferences):
     ensure_classes(preferences)
     created = []
     snapshot = copy.deepcopy(rigole_data)
+    endpoint_snapshots = {}
     vs.NameUndoEvent("PD Kanal an Rigole anschließen")
     try:
         shaft_handles = {value["id"]: existing_handle
                          for existing_handle, value in existing_rows}
         junction_handle = _new_object(
-            (junction["x_m"], junction["y_m"]), "sewer_shaft",
+            (junction["x_m"], junction["y_m"]), _node_role(junction),
             junction, preferences, created)
         shaft_handles[node_id] = junction_handle
         for value in built["shafts"]:
-            new_handle = _new_object((value["x_m"], value["y_m"]), "sewer_shaft",
+            new_handle = _new_object((value["x_m"], value["y_m"]), _node_role(value),
                                      value, preferences, created)
             shaft_handles[value["id"]] = new_handle
         pipe_handles = []
@@ -1616,8 +1726,13 @@ def connect_from_rigole(handle, branch_paths, options, preferences):
         owners.extend(pipe_handles)
         for owner in owners:
             ensure_label(owner, _live().data_of(owner), created)
+        touched_shafts = _ensure_endpoint_labels(
+            built["pipes"], created, endpoint_snapshots)
         for created_handle in created:
             _reset_checked(created_handle)
+        for shaft_handle in touched_shafts:
+            if shaft_handle not in created:
+                _reset_checked(shaft_handle)
         _reset_checked(handle)
     except Exception:
         _live().write_data(handle, snapshot)
@@ -1625,6 +1740,9 @@ def connect_from_rigole(handle, branch_paths, options, preferences):
         for created_handle in reversed(created):
             if created_handle:
                 vs.DelObject(created_handle)
+        for shaft_handle, shaft_snapshot in endpoint_snapshots.items():
+            _live().write_data(shaft_handle, shaft_snapshot)
+            vs.ResetObject(shaft_handle)
         raise
     vs.DSelectAll()
     for pipe_handle in pipe_handles:
@@ -1696,13 +1814,17 @@ def delete_selected(handles):
     """Delete selected pipes; selected shafts also delete their connected pipes."""
     pipe_rows = {}
     shaft_rows = {}
+    fitting_rows = {}
     rigole_rows = {}
     for handle, data in handles:
         if data.get("role") == "sewer_pipe":
             pipe_rows[handle] = (data, read_pipe(handle, data))
-        elif data.get("role") == "sewer_shaft":
+        elif data.get("role") in NODE_ROLES:
             shaft = read_shaft(handle, data)
-            shaft_rows[handle] = (data, shaft)
+            if data.get("role") == "sewer_fitting":
+                fitting_rows[handle] = (data, shaft)
+            else:
+                shaft_rows[handle] = (data, shaft)
             for pipe_handle, pipe in _connected_pipes(shaft["id"]):
                 pipe_rows[pipe_handle] = (_live().data_of(pipe_handle), pipe)
         elif data.get("role") == "sewer_rigole":
@@ -1717,18 +1839,24 @@ def delete_selected(handles):
                 shaft_rows[node_handle] = (node_data, node)
                 for pipe_handle, pipe in _connected_pipes(node["id"]):
                     pipe_rows[pipe_handle] = (_live().data_of(pipe_handle), pipe)
-    if not pipe_rows and not shaft_rows and not rigole_rows:
+    if not pipe_rows and not shaft_rows and not fitting_rows and not rigole_rows:
         raise core.SewerError("Keine löschbaren Kanalobjekte markiert.")
     remaining_pipes = [pipe for handle, pipe in pipe_records() if handle not in pipe_rows]
-    remaining_shafts = [shaft for handle, shaft in shaft_records() if handle not in shaft_rows]
+    removed_nodes = set(shaft_rows).union(fitting_rows)
+    remaining_shafts = [shaft for handle, shaft in shaft_records()
+                        if handle not in removed_nodes]
     core.validate_network(remaining_pipes, remaining_shafts)
     affected_shaft_ids = {identity for _handle, (_data, pipe) in pipe_rows.items()
                           for identity in (pipe["start_id"], pipe["end_id"])}
-    removed_shaft_ids = {shaft["id"] for _handle, (_data, shaft) in shaft_rows.items()}
+    removed_shaft_ids = {
+        shaft["id"] for rows in (shaft_rows, fitting_rows)
+        for _handle, (_data, shaft) in rows.items()}
     vs.NameUndoEvent("PD Kanalobjekte löschen")
     for handle, (data, _pipe) in pipe_rows.items():
         _delete_with_labels(handle, data)
     for handle, (data, _shaft) in shaft_rows.items():
+        _delete_with_labels(handle, data)
+    for handle, (data, _fitting) in fitting_rows.items():
         _delete_with_labels(handle, data)
     for handle, (data, _rigole) in rigole_rows.items():
         _delete_with_labels(handle, data)
@@ -1737,7 +1865,7 @@ def delete_selected(handles):
         if shaft_handle:
             vs.ResetObject(shaft_handle)
     vs.ReDrawAll()
-    return len(pipe_rows), len(shaft_rows), len(rigole_rows)
+    return len(pipe_rows), len(shaft_rows), len(fitting_rows), len(rigole_rows)
 
 
 def _set_graphics(handle, class_value, color, fill=True, opacity=100):
@@ -2478,7 +2606,7 @@ def _frustum_faces(bottom_center, bottom_radius, top_center, top_radius, segment
 
 
 def _draw_shaft_3d(handle, shaft, class_value, pen_color, fill_color,
-                   transparency_percent, factor):
+                   transparency_percent, factor, cover_class_value=None):
     layer_z = _layer_z_m(handle)
     z0 = (shaft["ks_m"] - layer_z) / factor
     z1 = (shaft["kd_m"] - layer_z) / factor
@@ -2513,7 +2641,7 @@ def _draw_shaft_3d(handle, shaft, class_value, pen_color, fill_color,
     if not lid:
         raise core.SewerError("3D-Schachtdeckel konnte nicht erzeugt werden.")
     _set_shaft_graphics(
-        lid, class_value, pen_color, fill_color,
+        lid, cover_class_value or class_value, pen_color, fill_color,
         transparency_percent, fill=True)
 
 
@@ -2687,6 +2815,32 @@ def _confirmed_pipe_directions(pipe_updates):
     return result
 
 
+def edit_stub_alignment(handle, preferences):
+    """Edit one fitting without treating it as a manhole."""
+    data = _live().data_of(handle)
+    shaft = read_shaft(handle, data)
+    if shaft.get("structure_type") != "stub" or not shaft.get("stub"):
+        raise core.SewerError("Das gewählte Kanalbauteil ist kein Stutzen.")
+    alignment = sewer_ui.stub_alignment_dialog(
+        shaft["stub"]["alignment"], editing=True)
+    if alignment is None:
+        return False
+    connected = tuple(_connected_pipes(shaft["id"]))
+    changed_shaft, changed_branch = core.change_stub_alignment(
+        shaft, tuple(pipe for _pipe_handle, pipe in connected), alignment)
+    pipe_handles = {pipe["id"]: pipe_handle for pipe_handle, pipe in connected}
+    branch_handle = pipe_handles.get(changed_branch["id"])
+    if not branch_handle:
+        raise core.SewerError("Die Anschlussleitung des Stutzens fehlt.")
+    pipe_updates = _confirmed_pipe_directions({branch_handle: changed_branch})
+    if pipe_updates is None:
+        return False
+    _commit_network_updates(
+        pipe_updates, {handle: changed_shaft}, preferences,
+        "PD Kanalstutzen bearbeiten")
+    return True
+
+
 def _cover_direction(shaft):
     angles = []
     for _pipe_handle, pipe in _connected_pipes(shaft["id"]):
@@ -2763,7 +2917,8 @@ def _draw_local_polygon(points, class_value, color, fill=True, opacity=50,
 
 
 def _draw_special_shaft_3d(handle, shaft, class_value, pen_color, fill_color,
-                           transparency_percent, factor):
+                           transparency_percent, factor,
+                           cover_class_value=None):
     layer_z = _layer_z_m(handle)
     z0 = (shaft["ks_m"] - layer_z) / factor
     z1 = (shaft["kd_m"] - layer_z) / factor
@@ -2799,7 +2954,7 @@ def _draw_special_shaft_3d(handle, shaft, class_value, pen_color, fill_color,
     if not lid:
         raise core.SewerError("3D-Schachtdeckel des Sonderschachts konnte nicht erzeugt werden.")
     _set_shaft_graphics(
-        lid, class_value, pen_color, fill_color,
+        lid, cover_class_value or class_value, pen_color, fill_color,
         transparency_percent, fill=True)
 
 
@@ -3028,6 +3183,7 @@ def draw_shaft(handle, data):
         shaft, preferences)
     color = pen_color
     class_value = class_name(shaft, preferences)
+    cover_value = cover_class_name(shaft, preferences)
     _set_shaft_graphics(
         handle, class_value, pen_color, fill_color,
         transparency_percent, fill=True)
@@ -3049,11 +3205,12 @@ def draw_shaft(handle, data):
                 if not inner:
                     raise core.SewerError("Innere Betonschachtkontur konnte nicht erzeugt werden.")
                 _set_graphics(inner, class_value, color, fill=False, opacity=100)
-            _draw_shaft_cover(shaft, factor, class_value, color)
+            _draw_shaft_cover(shaft, factor, cover_value, color)
             if preferences.get("draw_3d", True):
                 _draw_shaft_3d(
                     handle, shaft, class_name(shaft, preferences, "_3D"),
-                    pen_color, fill_color, transparency_percent, factor)
+                    pen_color, fill_color, transparency_percent, factor,
+                    cover_class_name(shaft, preferences, "_3D"))
                 vs.ResetOrientation3D()
     elif structure == "special" and shaft["visible"]:
         _draw_local_polygon(
@@ -3061,11 +3218,12 @@ def draw_shaft(handle, data):
             class_value, pen_color, fill=True,
             fill_color=fill_color,
             transparency_percent=transparency_percent)
-        _draw_shaft_cover(shaft, factor, class_value, color)
+        _draw_shaft_cover(shaft, factor, cover_value, color)
         if preferences.get("draw_3d", True):
             _draw_special_shaft_3d(
                 handle, shaft, class_name(shaft, preferences, "_3D"),
-                pen_color, fill_color, transparency_percent, factor)
+                pen_color, fill_color, transparency_percent, factor,
+                cover_class_name(shaft, preferences, "_3D"))
             vs.ResetOrientation3D()
     elif structure == "floor_drain" and shaft["visible"]:
         _draw_floor_drain(
@@ -3110,25 +3268,30 @@ def _holding_component(pipe):
     """Return the live pipe component that constitutes one real holding."""
     current = core.validate_pipe(pipe)
     pipe_map = {current["id"]: current}
-    for _handle, data in objects("sewer_pipe"):
-        raw = data.get("pipe") if isinstance(data, dict) else None
-        if not isinstance(raw, dict):
-            continue
-        try:
-            value = core.validate_pipe(raw)
-        except core.SewerError:
-            continue
-        pipe_map[value["id"]] = value
     shaft_map = {}
-    for shaft_handle, data in objects("sewer_shaft"):
-        raw = data.get("shaft") if isinstance(data, dict) else None
-        if not isinstance(raw, dict):
-            continue
-        try:
-            value = read_shaft(shaft_handle, data)
-        except core.SewerError:
-            continue
-        shaft_map[value["id"]] = value
+    # This helper runs repeatedly while labels and stations are rebuilt. One
+    # document traversal avoids a separate full scan for pipes, shafts and
+    # fittings in large networks.
+    for object_handle, data in objects():
+        role = data.get("role") if isinstance(data, dict) else None
+        if role is None and isinstance(data, dict):
+            # Read-only compatibility for older fixtures/data. Persisted
+            # objects always carry an explicit semantic role.
+            role = ("sewer_pipe" if isinstance(data.get("pipe"), dict) else
+                    _node_role(data["shaft"])
+                    if isinstance(data.get("shaft"), dict) else None)
+        if role == "sewer_pipe":
+            try:
+                value = core.validate_pipe(data["pipe"])
+            except (KeyError, core.SewerError):
+                continue
+            pipe_map[value["id"]] = value
+        elif role in NODE_ROLES:
+            try:
+                value = read_shaft(object_handle, data)
+            except core.SewerError:
+                continue
+            shaft_map[value["id"]] = value
     at_node = {}
     for value in pipe_map.values():
         at_node.setdefault(value["start_id"], []).append(value["id"])
@@ -3230,7 +3393,8 @@ def _holding_label_pipe(pipe):
     return core.validate_pipe(result)
 
 
-def _create_text(text, angle, preferences, wrap_width=0.0, point_size=None):
+def _create_text(text, angle, preferences, wrap_width=0.0, point_size=None,
+                 class_value=None):
     vs.TextOrigin((0.0, 0.0))
     vs.CreateText(text)
     handle = vs.LNewObj()
@@ -3248,7 +3412,7 @@ def _create_text(text, angle, preferences, wrap_width=0.0, point_size=None):
     vs.SetTextJust(handle, 2)
     vs.SetTextVertAlignN(handle, 3)
     vs.SetTextOrientation(handle, (0.0, 0.0), angle, False)
-    vs.SetClass(handle, preferences["text_class"])
+    vs.SetClass(handle, class_value or preferences["text_class"])
     vs.SetPenFore(handle, TEXT_COLOR)
     vs.SetFPat(handle, 0)
     return handle
@@ -3273,7 +3437,7 @@ def _bbox(value):
     return ((min(xs), min(ys)), (max(xs), max(ys)))
 
 
-def _leader(anchor, box, preferences, padding):
+def _leader(anchor, box, preferences, padding, class_value=None):
     end = label_layout.leader_end(anchor, (box,), padding)
     if math.dist(anchor, end) <= 1e-9:
         return None
@@ -3281,11 +3445,13 @@ def _leader(anchor, box, preferences, padding):
     vs.LineTo(end)
     leader = vs.LNewObj()
     if leader:
-        _set_graphics(leader, preferences["text_class"], TEXT_COLOR, fill=False, opacity=100)
+        _set_graphics(
+            leader, class_value or preferences["text_class"], TEXT_COLOR,
+            fill=False, opacity=100)
     return leader
 
 
-def _shaft_label_frame(box, preferences, padding):
+def _shaft_label_frame(box, preferences, padding, class_value=None):
     left = box[0][0] - padding
     bottom = box[0][1] - padding
     right = box[1][0] + padding
@@ -3294,7 +3460,9 @@ def _shaft_label_frame(box, preferences, padding):
     frame = vs.LNewObj()
     if not frame:
         raise core.SewerError("Beschriftungsrahmen konnte nicht erzeugt werden.")
-    _set_graphics(frame, preferences["text_class"], TEXT_COLOR, fill=False, opacity=100)
+    _set_graphics(
+        frame, class_value or preferences["text_class"], TEXT_COLOR,
+        fill=False, opacity=100)
     return frame, ((left, bottom), (right, top))
 
 
@@ -3305,6 +3473,14 @@ def draw_label(handle, data):
         return
     preferences = owner_data["preferences"]
     ensure_classes(preferences)
+    text_class = label_class_name(owner_data, preferences, data)
+    active_class = str(vs.ActiveClass() or "")
+    try:
+        _ensure_class(text_class, TEXT_COLOR, fill=False)
+    finally:
+        if active_class:
+            vs.NameClass(active_class)
+    vs.SetClass(handle, text_class)
     factor = adapter.units_to_meters()
     default_position = _label_default_position(owner, owner_data, data)
     label_position = adapter.symbol_location_2d(
@@ -3348,7 +3524,7 @@ def draw_label(handle, data):
         pipe_name = pipe.get("name", "") if preferences.get("pipe_name_visible", True) else ""
         anchor_m = _pipe_anchor(pipe)
         wrap_width = pipe.get("label_width_m", 0.0) / factor
-    elif owner_data["role"] == "sewer_shaft":
+    elif owner_data["role"] in NODE_ROLES:
         shaft_label = True
         shaft = read_shaft(owner, owner_data)
         rows = shaft_connection_views(shaft)
@@ -3370,7 +3546,8 @@ def draw_label(handle, data):
     # now adds the user's angle instead of being cancelled during every reset.
     rotation = float(vs.GetSymRot(handle) or 0.0)
     text_handle = _create_text(
-        text, angle, preferences, wrap_width, point_size=point_size)
+        text, angle, preferences, wrap_width, point_size=point_size,
+        class_value=text_class)
     if pipe_name and text.startswith(pipe_name):
         vs.SetTextSize(
             text_handle, 0, len(pipe_name),
@@ -3393,10 +3570,11 @@ def draw_label(handle, data):
     anchor = (anchor_world[0] * math.cos(radians) - anchor_world[1] * math.sin(radians),
               anchor_world[0] * math.sin(radians) + anchor_world[1] * math.cos(radians))
     if shaft_label:
-        _frame, framed_box = _shaft_label_frame(box, preferences, padding)
-        _leader(anchor, framed_box, preferences, 0.0)
+        _frame, framed_box = _shaft_label_frame(
+            box, preferences, padding, text_class)
+        _leader(anchor, framed_box, preferences, 0.0, text_class)
     elif not data.get("auto_position", True) and math.dist(label_position, default_position) > 1e-5:
-        _leader(anchor, box, preferences, padding)
+        _leader(anchor, box, preferences, padding, text_class)
 
 
 def _unique_shaft_name(name, own_id=None):
@@ -3526,7 +3704,8 @@ def _commit_network_updates(pipe_updates, shaft_updates, preferences, undo_name)
     try:
         for handle, value in shafts.items():
             _live().write_data(handle, dict(
-                snapshots[handle], shaft=value, preferences=copy.deepcopy(preferences)))
+                snapshots[handle], role=_node_role(value), shaft=value,
+                preferences=copy.deepcopy(preferences)))
         for handle, value in pipes.items():
             _live().write_data(handle, dict(
                 snapshots[handle], pipe=value, preferences=copy.deepcopy(preferences)))
@@ -3646,7 +3825,8 @@ def network_component(handle):
     if data and data.get("role") == "sewer_label":
         handle = vs.GetObject(data.get("owner", ""))
         data = _live().data_of(handle)
-    if not is_sewer_data(data) or data["role"] not in ("sewer_pipe", "sewer_shaft"):
+    if not is_sewer_data(data) or data["role"] not in (
+            "sewer_pipe", "sewer_shaft", "sewer_fitting"):
         raise core.SewerError("Kein Kanalnetz gewählt.")
     all_pipes = tuple(pipe_records())
     all_shafts = {shaft["id"]: (shaft_handle, shaft) for shaft_handle, shaft in shaft_records()}
@@ -3792,6 +3972,9 @@ def edit(handle, preferences):
         data = _live().data_of(handle)
     if not is_sewer_data(data):
         raise core.SewerError("Kein Kanalobjekt gewählt.")
+    if (data["role"] in NODE_ROLES and
+            read_shaft(handle, data).get("structure_type") == "stub"):
+        return edit_stub_alignment(handle, preferences)
     if data["role"] == "sewer_pipe":
         original = read_pipe(handle, data)
         initial = dict(original, calculation_mode="end", calculation_value=original["end_invert_m"],
@@ -3841,7 +4024,7 @@ def edit(handle, preferences):
                 label_rotation_deg=updated["label_rotation_deg"]))
         _commit_network_updates(pipe_updates, {}, preferences, "PD Kanalstrecke bearbeiten")
         return True
-    if data["role"] == "sewer_shaft":
+    if data["role"] in NODE_ROLES:
         original = read_shaft(handle, data)
         connected = _connected_pipes(original["id"])
         inlet_rows = _shaft_inlet_dialog_rows(original, connected)
@@ -4001,7 +4184,8 @@ def _preference_targets(selected, scope):
     if scope not in ("selection", "systems", "drawing"):
         raise core.SewerError("Ungültiger Aktualisierungsumfang der Kanaleinstellungen.")
     rows = tuple((handle, data) for handle, data in objects()
-                 if data.get("role") in ("sewer_pipe", "sewer_shaft", "sewer_rigole"))
+                 if data.get("role") in (
+                     "sewer_pipe", "sewer_shaft", "sewer_fitting", "sewer_rigole"))
     if scope == "drawing":
         return rows
     selected_handles = {handle for handle, _data in tuple(selected or ())}
@@ -4016,7 +4200,7 @@ def _preference_targets(selected, scope):
     # when older files used only the channel kind (RW/SW/MW) as network_id.
     node_ids = set()
     for _handle, data in chosen:
-        if data["role"] == "sewer_shaft":
+        if data["role"] in NODE_ROLES:
             node_ids.add(data["shaft"]["id"])
         elif data["role"] == "sewer_pipe":
             node_ids.update((data["pipe"]["start_id"], data["pipe"]["end_id"]))
@@ -4039,7 +4223,7 @@ def _preference_targets(selected, scope):
         if ((data["role"] == "sewer_pipe" and
              data["pipe"]["start_id"] in node_ids and
              data["pipe"]["end_id"] in node_ids) or
-            (data["role"] == "sewer_shaft" and data["shaft"]["id"] in node_ids) or
+            (data["role"] in NODE_ROLES and data["shaft"]["id"] in node_ids) or
             (data["role"] == "sewer_rigole" and any(
                 connection["node_id"] in node_ids
                 for connection in data["rigole"].get("connections", ())))))
@@ -4059,7 +4243,7 @@ def _data_with_preferences(data, preferences):
             "axis_line_type": preferences["axis_line_type"],
         })
         updated["pipe"] = core.validate_pipe(pipe)
-    elif updated["role"] == "sewer_shaft":
+    elif updated["role"] in NODE_ROLES:
         shaft = copy.deepcopy(updated["shaft"])
         if (shaft.get("visible", True) and
                 shaft.get("structure_type", "round") in ("round", "special") and
@@ -4073,6 +4257,7 @@ def _data_with_preferences(data, preferences):
                 "cover_rotation_deg": preferences["shaft_cover_rotation_deg"],
             })
         updated["shaft"] = core.validate_shaft(shaft, allow_hidden=True)
+        updated["role"] = _node_role(updated["shaft"])
     elif updated["role"] == "sewer_rigole":
         updated["rigole"] = core.validate_rigole(updated["rigole"])
     return updated
@@ -4090,7 +4275,7 @@ def apply_preferences(preferences, selected=None, scope="drawing"):
                for handle, data in targets}
     affected_nodes = set()
     for data in planned.values():
-        if data["role"] == "sewer_shaft":
+        if data["role"] in NODE_ROLES:
             affected_nodes.add(data["shaft"]["id"])
         elif data["role"] == "sewer_pipe":
             affected_nodes.update((data["pipe"]["start_id"], data["pipe"]["end_id"]))
@@ -4106,7 +4291,7 @@ def apply_preferences(preferences, selected=None, scope="drawing"):
             pipe = data["pipe"]
             if pipe["start_id"] in affected_nodes or pipe["end_id"] in affected_nodes:
                 redraw.add(handle)
-        elif (data.get("role") == "sewer_shaft" and
+        elif (data.get("role") in NODE_ROLES and
               data["shaft"]["id"] in affected_nodes):
             redraw.add(handle)
     rollback_snapshots = dict(snapshots)
@@ -4140,7 +4325,7 @@ def apply_preferences(preferences, selected=None, scope="drawing"):
 def apply_standard_colors(preferences):
     count = 0
     for handle, data in objects():
-        if data["role"] not in ("sewer_pipe", "sewer_shaft"):
+        if data["role"] not in ("sewer_pipe", "sewer_shaft", "sewer_fitting"):
             continue
         # Store the current system standards on every managed object.  Any
         # explicit pipe or shaft overrides remain in their payload and thus
@@ -4191,15 +4376,23 @@ def validate_document(preferences=None):
                               rigole["name"])
     if errors:
         raise core.SewerError("\n".join(sorted(set(errors))))
-    return {"pipes": len(pipes), "shafts": len([value for value in shafts if value["visible"]]),
-            "nodes": len(shafts), "rigoles": len(rigoles), "errors": ()}
+    fittings = [value for value in shafts
+                if value.get("structure_type") == "stub"]
+    visible_shafts = [value for value in shafts
+                      if value.get("visible") and
+                      value.get("structure_type") != "stub"]
+    junctions = [value for value in shafts
+                 if value.get("structure_type") == "junction"]
+    return {"pipes": len(pipes), "shafts": len(visible_shafts),
+            "fittings": len(fittings), "nodes": len(junctions),
+            "rigoles": len(rigoles), "errors": ()}
 
 
 def _clone_translation_m(handle, role, payload):
     factor = adapter.units_to_meters()
     location = adapter.symbol_location_2d(handle, (0.0, 0.0))
     current = location[0] * factor, location[1] * factor
-    if role in ("sewer_shaft", "sewer_rigole"):
+    if role in ("sewer_shaft", "sewer_fitting", "sewer_rigole"):
         return current[0] - payload["x_m"], current[1] - payload["y_m"]
     return current
 
@@ -4255,7 +4448,7 @@ def _retarget_cloned_references(translation):
         new_id = str(payload.get("id") or "")
         if not old_id or not new_id:
             continue
-        if row.get("role") == "sewer_shaft":
+        if row.get("role") in NODE_ROLES:
             shaft_map[old_id] = new_id
             shaft_names[new_id] = str(payload.get("name") or "")
         elif row.get("role") == "sewer_pipe":
@@ -4277,7 +4470,7 @@ def _retarget_cloned_references(translation):
         return result
 
     for handle, row in rows:
-        payload_key = "shaft" if row.get("role") == "sewer_shaft" else "pipe"
+        payload_key = "shaft" if row.get("role") in NODE_ROLES else "pipe"
         payload = copy.deepcopy(row.get(payload_key) or {})
         if not _same_clone_translation(payload, translation):
             continue
@@ -4301,7 +4494,9 @@ def _retarget_cloned_references(translation):
 def _cloned_endpoint_id(old_id, translation):
     tolerance = 1e-5
     pending = []
-    for shaft_handle, shaft_data in objects("sewer_shaft"):
+    for shaft_handle, shaft_data in objects():
+        if shaft_data.get("role") not in NODE_ROLES:
+            continue
         payload = shaft_data.get("shaft") or {}
         stored_translation = payload.get("clone_translation_m")
         if (payload.get("clone_origin_id") == old_id and
@@ -4328,13 +4523,23 @@ def _cloned_endpoint_id(old_id, translation):
 
 
 def _repair_duplicate(handle, data):
-    payload_keys = {"sewer_shaft": "shaft", "sewer_pipe": "pipe",
+    payload_keys = {"sewer_shaft": "shaft", "sewer_fitting": "shaft",
+                    "sewer_pipe": "pipe",
                     "sewer_rigole": "rigole"}
     prefixes = {"sewer_shaft": core.SHAFT_PREFIX,
+                "sewer_fitting": core.SHAFT_PREFIX,
                 "sewer_pipe": core.PIPE_PREFIX,
                 "sewer_rigole": core.RIGOLE_PREFIX}
     payload_key = payload_keys[data["role"]]
     payload = copy.deepcopy(data[payload_key])
+    if data["role"] in NODE_ROLES:
+        desired_role = _node_role(payload)
+        if data["role"] != desired_role:
+            # Migrate legacy drawings lazily and transaction-free during the
+            # object's normal reset.  Identity and geometry stay unchanged;
+            # only the semantic object role changes from shaft to fitting.
+            data = dict(data, role=desired_role)
+            _live().write_data(handle, data)
     prefix = prefixes[data["role"]]
     expected = prefix + payload["id"]
     if _name(handle) == expected:
@@ -4342,7 +4547,7 @@ def _repair_duplicate(handle, data):
     if not vs.GetObject(expected):
         vs.SetName(handle, expected)
         return data
-    if data["role"] == "sewer_shaft":
+    if data["role"] in NODE_ROLES:
         return _repair_shaft_clone(handle, data)
     if data["role"] == "sewer_rigole":
         factor = adapter.units_to_meters()
@@ -4405,7 +4610,7 @@ def reset():
             if isinstance(data.get("pipe"), dict):
                 _sync_pipe_associations(handle, core.validate_pipe(data["pipe"]))
             draw_pipe(handle, data)
-        elif data["role"] == "sewer_shaft":
+        elif data["role"] in NODE_ROLES:
             draw_shaft(handle, data)
         elif data["role"] == "sewer_rigole":
             rigole = read_rigole(handle, data)

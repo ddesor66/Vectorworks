@@ -39,7 +39,8 @@ def _quantity_owners():
     """Return every live object whose deletion changes the quantity report."""
     owners = [
         handle for handle, data in canal_objects.objects()
-        if data.get("role") in ("sewer_pipe", "sewer_shaft", "sewer_rigole")]
+        if data.get("role") in (
+            "sewer_pipe", "sewer_shaft", "sewer_fitting", "sewer_rigole")]
     owners.extend(handle for handle, _data in utility_objects.objects())
     return tuple(owners)
 

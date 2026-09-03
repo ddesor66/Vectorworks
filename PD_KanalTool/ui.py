@@ -1870,16 +1870,21 @@ def network_chain_dialog(shafts, pipes, highlight=None):
     return result["value"] if _run(dialog, handler) == 1 else None
 
 
-def stub_alignment_dialog(default="invert"):
+def stub_alignment_dialog(default="invert", editing=False):
     """Select the vertical relation between main and branch pipe."""
     rows = (("Sohlgleich", "invert"), ("Achsgleich", "axis"),
             ("Kämpfergleich", "springline"), ("Scheitelgleich", "crown"))
     dialog = vs.CreateResizableLayout(
-        _title("Kanalstutzen nach DIN"), True, "Weiter", "Abbrechen", True, True)
+        _title("Kanalstutzen bearbeiten" if editing else "Kanalstutzen nach DIN"),
+        True, "Übernehmen" if editing else "Weiter", "Abbrechen", True, True)
     vs.CreateStyledStatic(dialog, 10, "KANALSTUTZEN  |  Anschlussart und Anschlusshöhe", -1, TITLE_STYLE)
-    vs.CreateStaticText(dialog, 11,
-                        "Zuerst wurde die Haltung gewählt. Nach dieser Einstellung die Lage des Stutzens "
-                        "anklicken und die Anschlussleitung zeichnen.", 76)
+    vs.CreateStaticText(
+        dialog, 11,
+        ("Die Hauptleitung bleibt unverändert. Anschlusssohle, Gefälle, 3D-Geometrie und "
+         "Beschriftung der vorhandenen Anschlussleitung werden gemeinsam aktualisiert."
+         if editing else
+         "Zuerst wurde die Haltung gewählt. Nach dieser Einstellung die Lage des Stutzens "
+         "anklicken und die Anschlussleitung zeichnen."), 76)
     vs.CreateStaticText(dialog, 12, "Vertikale Anschlussart:", -1)
     vs.CreatePullDownMenu(dialog, 13, 34)
     vs.SetFirstLayoutItem(dialog, 10)

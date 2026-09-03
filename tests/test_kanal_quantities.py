@@ -287,13 +287,15 @@ class RefreshBatchTests(unittest.TestCase):
         with mock.patch.object(reporting, "vs", api), mock.patch.object(
                 reporting.canal_objects, "objects", return_value=(
                     ("PIPE", {"role": "sewer_pipe"}),
+                    ("STUB", {"role": "sewer_fitting"}),
                     ("LABEL", {"role": "sewer_label"}))), mock.patch.object(
                 reporting.utility_objects, "objects", return_value=(
                     ("ROUTE", {"role": "utility_route"}),)), mock.patch.object(
                 reporting, "_delete_observer", return_value="OBSERVER"):
             self.assertEqual("OBSERVER", reporting.synchronize_delete_observer())
         self.assertEqual(
-            [("PIPE", 5, "OBSERVER"), ("ROUTE", 5, "OBSERVER")],
+            [("PIPE", 5, "OBSERVER"), ("STUB", 5, "OBSERVER"),
+             ("ROUTE", 5, "OBSERVER")],
             associations)
 
     def test_delete_observer_reset_only_marks_quantity_report_dirty(self):

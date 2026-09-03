@@ -580,15 +580,18 @@ def run(action=None):
             adapter.alert("Zwei Kanalstrecken wurden vereinigt; der Zwischenknoten wurde entfernt.")
         elif action == "delete":
             if sewer_ui.confirm_delete(len(managed)):
-                pipes, shafts, rigoles = sewer_live.delete_selected(managed)
+                pipes, shafts, fittings, rigoles = sewer_live.delete_selected(managed)
                 adapter.alert(
-                    "%d Kanalstrecke(n), %d Schacht/Schächte und %d Rigole(n) gelöscht. Rückgängig bleibt verfügbar."
-                    % (pipes, shafts, rigoles))
+                    "%d Kanalstrecke(n), %d Schacht/Schächte, %d Stutzen und %d Rigole(n) gelöscht. "
+                    "Rückgängig bleibt verfügbar."
+                    % (pipes, shafts, fittings, rigoles))
         elif action == "validate":
             result = sewer_live.validate_document(preferences)
             adapter.alert(
-                "Kanalnetz fehlerfrei: %d Rohrstrecken, %d sichtbare Schächte, %d Verbindungsknoten, %d Rigolen."
-                % (result["pipes"], result["shafts"], result["nodes"], result["rigoles"]))
+                "Kanalnetz fehlerfrei: %d Rohrstrecken, %d sichtbare Schächte, "
+                "%d Stutzen, %d Verbindungsknoten und %d Rigolen."
+                % (result["pipes"], result["shafts"], result["fittings"],
+                   result["nodes"], result["rigoles"]))
         elif action == "terrain_covers":
             selected_shafts = tuple(handle for handle, data in managed
                                     if data.get("role") == "sewer_shaft")
@@ -606,6 +609,7 @@ def run(action=None):
             has_channel_objects = bool(
                 sewer_live.objects("sewer_pipe") or
                 sewer_live.objects("sewer_shaft") or
+                sewer_live.objects("sewer_fitting") or
                 sewer_live.objects("sewer_rigole"))
             updated, update_scope = sewer_ui.preferences_dialog(
                 preferences,

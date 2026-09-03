@@ -232,6 +232,61 @@ class ShaftLabelTests(unittest.TestCase):
 
 
 class ShaftConnectionTests(unittest.TestCase):
+    def test_component_and_annotation_classes_are_separate_by_type(self):
+        first = shaft("s1", "RW.001", 0.0, 100.0)
+        second = shaft("s2", "RW.002", 10.0, 99.0)
+        value = core.pipe_between_shafts(
+            first, second, connection_options(), identity_factory=lambda: "p1")
+        self.assertEqual(
+            "PD-KAN-RW-DN300-STB",
+            core.pipe_class_name("PD-KAN", value))
+        self.assertEqual(
+            "PD-TX-Kanal-RW-DN300-STB-Haltung",
+            core.pipe_label_class_name("PD-TX-Kanal", value))
+        self.assertEqual(
+            "PD-KAN-RW-Kanalstutzen",
+            core.structure_class_name("PD-KAN", "RW", "stub"))
+        self.assertEqual(
+            "PD-TX-Kanal-RW-Kanalstutzen",
+            core.structure_label_class_name(
+                "PD-TX-Kanal", "RW", "stub"))
+        self.assertEqual(
+            "PD-KAN-RW-Schachtdeckel_3D",
+            core.cover_class_name("PD-KAN", "RW", "_3D"))
+
+    def test_stub_alignment_can_be_changed_without_changing_main_arms(self):
+        first = shaft("s1", "RW.001", 0.0, 100.0)
+        end = shaft("s2", "RW.002", 10.0, 99.0)
+        branch_start = core.validate_shaft(dict(
+            shaft("s3", "RW.003", 5.0, 100.0), y_m=5.0),
+            allow_hidden=True)
+        fitting = core.validate_shaft(dict(
+            shaft("stub", "RW.099", 5.0, 99.5),
+            diameter_m=0.0, structure_type="stub",
+            stub={"alignment": "invert", "main_dn_mm": 300,
+                  "branch_dn_mm": 150, "connection_invert_m": 99.5,
+                  "station_enabled": False, "main_start_id": "",
+                  "main_end_id": "", "main_pipe_ids": ["ma", "mb"]}),
+            allow_hidden=True)
+        main_a = core.pipe_between_shafts(
+            first, fitting, connection_options(), identity_factory=lambda: "ma")
+        main_b = core.pipe_between_shafts(
+            fitting, end, connection_options(), identity_factory=lambda: "mb")
+        branch_options = dict(
+            connection_options(), dn_mm=150, outside_diameter_mm=150)
+        branch = core.pipe_between_shafts(
+            branch_start, fitting, branch_options,
+            identity_factory=lambda: "branch")
+
+        changed, changed_branch = core.change_stub_alignment(
+            fitting, (main_a, main_b, branch), "crown")
+
+        self.assertEqual("crown", changed["stub"]["alignment"])
+        self.assertAlmostEqual(99.65, changed["stub"]["connection_invert_m"])
+        self.assertAlmostEqual(99.65, changed_branch["end_invert_m"])
+        self.assertEqual(main_a, core.validate_pipe(main_a))
+        self.assertEqual(main_b, core.validate_pipe(main_b))
+
     def test_special_outline_rejects_self_intersection(self):
         with self.assertRaisesRegex(core.SewerError, "überschneiden"):
             core.special_outline(((0.0, 0.0), (4.0, 4.0),
