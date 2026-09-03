@@ -64,7 +64,10 @@ def action_dialog(has_worksheet, warning_count=0, preferences=None):
         dialog, 16,
         "Künftigen Oberbau bei der Wiederverfüllung berücksichtigen")
     vs.CreateStaticText(dialog, 17, "Oberbaustärke [m]:", -1)
-    vs.CreateEditReal(dialog, 18, 3, float(preferences.get(
+    # This is an explicitly metre-based setting, not a document dimension.
+    # A Dimension control converts through the active document units (for
+    # example 0.5 m to 500 mm), which must not change this persisted value.
+    vs.CreateEditReal(dialog, 18, 1, float(preferences.get(
         "earthwork_pavement_thickness_m", 0.0)), 10)
     vs.SetFirstLayoutItem(dialog, 10)
     vs.SetBelowItem(dialog, 10, 11, 0, 6)
@@ -106,7 +109,11 @@ def action_dialog(has_worksheet, warning_count=0, preferences=None):
             if selected_mode < 0:
                 raise RuntimeError("Bitte Summenliste oder Einzelmassen auswählen.")
             enabled = bool(vs.GetBooleanItem(dialog, 16))
-            thickness = float(vs.GetEditReal(dialog, 18, 1)[1])
+            valid_thickness, thickness = vs.GetEditReal(dialog, 18, 1)
+            if not valid_thickness:
+                vs.AlrtDialog("Bitte eine gültige Oberbaustärke in Metern eingeben.")
+                return -1
+            thickness = float(thickness)
             if enabled and thickness <= 0.0:
                 vs.AlrtDialog(
                     "Für den berücksichtigten Oberbau ist eine Stärke größer als 0 m anzugeben.")

@@ -20,7 +20,10 @@ Dokument bereits vorhandene Ausgabeart neu auf.
 
 Die Oberbaustärke wird vollständig in Metern eingegeben, gespeichert und im
 Bericht ausgegeben. Eine ältere, noch in Zentimetern gespeicherte Einstellung
-wird beim ersten Laden automatisch und wertgleich in Meter umgerechnet.
+wird beim ersten Laden automatisch und wertgleich in Meter umgerechnet. Das
+Eingabefeld ist bewusst ein einheitenunabhängiges Zahlenfeld mit der festen
+Beschriftung `[m]`; dadurch wird `0,5` auch in Dokumenten mit Millimeter als
+Dokumenteinheit als `0,5 m` gespeichert.
 
 ## Enthaltene Mengen
 

@@ -182,6 +182,8 @@ class ExcelExportTests(unittest.TestCase):
                 self.boolean = {}
                 self.enabled = {}
                 self.choices = []
+                self.edit_real_creations = []
+                self.edit_real_reads = []
 
             def __getattr__(self, name):
                 if name.startswith(("Create", "SetFirst", "SetBelow", "SetRight")):
@@ -200,13 +202,18 @@ class ExcelExportTests(unittest.TestCase):
             def AddChoice(self, _dialog, item, label, index):
                 self.choices.append((item, label, index))
 
+            def CreateEditReal(self, _dialog, item, value_type, value, width):
+                self.edit_real_creations.append(
+                    (item, value_type, value, width))
+
             def SelectChoice(self, *_args):
                 return None
 
             def GetSelectedChoiceIndex(self, *_args):
                 return 0
 
-            def GetEditReal(self, *_args):
+            def GetEditReal(self, _dialog, item, value_type):
+                self.edit_real_reads.append((item, value_type))
                 return True, 0.20
 
             def VerifyLayout(self, _dialog):
@@ -226,6 +233,8 @@ class ExcelExportTests(unittest.TestCase):
         self.assertTrue(result["include_pavement"])
         self.assertEqual(0.20, result["pavement_thickness_m"])
         self.assertIn((20, "Alle Einzelmassen mit Summenzeilen", 1), api.choices)
+        self.assertEqual([(18, 1, 0.20, 10)], api.edit_real_creations)
+        self.assertEqual([(18, 1)], api.edit_real_reads)
         self.assertTrue(api.enabled[18])
 
     def test_legacy_centimetre_setting_is_migrated_to_metres(self):

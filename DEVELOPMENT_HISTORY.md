@@ -304,3 +304,9 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   Arbeitsblatt- und Dateisperrentests sichern die Änderung ab. Nach der
   Zusammenführung mit dem aktuellen Gelände-/Baugrubenstand bestehen insgesamt
   190 automatisierte Tests.
+- Mengenausgabe 1.2.4: Die Oberbaustärke wird im Dialog als fest in Metern
+  definiertes Zahlenfeld statt als von den Dokumenteinheiten abhängiges
+  Längenfeld gelesen. Dadurch bleibt die Eingabe `0,5` auch in Dokumenten mit
+  Millimeter als Dokumenteinheit exakt `0,5 m` und wird nicht fälschlich als
+  `500 m` gegen den zulässigen Bereich geprüft. Der Dialogtest kontrolliert
+  nun zusätzlich, dass Erzeugung und Auslesen denselben REAL-Feldtyp verwenden.
