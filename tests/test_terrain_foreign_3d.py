@@ -61,6 +61,10 @@ class FakeVS(types.ModuleType):
     def GetVertNum(self, handle): return len(self.points[handle])
     def GetPolyPt(self, handle, index): return self.points[handle][index - 1]
     def GetPolyPt3D(self, handle, index): return self.points[handle][index]
+    def GetLocus3D(self, handle): return self.points[handle][0]
+    def GetLayerElevation(self, _layer): return (0.0, 0.0)
+    def GetOriginInDocUnits(self):
+        return getattr(self, "document_origin", (0.0, 0.0))
     def IsPolyClosed(self, handle): return handle in getattr(self, "closed", ())
     def GetMeshVertsCnt(self, handle): return len(self.points[handle])
     def GetMeshVertex(self, handle, index): return self.points[handle][index]
@@ -481,6 +485,54 @@ class Foreign3DTests(unittest.TestCase):
         self.assertIsNone(adapter.create_site_model_from_selected_sources(
             "DGM Bestand", "PD-GB-Gelaendemodell"))
         self.assertEqual([("DTM6 Menu", 1)], fake.menu_calls)
+
+    def test_normalized_site_model_validation_adds_document_origin(self):
+        fake = FakeVS()
+        fake.document_origin = (-3463348.5, -5547900.4)
+        adapter = load_adapter(fake)
+        calls = []
+        expected = {
+            (-3463347.5, -5547898.4): 100.7,
+            (-3463345.5, -5547896.4): 102.5,
+            (-3463343.5, -5547894.4): 104.2,
+        }
+
+        def elevation(_handle, point, tin_type):
+            calls.append((point, tin_type))
+            return expected[tuple(round(value, 1) for value in point)]
+
+        adapter.site_model.elevation = elevation
+        result = adapter._validate_normalized_site_model(
+            "model", ((1.0, 2.0, 100.7), (3.0, 4.0, 102.5),
+                      (5.0, 6.0, 104.2)), fake.document_origin, 1.0)
+
+        self.assertEqual(3, result["checked"])
+        self.assertAlmostEqual(0.0, result["maximum_error_m"])
+        self.assertEqual([0, 0, 0], [tin_type for _point, tin_type in calls])
+
+    def test_sampler_maps_world_xy_to_normalized_dgm_origin(self):
+        fake = FakeVS()
+        fake.document_origin = (-3463348.502, -5547900.413)
+        adapter = load_adapter(fake)
+        adapter._read_record = lambda *_args: {
+            "schema": adapter.QUERY_SCHEMA,
+            "coordinate_mode": "document_origin_plus_normalized",
+            "xy_anchor_m": [3463378.392, 5547914.112],
+        }
+        calls = []
+
+        def elevation(handle, point, tin_type):
+            calls.append((handle, point, tin_type))
+            return 102.65
+
+        adapter.site_model.elevation = elevation
+        value = adapter.sampler("model", 0)(3463379.392, 5547916.112)
+
+        self.assertAlmostEqual(102.65, value)
+        self.assertEqual("model", calls[0][0])
+        self.assertEqual(0, calls[0][2])
+        self.assertAlmostEqual(-3463347.502, calls[0][1][0])
+        self.assertAlmostEqual(-5547898.413, calls[0][1][1])
 
     def test_nurbs_keeps_individual_vertex_heights(self):
         fake = FakeVS()

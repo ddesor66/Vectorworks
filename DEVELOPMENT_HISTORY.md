@@ -127,3 +127,11 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   `Fit To Objects` ersetzt die zuvor wirkungslose Schreibweise. Im Live-Test
   wurde das vollständige, bereite `DGM Bestand` dadurch unmittelbar mit
   korrekter Ausdehnung und Höhenlinien angezeigt.
+- Gelände- und Baugrubenmodul 1.0.21: Für intern normalisierte DGM-Quellen wird
+  die georeferenzierte Weltkoordinate nun mit dem aktuellen Vectorworks-
+  Dokumentursprung auf die native DGM-Abfragekoordinate abgebildet. Direkt nach
+  der Erzeugung wird jeder verbrauchte Quellstützpunkt über
+  `DTM6_GetZatXY` geprüft und die Abbildung dauerhaft am Modell gespeichert.
+  Baugruben- und Vergleichsberechnungen verwenden dieselbe Transformation. Im
+  Live-Test lieferten alle 1.172 Stützpunkte des aus 600 Texten, 276 Linien und
+  einem Bogen erzeugten `DGM Bestand` ihre Quellhöhe ohne messbare Abweichung.

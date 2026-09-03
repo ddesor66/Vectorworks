@@ -38,6 +38,9 @@ OBJECT_TYPE_NAMES = {
 }
 MODEL_RECORD = "PD_GB_Modell"
 MODEL_FIELD = "Daten"
+QUERY_RECORD = "PD_GB_DGM_Query"
+QUERY_FIELD = "Daten"
+QUERY_SCHEMA = 1
 OUTPUT_RECORD = "PD_GB_Ausgabe"
 OUTPUT_FIELD = "Daten"
 CLASS_SOURCE_POINT = "PD-GB-Quelldaten-Punkt"
@@ -1156,8 +1159,72 @@ def site_models():
     return tuple(sorted(result, key=lambda row: (row[1].casefold(), str(row[0]))))
 
 
+def _document_origin_units():
+    """Return Vectorworks' page/document origin in current document units."""
+    try:
+        value = vs.GetOriginInDocUnits()
+        if isinstance(value, (tuple, list)) and len(value) >= 2:
+            x_value, y_value = float(value[0]), float(value[1])
+            if math.isfinite(x_value) and math.isfinite(y_value):
+                return x_value, y_value
+    except (AttributeError, TypeError, ValueError, IndexError):
+        pass
+    return 0.0, 0.0
+
+
+def _normalized_source_samples(handles, factor):
+    """Snapshot normalized DGM vertices before the native command consumes them."""
+    samples = []
+    for handle in tuple(handles or ()):
+        try:
+            object_type = int(vs.GetTypeN(handle) or 0)
+            if object_type == TYPE_LOCUS_3D:
+                x_value, y_value, z_value = vs.GetLocus3D(handle)
+                z_value = float(z_value) + _layer_z_units(handle, factor)
+                samples.append((float(x_value), float(y_value), z_value))
+            elif object_type == TYPE_POLYGON_3D:
+                for index in range(int(vs.GetVertNum(handle) or 0)):
+                    x_value, y_value, z_value = vs.GetPolyPt3D(handle, index)
+                    samples.append((float(x_value), float(y_value), float(z_value)))
+        except (AttributeError, TypeError, ValueError, IndexError):
+            continue
+    return tuple(samples)
+
+
+def _validate_normalized_site_model(handle, samples, origin_units, factor,
+                                    tolerance_m=0.02):
+    """Verify the native existing TIN against every consumed source vertex."""
+    checked = tuple(samples or ())
+    if len(checked) < 3:
+        raise core.TerrainError(
+            "Für die Höhenprüfung des Geländemodells fehlen Quellstützpunkte.")
+    failed = 0
+    maximum_error_m = 0.0
+    origin_x, origin_y = origin_units
+    for x_value, y_value, expected_z in checked:
+        try:
+            actual_z = site_model.elevation(
+                handle, (x_value + origin_x, y_value + origin_y), 0)
+        except site_model.SiteModelError:
+            failed += 1
+            continue
+        maximum_error_m = max(
+            maximum_error_m, abs(float(actual_z) - float(expected_z)) * factor)
+    if failed:
+        raise core.TerrainError(
+            "Das erzeugte Geländemodell ist grafisch vorhanden, aber %d von %d "
+            "Quellstützpunkten sind über die native Höhenabfrage nicht erreichbar."
+            % (failed, len(checked)))
+    if maximum_error_m > float(tolerance_m):
+        raise core.TerrainError(
+            "Das erzeugte Geländemodell weicht an den Quellstützpunkten um bis "
+            "zu %.3f m ab." % maximum_error_m)
+    return {"checked": len(checked), "maximum_error_m": maximum_error_m}
+
+
 def create_site_model_from_selected_sources(model_name, model_class,
-                                            xy_anchor_m=None):
+                                            xy_anchor_m=None,
+                                            source_handles=None):
     """Run Vectorworks' native source-data command and reveal its new model.
 
     The command itself remains native so Vectorworks owns the triangulation and
@@ -1165,6 +1232,9 @@ def create_site_model_from_selected_sources(model_name, model_class,
     newly created site-model PIO is found independently of names, assigned the
     requested class/name, made visible and selected for an unambiguous result.
     """
+    factor = units_to_meters()
+    source_samples = _normalized_source_samples(source_handles, factor)
+    creation_origin = _document_origin_units()
     existing_ids = set(_identifier(handle) for handle, _name in site_models())
     try:
         # Universal workspace command name and first chunk item:
@@ -1273,6 +1343,19 @@ def create_site_model_from_selected_sources(model_name, model_class,
     if not vs.DTM6_IsObjectReady(handle):
         raise core.TerrainError(
             "Das erzeugte Geländemodell ist vorhanden, aber noch nicht auswertbar.")
+    validation = {"checked": 0, "maximum_error_m": 0.0}
+    if source_handles is not None:
+        validation = _validate_normalized_site_model(
+            handle, source_samples, creation_origin, factor)
+        _write_record(handle, QUERY_RECORD, QUERY_FIELD, {
+            "schema": QUERY_SCHEMA,
+            "coordinate_mode": "document_origin_plus_normalized",
+            "xy_anchor_m": [float(anchor[0]), float(anchor[1])],
+            "creation_origin_units": [float(creation_origin[0]),
+                                      float(creation_origin[1])],
+            "validated_points": int(validation["checked"]),
+            "maximum_error_m": float(validation["maximum_error_m"]),
+        })
     vs.ReDrawAll()
     try:
         # A freshly returned DTM has no reliable bounding box until its PIO is
@@ -1293,6 +1376,8 @@ def create_site_model_from_selected_sources(model_name, model_class,
         "ready": True,
         "selected": True,
         "xy_anchor_m": anchor,
+        "validated_points": int(validation["checked"]),
+        "maximum_error_m": float(validation["maximum_error_m"]),
     }
 
 
@@ -1310,6 +1395,11 @@ def model_by_name(name):
 def model_metadata(handle):
     value = _read_record(handle, MODEL_RECORD, MODEL_FIELD)
     return value if value and value.get("schema") == core.SCHEMA else None
+
+
+def model_query_metadata(handle):
+    value = _read_record(handle, QUERY_RECORD, QUERY_FIELD)
+    return value if value and value.get("schema") == QUERY_SCHEMA else None
 
 
 def register_model(handle, variant_name, role, reference_name="", priority=0,
@@ -1367,10 +1457,19 @@ def delete_managed_variant(model_name):
 
 def sampler(handle, tin_type=2):
     factor = units_to_meters()
+    metadata = model_query_metadata(handle)
 
     def elevation(x_m, y_m):
         try:
-            return site_model.elevation(handle, (x_m / factor, y_m / factor), tin_type) * factor
+            x_value, y_value = x_m / factor, y_m / factor
+            if (metadata and metadata.get("coordinate_mode") ==
+                    "document_origin_plus_normalized"):
+                anchor = metadata.get("xy_anchor_m") or (0.0, 0.0)
+                origin_x, origin_y = _document_origin_units()
+                x_value = (x_m - float(anchor[0])) / factor + origin_x
+                y_value = (y_m - float(anchor[1])) / factor + origin_y
+            return site_model.elevation(
+                handle, (x_value, y_value), tin_type) * factor
         except site_model.SiteModelError:
             return None
     return elevation

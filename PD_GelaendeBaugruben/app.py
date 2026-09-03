@@ -129,7 +129,8 @@ def _preview_sources(options):
            text_height_counts.get("text_content", 0), verification["control_layer"],
            verification["control_texts"], verification["control_lines"]))
     result = adapter.create_site_model_from_selected_sources(
-        options["model_name"], model_class, verification.get("xy_anchor_m"))
+        options["model_name"], model_class, verification.get("xy_anchor_m"),
+        created)
     if not result:
         adapter.alert(
             source_summary +
@@ -143,10 +144,15 @@ def _preview_sources(options):
         "Zeichenfenster eingepasst.\n"
         "Die Triangulation wurde zur Vermeidung von Koordinatenverzerrungen "
         "am internen Nullpunkt berechnet; die Dokument-Georeferenz bleibt erhalten.\n"
+        "Native Höhenprüfung: %d von %d Quellstützpunkten gültig; "
+        "maximale Abweichung %.3f m.\n"
+        "Das Geländemodell ist fertig; der Vectorworks-Befehl „Geländemodell "
+        "aus Ausgangsdaten“ darf nicht nochmals aufgerufen werden.\n"
         "Höhenlinien-Äquidistanz im nativen Dialog: %.3f m; "
         "Höheneinheit der Modulauswertung: Meter."
         % (result["name"], result["layer"] or layer_name, result["class"],
-           options["contour_interval_m"]))
+           result["validated_points"], review["vertex_count"],
+           result["maximum_error_m"], options["contour_interval_m"]))
 
 
 def _manage_models(options):
