@@ -476,6 +476,64 @@ class Foreign3DTests(unittest.TestCase):
             [("DTM6 Menu", 1), ("Fit To Objects", 0)], fake.menu_calls)
         self.assertEqual(2, fake.redraw_count)
 
+    def test_native_site_model_query_metadata_is_written_to_control_layer(self):
+        fake = FakeVS()
+        fake.site_model_handles = set()
+        fake.ready_site_models = {"new-model"}
+        fake.created_site_model = "new-model"
+        fake.names["new-model"] = "Geländemodell-1"
+        fake.types["new-model"] = 86
+        fake.layer_order = ["model-layer", "control-layer"]
+        fake.layer_objects["model-layer"] = ["new-model"]
+        fake.layers["new-model"] = "model-layer"
+        fake.layer_names["model-layer"] = "PD-GB-Quelldaten"
+        fake.layer_names["control-layer"] = "PD-GB-Quelldaten-Kontrolle"
+        adapter = load_adapter(fake)
+        adapter._normalized_source_samples = lambda *_args: (
+            (0.0, 0.0, 100.0), (1.0, 0.0, 101.0), (0.0, 1.0, 102.0))
+        adapter._validate_normalized_site_model = lambda *_args: {
+            "checked": 3, "maximum_error_m": 0.0}
+        writes = []
+        adapter._write_record = lambda *args: writes.append(args)
+
+        result = adapter.create_site_model_from_selected_sources(
+            "DGM Bestand", "PD-GB-Gelaendemodell", (10.0, 20.0),
+            ("source-1", "source-2", "source-3"),
+            "PD-GB-Quelldaten-Kontrolle")
+
+        self.assertEqual("new-model", result["handle"])
+        self.assertEqual(1, len(writes))
+        self.assertEqual("control-layer", writes[0][0])
+        self.assertNotEqual("model-layer", writes[0][0])
+        self.assertNotEqual("new-model", writes[0][0])
+        self.assertEqual(adapter.QUERY_RECORD, writes[0][1])
+        self.assertEqual("new-model", writes[0][3]["model_uuid"])
+        self.assertEqual("DGM Bestand", writes[0][3]["model_name"])
+
+    def test_query_metadata_prefers_matching_control_layer_record(self):
+        fake = FakeVS()
+        fake.layers["model"] = "model-layer"
+        fake.names["model"] = "DGM Bestand"
+        fake.layer_order = ["model-layer", "control-layer"]
+        fake.layer_names["model-layer"] = "PD-GB-Quelldaten"
+        fake.layer_names["control-layer"] = "PD-GB-Quelldaten-Kontrolle"
+        adapter = load_adapter(fake)
+        calls = []
+        layer_value = {
+            "schema": adapter.QUERY_SCHEMA,
+            "model_uuid": "model",
+            "model_name": "DGM Bestand",
+            "xy_anchor_m": [10.0, 20.0],
+        }
+
+        def read_record(handle, _name, _field):
+            calls.append(handle)
+            return layer_value if handle == "control-layer" else None
+
+        adapter._read_record = read_record
+        self.assertEqual(layer_value, adapter.model_query_metadata("model"))
+        self.assertEqual(["control-layer"], calls)
+
     def test_cancelled_native_site_model_dialog_returns_no_result(self):
         fake = FakeVS()
         fake.site_model_handles = set()

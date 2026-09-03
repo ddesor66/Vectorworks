@@ -1224,7 +1224,8 @@ def _validate_normalized_site_model(handle, samples, origin_units, factor,
 
 def create_site_model_from_selected_sources(model_name, model_class,
                                             xy_anchor_m=None,
-                                            source_handles=None):
+                                            source_handles=None,
+                                            metadata_layer_name=None):
     """Run Vectorworks' native source-data command and reveal its new model.
 
     The command itself remains native so Vectorworks owns the triangulation and
@@ -1347,8 +1348,32 @@ def create_site_model_from_selected_sources(model_name, model_class,
     if source_handles is not None:
         validation = _validate_normalized_site_model(
             handle, source_samples, creation_origin, factor)
-        _write_record(handle, QUERY_RECORD, QUERY_FIELD, {
+        # Never attach auxiliary records to the native site-model PIO or to
+        # the layer that contains it. Either mutation can invalidate the
+        # freshly generated display cache while leaving calculated areas and
+        # TIN queries intact. The visual control layer is deliberately
+        # separate and therefore owns the persistent coordinate mapping.
+        metadata_layer = None
+        requested_metadata_layer = str(metadata_layer_name or "").strip()
+        if requested_metadata_layer:
+            for candidate_layer in _document_layers():
+                if str(vs.GetLName(candidate_layer) or "") == requested_metadata_layer:
+                    metadata_layer = candidate_layer
+                    break
+        if not metadata_layer:
+            raise core.TerrainError(
+                "Die getrennte Kontrollebene für die DGM-Koordinatenabbildung "
+                "ist nicht verfügbar.")
+        if metadata_layer == layer_handle:
+            raise core.TerrainError(
+                "Die DGM-Koordinatenabbildung darf nicht auf der Modelleebene "
+                "gespeichert werden.")
+        _write_record(metadata_layer, QUERY_RECORD, QUERY_FIELD, {
             "schema": QUERY_SCHEMA,
+            "model_uuid": _identifier(handle),
+            "model_name": actual_name,
+            "model_layer_name": layer_name,
+            "metadata_layer_name": requested_metadata_layer,
             "coordinate_mode": "document_origin_plus_normalized",
             "xy_anchor_m": [float(anchor[0]), float(anchor[1])],
             "creation_origin_units": [float(creation_origin[0]),
@@ -1398,8 +1423,44 @@ def model_metadata(handle):
 
 
 def model_query_metadata(handle):
+    try:
+        layer_handle = vs.GetLayer(handle)
+    except (AttributeError, TypeError):
+        layer_handle = None
+    def matching(value):
+        if not value or value.get("schema") != QUERY_SCHEMA:
+            return False
+        recorded_uuid = str(value.get("model_uuid") or "").strip()
+        recorded_name = str(value.get("model_name") or "").strip()
+        return ((not recorded_uuid or recorded_uuid == _identifier(handle)) and
+                (not recorded_name or recorded_name ==
+                 str(vs.GetName(handle) or "").strip()))
+
+    # Version 1.0.23 stores the mapping on the detached visual control layer,
+    # whose deterministic name is based on the model/source layer. Search it
+    # first, then all layers so renamed control layers remain supported.
+    layers = tuple(_document_layers())
+    layer_name = (str(vs.GetLName(layer_handle) or "")
+                  if layer_handle else "")
+    preferred_name = layer_name + "-Kontrolle" if layer_name else ""
+    ordered_layers = tuple(
+        candidate for candidate in layers
+        if preferred_name and
+        str(vs.GetLName(candidate) or "") == preferred_name)
+    ordered_layers += tuple(
+        candidate for candidate in layers if candidate not in ordered_layers)
+    for candidate in ordered_layers:
+        value = _read_record(candidate, QUERY_RECORD, QUERY_FIELD)
+        if matching(value):
+            return value
+
+    # Read-only compatibility for 1.0.22 (model layer) and 1.0.21 (PIO).
+    value = (_read_record(layer_handle, QUERY_RECORD, QUERY_FIELD)
+             if layer_handle else None)
+    if matching(value):
+        return value
     value = _read_record(handle, QUERY_RECORD, QUERY_FIELD)
-    return value if value and value.get("schema") == QUERY_SCHEMA else None
+    return value if matching(value) else None
 
 
 def register_model(handle, variant_name, role, reference_name="", priority=0,

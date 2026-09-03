@@ -130,7 +130,7 @@ def _preview_sources(options):
            verification["control_texts"], verification["control_lines"]))
     result = adapter.create_site_model_from_selected_sources(
         options["model_name"], model_class, verification.get("xy_anchor_m"),
-        created)
+        created, verification.get("control_layer"))
     if not result:
         adapter.alert(
             source_summary +

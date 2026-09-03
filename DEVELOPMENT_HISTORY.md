@@ -135,3 +135,14 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   Baugruben- und Vergleichsberechnungen verwenden dieselbe Transformation. Im
   Live-Test lieferten alle 1.172 Stützpunkte des aus 600 Texten, 276 Linien und
   einem Bogen erzeugten `DGM Bestand` ihre Quellhöhe ohne messbare Abweichung.
+- Gelände- und Baugrubenmodul 1.0.22: Die Koordinatenabbildung wird nicht mehr
+  als zusätzlicher Datensatz direkt an das native Geländemodell gehängt,
+  sondern auf dessen eigener Quelldaten-Ebene gespeichert. Damit wird das
+  Plug-in-Objekt nach der nativen Triangulation nicht mehr durch eine
+  Datensatzänderung zurückgesetzt und das berechnete TIN bleibt auch nach dem
+  Speichern und erneuten Öffnen der Zeichnung erhalten.
+- Gelände- und Baugrubenmodul 1.0.23: Die persistente Koordinatenabbildung
+  liegt nun vollständig getrennt vom nativen Geländemodell auf dessen visueller
+  Kontrollebene. Damit wird auch die Modelleebene nach der Triangulation nicht
+  mehr verändert; der native 2D-/3D-Grafikcache mit Geländegrenze,
+  Höhenlinien und Triangulation bleibt erhalten.
