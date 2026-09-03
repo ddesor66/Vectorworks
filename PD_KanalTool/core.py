@@ -868,7 +868,8 @@ def _validate_station_reference(value, label):
     enabled = bool(value.get(
         "station_enabled", bool(main_start_id and main_end_id and main_pipe_ids)))
     if enabled and (not main_start_id or not main_end_id or
-                    len(main_pipe_ids) != 2 or len(station_pipe_ids) < 2):
+                    len(main_pipe_ids) not in (1, 2) or
+                    len(station_pipe_ids) < 1):
         raise SewerError("Die %s ist nicht vollständig verknüpft." % label)
     station_m = value.get("station_m")
     if station_m is not None:
@@ -1140,10 +1141,12 @@ def soften_connection_bends(points, max_bend_deg=CONNECTION_MAX_BEND_DEG,
     return tuple(path(result))
 
 
-def change_stub_alignment(shaft, connected_pipes, alignment):
+def change_stub_alignment(shaft, connected_pipes, alignment,
+                          main_connection_invert_m=None):
     """Recalculate one fitting and its branch endpoint for a new alignment.
 
-    The two recorded main arms remain geometrically and vertically unchanged.
+    The recorded main pipe or the two legacy main arms remain geometrically
+    and vertically unchanged.
     The returned branch pipe is intentionally not validated when its new end
     would reverse the flow; the Vectorworks layer must ask for confirmation
     before orienting that pipe downhill.
@@ -1154,31 +1157,44 @@ def change_stub_alignment(shaft, connected_pipes, alignment):
     mode = str(alignment or "")
     connection_alignment_label(mode)
     rows = [validate_pipe(pipe) for pipe in connected_pipes]
-    if any(value["id"] not in (pipe["start_id"], pipe["end_id"])
-           for pipe in rows):
-        raise SewerError("Eine übergebene Haltung ist nicht mit dem Stutzen verbunden.")
     by_id = {pipe["id"]: pipe for pipe in rows}
     main_ids = tuple(value["stub"].get("main_pipe_ids", ()))
     mains = [by_id.get(identity) for identity in main_ids]
-    if len(main_ids) != 2 or any(pipe is None for pipe in mains):
-        raise SewerError("Die beiden Hauptleitungsarme des Stutzens fehlen.")
+    if len(main_ids) not in (1, 2) or any(pipe is None for pipe in mains):
+        raise SewerError("Die Hauptleitungsreferenz des Stutzens fehlt.")
     main_id_set = set(main_ids)
     branches = [pipe for pipe in rows if pipe["id"] not in main_id_set]
     if len(branches) != 1:
         raise SewerError("Ein Kanalstutzen benötigt genau eine Anschlussleitung.")
+    if value["id"] not in (branches[0]["start_id"], branches[0]["end_id"]):
+        raise SewerError("Die Anschlussleitung ist nicht mit dem Stutzen verbunden.")
 
     def endpoint_invert(pipe):
         return (pipe["start_invert_m"] if pipe["start_id"] == value["id"]
                 else pipe["end_invert_m"])
 
-    main_inverts = [endpoint_invert(pipe) for pipe in mains]
-    if abs(main_inverts[0] - main_inverts[1]) > 0.001:
-        raise SewerError("Die Hauptleitungssohle am Stutzen ist nicht durchgängig.")
-    if mains[0]["dn_mm"] != mains[1]["dn_mm"]:
-        raise SewerError("Die Hauptleitungsarme am Stutzen besitzen unterschiedliche DN.")
+    if len(mains) == 2:
+        if any(value["id"] not in (pipe["start_id"], pipe["end_id"])
+               for pipe in mains):
+            raise SewerError("Ein Hauptleitungsarm ist nicht mit dem Stutzen verbunden.")
+        main_inverts = [endpoint_invert(pipe) for pipe in mains]
+        if abs(main_inverts[0] - main_inverts[1]) > 0.001:
+            raise SewerError("Die Hauptleitungssohle am Stutzen ist nicht durchgängig.")
+        if mains[0]["dn_mm"] != mains[1]["dn_mm"]:
+            raise SewerError("Die Hauptleitungsarme am Stutzen besitzen unterschiedliche DN.")
+        main_invert = sum(main_inverts) * 0.5
+    else:
+        main_pipe = mains[0]
+        if main_connection_invert_m is None:
+            if value["id"] not in (main_pipe["start_id"], main_pipe["end_id"]):
+                raise SewerError("Die Hauptleitungssohle am Stutzen fehlt.")
+            main_invert = endpoint_invert(main_pipe)
+        else:
+            main_invert = number(
+                main_connection_invert_m, "Hauptleitungssohle am Stutzen")
     branch = copy.deepcopy(branches[0])
     invert = connection_invert(
-        sum(main_inverts) * 0.5, mains[0]["dn_mm"], branch["dn_mm"], mode)
+        main_invert, mains[0]["dn_mm"], branch["dn_mm"], mode)
     if branch["start_id"] == value["id"]:
         branch["start_invert_m"] = invert
     else:
@@ -1186,7 +1202,7 @@ def change_stub_alignment(shaft, connected_pipes, alignment):
     stub = copy.deepcopy(value["stub"])
     stub.update(alignment=mode, main_dn_mm=mains[0]["dn_mm"],
                 branch_dn_mm=branch["dn_mm"], connection_invert_m=invert)
-    endpoints = main_inverts + [invert]
+    endpoints = [main_invert, invert]
     changed_shaft = validate_shaft(
         dict(value, stub=stub, ks_m=min(endpoints)), allow_hidden=True)
     return changed_shaft, branch

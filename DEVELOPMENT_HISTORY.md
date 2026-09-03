@@ -395,3 +395,17 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   statt sichtbarer Zeilennummern geführt, sodass Sortieren und Filtern keine
   falschen Haltungen oder Schächte ändern. Zwei zusätzliche Filter-, Sortier-
   und Dialogregressionen erhöhen den Gesamtumfang auf 218 automatisierte Tests.
+- Kanaltool und gemeinsamer Kanal-/Leitungsaufruf 1.4.0: Ein Kanalstutzen,
+  Bodenablauf oder Hausanschluss teilt die gewählte Hauptleitung nicht mehr.
+  Die vollständige Haltung bleibt mit Geometrie, Identität, Länge,
+  Beschriftung und geschlossenem 3D-Körper unverändert; das eigenständige
+  Stutzenobjekt speichert stattdessen eine sichere, nicht besitzende Referenz
+  auf den projizierten Anschluss der Hauptleitung. Stationierung,
+  nachträgliche Anschlussart, Systemauswahl, Kanalkettenbearbeitung und
+  Dokumentprüfung berücksichtigen diese logische Verbindung. Beim Löschen
+  eines Stutzens bleibt die Hauptleitung bestehen; beim Löschen der
+  Hauptleitung werden nur die davon abhängigen Anschlüsse entfernt. Spätere,
+  ausdrücklich angeforderte Schachtteilungen ordnen vorhandene Stutzen dem
+  geometrisch richtigen Reststück zu. Sechs neue sowie ein erweiterter
+  Rechen-, Stations-, System-, 3D- und Verknüpfungstest erhöhen den
+  Gesamtumfang auf 224 automatisierte Tests.

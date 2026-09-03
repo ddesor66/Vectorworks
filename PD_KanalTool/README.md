@@ -1,4 +1,4 @@
-# PD Kanaltool 1.3.9
+# PD Kanaltool 1.4.0
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und
@@ -190,15 +190,16 @@ Anschlussart erneut; eine Änderung aktualisiert Anschlusssohle, Gefälle,
 3D-Geometrie und Beschriftung der Anschlussleitung gemeinsam. Die
 Stutzenbeschriftung enthält ausschließlich die separat schaltbaren Zeilen
 `ST 0+… m` und `Anschluss KS = … m`; beide Schriftgrößen werden unabhängig in
-den Voreinstellungen festgelegt. Die Hauptleitung
-wird transaktional in zwei Resthaltungen geteilt; die überlagerte alte Haltung
-wird erst nach erfolgreichem Aufbau und mit anschließender Löschkontrolle
-entfernt. Die beiden geometrischen Restsegmente erhalten zusammen nur eine
-Beschriftung mit der Gesamtlänge. Dasselbe gilt für eine aus mehreren
+den Voreinstellungen festgelegt. Die Hauptleitung bleibt beim Einsetzen eines
+Stutzens als ein einziges, unverändertes Haltungsobjekt erhalten. Der Stutzen
+referenziert nur seinen projizierten Anschluss- und Stationspunkt auf dieser
+Haltung; weder 2D- noch 3D-Rohr, Haltungs-ID, Länge oder Hauptleitungs-
+beschriftung werden dabei aufgebrochen oder verdoppelt. Beim Löschen des
+Stutzens bleibt die Hauptleitung vollständig bestehen. Dasselbe gilt für eine aus mehreren
 Knicksegmenten bestehende Abzweigleitung; die ein- oder zweizeilige Darstellung
-wird aus den Haltungseinstellungen übernommen. Im 3D verbindet ein durchgängiges
-T-/Y-Formstück beide Hauptleitungsseiten mit dem höhengerecht angesetzten
-Abzweig, sodass keine offenen oder losgelösten Rohrstücke verbleiben.
+wird aus den Haltungseinstellungen übernommen. Im 3D überlagert das
+höhenrichtige T-/Y-Anschlussstück den geschlossenen, durchgehenden Körper der
+Hauptleitung, sodass keine offenen oder losgelösten Rohrstücke verbleiben.
 
 Knicke über 45° werden in Stutzen-, Bodenablauf- und
 Hausanschlussleitungen automatisch in mindestens zwei Einzelwinkel unter 45°

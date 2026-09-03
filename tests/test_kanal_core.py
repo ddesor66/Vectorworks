@@ -349,6 +349,35 @@ class ShaftConnectionTests(unittest.TestCase):
         self.assertEqual(main_a, core.validate_pipe(main_a))
         self.assertEqual(main_b, core.validate_pipe(main_b))
 
+    def test_stub_alignment_uses_one_unchanged_interior_main_pipe(self):
+        first = shaft("s1", "RW.001", 0.0, 100.0)
+        end = shaft("s2", "RW.002", 10.0, 99.0)
+        branch_start = core.validate_shaft(dict(
+            shaft("s3", "RW.003", 5.0, 100.0), y_m=5.0),
+            allow_hidden=True)
+        fitting = core.validate_shaft(dict(
+            shaft("stub", "RW.099", 5.0, 99.5),
+            diameter_m=0.0, structure_type="stub",
+            stub={"alignment": "invert", "main_dn_mm": 300,
+                  "branch_dn_mm": 150, "connection_invert_m": 99.5,
+                  "station_enabled": True, "main_start_id": "s1",
+                  "main_end_id": "s2", "main_pipe_ids": ["main"],
+                  "station_pipe_ids": ["main"]}), allow_hidden=True)
+        main = core.pipe_between_shafts(
+            first, end, connection_options(), identity_factory=lambda: "main")
+        branch = core.pipe_between_shafts(
+            branch_start, fitting,
+            dict(connection_options(), dn_mm=150, outside_diameter_mm=150),
+            identity_factory=lambda: "branch")
+
+        changed, changed_branch = core.change_stub_alignment(
+            fitting, (main, branch), "crown", main_connection_invert_m=99.5)
+
+        self.assertEqual("crown", changed["stub"]["alignment"])
+        self.assertAlmostEqual(99.65, changed["stub"]["connection_invert_m"])
+        self.assertAlmostEqual(99.65, changed_branch["end_invert_m"])
+        self.assertEqual(main, core.validate_pipe(main))
+
     def test_stub_label_contains_only_separately_switchable_station_and_height(self):
         value = core.validate_shaft(dict(
             shaft("stub", "RW.099", 5.0, 99.5),

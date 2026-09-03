@@ -657,6 +657,20 @@ class VectorworksBoundaryTests(unittest.TestCase):
         self.assertEqual([(4, "PIPE")], api.associations["END"])
         self.assertEqual([(5, "START"), (5, "END")], api.associations["PIPE"])
 
+    def test_stub_never_owns_or_deletes_its_unsplit_main_pipe(self):
+        api = DeleteAPI()
+        api.objects.update({"MAIN": "MAIN", "STUB": "STUB"})
+        api.associations = {
+            "MAIN": [(5, "STUB")],
+            "STUB": [(4, "MAIN")],
+        }
+        live = load_module(api, "PD_KanalTool.live")
+
+        live._sync_stub_main_association("STUB", "MAIN")
+
+        self.assertEqual([(4, "STUB")], api.associations["MAIN"])
+        self.assertEqual([(5, "MAIN")], api.associations["STUB"])
+
     def test_verified_replacement_delete_rejects_remaining_old_pipe(self):
         api = DeleteAPI(keep_owner=True)
         live = load_module(api, "PD_KanalTool.live")

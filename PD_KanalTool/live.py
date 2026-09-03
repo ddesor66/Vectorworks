@@ -330,6 +330,61 @@ def _sync_pipe_associations(handle, pipe, endpoint_handles=None):
     return tuple(endpoints)
 
 
+def _sync_stub_main_association(stub_handle, main_handle):
+    """Link a fitting to its unsplit host without making it own that host.
+
+    Deleting the main holding removes the now invalid fitting. Deleting the
+    fitting, however, only refreshes the surviving main holding and can never
+    delete or split it.
+    """
+    removed = []
+    for owner, kind, target in (
+            (main_handle, RESET_ON_OWNER_DELETE, stub_handle),
+            (main_handle, DELETE_WITH_OWNER, stub_handle),
+            (stub_handle, RESET_ON_OWNER_DELETE, main_handle),
+            (stub_handle, DELETE_WITH_OWNER, main_handle)):
+        for _index in range(_remove_association(owner, kind, target)):
+            removed.append((owner, kind, target))
+    added = []
+    try:
+        _add_association(
+            main_handle, DELETE_WITH_OWNER, stub_handle,
+            "Stutzen-Hauptleitungs-Löschverknüpfung konnte nicht gespeichert werden.")
+        added.append((main_handle, DELETE_WITH_OWNER, stub_handle))
+        _add_association(
+            stub_handle, RESET_ON_OWNER_DELETE, main_handle,
+            "Stutzen-Hauptleitungs-Aktualisierungsverknüpfung konnte nicht gespeichert werden.")
+        added.append((stub_handle, RESET_ON_OWNER_DELETE, main_handle))
+    except Exception:
+        for owner, kind, target in reversed(added):
+            _remove_association(owner, kind, target)
+        for owner, kind, target in removed:
+            vs.AddAssociation(owner, kind, target)
+        raise
+
+
+def _replace_stub_main_association(stub_handle, previous_shaft, changed_shaft):
+    """Move an interior fitting reference after an explicit host split."""
+    previous_ids = tuple(
+        (previous_shaft.get("stub") or {}).get("main_pipe_ids", ()))
+    changed_ids = tuple(
+        (changed_shaft.get("stub") or {}).get("main_pipe_ids", ()))
+    if len(previous_ids) == 1 and previous_ids != changed_ids:
+        previous_handle = _handle_by_id(core.PIPE_PREFIX, previous_ids[0])
+        if previous_handle:
+            for owner, kind, target in (
+                    (previous_handle, DELETE_WITH_OWNER, stub_handle),
+                    (previous_handle, RESET_ON_OWNER_DELETE, stub_handle),
+                    (stub_handle, RESET_ON_OWNER_DELETE, previous_handle),
+                    (stub_handle, DELETE_WITH_OWNER, previous_handle)):
+                _remove_association(owner, kind, target)
+    if len(changed_ids) == 1:
+        changed_handle = _handle_by_id(core.PIPE_PREFIX, changed_ids[0])
+        if not changed_handle:
+            raise core.SewerError("Die neue Hauptleitung des Stutzens fehlt.")
+        _sync_stub_main_association(stub_handle, changed_handle)
+
+
 def _sync_rigole_junction_association(rigole_handle, junction_handle):
     """Delete a rigole connection node with the rigole and refresh survivors."""
     removed = []
@@ -1081,15 +1136,27 @@ def _stub_reference_updates(original, first, second):
         if not local_fields and not axis_fields:
             continue
         value = copy.deepcopy(shaft)
-        if local_fields:
-            if shaft["id"] == original["start_id"]:
+        for field in local_fields:
+            local_ids = tuple(value[field].get("main_pipe_ids", ()))
+            if len(local_ids) == 1:
+                # New fittings reference one continuous host pipe at an
+                # interior point. If that host is deliberately split later,
+                # keep the fitting on the child segment that contains it.
+                (unused_start_handle, start), (unused_end_handle, end) = _endpoints(original)
+                fitting_fraction, unused_xy = core.project_on_pipe(
+                    (start["x_m"], start["y_m"]),
+                    (end["x_m"], end["y_m"]),
+                    (shaft["x_m"], shaft["y_m"]))
+                split_fraction = first["length_m"] / original["length_m"]
+                replacement = (first["id"] if fitting_fraction <= split_fraction + 1e-9
+                               else second["id"])
+            elif shaft["id"] == original["start_id"]:
                 replacement = first["id"]
             elif shaft["id"] == original["end_id"]:
                 replacement = second["id"]
             else:
                 raise core.SewerError(
                     "Eine bestehende Anschlussreferenz liegt nicht am Ende der geteilten Haltung.")
-        for field in local_fields:
             value[field]["main_pipe_ids"] = [
                 replacement if identity == original["id"] else identity
                 for identity in value[field]["main_pipe_ids"]]
@@ -1111,11 +1178,11 @@ def _station_axis_link(axis_pipes, main_pipe_ids):
     """Return current end references for one unbranched holding axis."""
     axis_pipes = tuple(core.validate_pipe(pipe) for pipe in axis_pipes)
     main_pipe_ids = tuple(str(identity) for identity in main_pipe_ids)
-    if len(main_pipe_ids) != 2 or any(
+    if len(main_pipe_ids) not in (1, 2) or any(
             identity not in {pipe["id"] for pipe in axis_pipes}
             for identity in main_pipe_ids):
         raise core.SewerError(
-            "Die beiden Hauptarme der Anschlussstationierung fehlen in der Haltung.")
+            "Die Hauptleitungsreferenz der Anschlussstationierung fehlt in der Haltung.")
     degree = {}
     endpoint_rows = {}
     for pipe in axis_pipes:
@@ -1166,6 +1233,30 @@ def _new_connection_station(original, first, second):
         station_zero_name="", station_equal_inverts=False,
         station_basis="",
     )
+
+
+def _new_unsplit_connection_station(original):
+    """Link a fitting to one unchanged host pipe and its complete axis."""
+    current, pipe_map, component = _holding_component(original)
+    axis_pipes = [pipe_map[identity] for identity in component]
+    return dict(
+        _station_axis_link(axis_pipes, (current["id"],)),
+        station_enabled=True,
+        station_m=None, station_zero_id="",
+        station_zero_name="", station_equal_inverts=False,
+        station_basis="",
+    )
+
+
+def _pipe_invert_at_point(pipe, point_m):
+    """Interpolate one unchanged pipe's invert at a projected plan point."""
+    (_start_handle, start), (_end_handle, end) = _endpoints(pipe)
+    fraction, projected = core.project_on_pipe(
+        (start["x_m"], start["y_m"]),
+        (end["x_m"], end["y_m"]), point_m)
+    invert = pipe["start_invert_m"] + (
+        pipe["end_invert_m"] - pipe["start_invert_m"]) * fraction
+    return invert, projected
 
 
 def split_selected(handle, point_m, preferences):
@@ -1230,6 +1321,8 @@ def split_selected(handle, point_m, preferences):
             _live().write_data(existing_handle, dict(
                 snapshots[existing_handle], shaft=value,
                 preferences=copy.deepcopy(preferences)))
+            _replace_stub_main_association(
+                existing_handle, snapshots[existing_handle]["shaft"], value)
         for created_handle in created:
             _reset_checked(created_handle)
         _reset_checked(handle)
@@ -1244,6 +1337,8 @@ def split_selected(handle, point_m, preferences):
             _sync_pipe_associations(handle, pipe, original_endpoint_handles)
             vs.ResetObject(handle)
         for existing_handle, snapshot in snapshots.items():
+            _replace_stub_main_association(
+                existing_handle, stub_updates[existing_handle], snapshot["shaft"])
             _live().write_data(existing_handle, snapshot)
             vs.ResetObject(existing_handle)
         for created_handle in reversed(created):
@@ -1258,7 +1353,7 @@ def split_selected(handle, point_m, preferences):
 
 
 def connect_branch(handle, point_m, branch_paths, options, preferences):
-    """Split one pipe and add a height-matched branch in one transaction."""
+    """Add a branch; fittings reference an unchanged continuous host pipe."""
     data = _live().data_of(handle)
     original = read_pipe(handle, data)
     (start_handle, start), (end_handle, end) = _endpoints(original)
@@ -1271,11 +1366,21 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
     if not paths or math.dist(paths[0][0], xy) > 0.001:
         raise core.SewerError("Die neue Leitung beginnt nicht am gewählten Anschlusspunkt.")
     shaft_id = str(uuid.uuid4())
-    first, second = core.split_pipe(
-        original, shaft_id, fraction, preserve_first_identity=True)
-    stub_updates = _stub_reference_updates(original, first, second)
-    station_reference = _new_connection_station(original, first, second)
-    main_connection_invert = first["end_invert_m"]
+    split_main = not bool(options.get("as_stub"))
+    if split_main:
+        first, second = core.split_pipe(
+            original, shaft_id, fraction, preserve_first_identity=True)
+        main_replacements = (first, second)
+        stub_updates = _stub_reference_updates(original, first, second)
+        station_reference = _new_connection_station(original, first, second)
+        main_connection_invert = first["end_invert_m"]
+    else:
+        first = second = None
+        main_replacements = ()
+        stub_updates = {}
+        station_reference = _new_unsplit_connection_station(original)
+        main_connection_invert = original["start_invert_m"] + (
+            original["end_invert_m"] - original["start_invert_m"]) * fraction
     alignment = str(options.get("connection_alignment", "invert"))
     connection_invert = core.connection_invert(
         main_connection_invert, original["dn_mm"], options.get("dn_mm"), alignment)
@@ -1377,9 +1482,11 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
             "Die neue Leitung muss am Bestand mit KS = %.2f m anschließen. Berechnungsrichtung prüfen." %
             connection_invert)
     new_shafts = (shaft,) + tuple(built["shafts"])
-    new_pipes = (first, second) + tuple(built["pipes"])
-    prospective_pipes = [value for existing_handle, value in pipe_records()
-                         if existing_handle != handle] + list(new_pipes)
+    branch_pipes = tuple(built["pipes"])
+    new_pipes = main_replacements + branch_pipes
+    prospective_pipes = [
+        value for existing_handle, value in pipe_records()
+        if not split_main or existing_handle != handle] + list(new_pipes)
     prospective_shafts = [stub_updates.get(existing_handle, value)
                           for existing_handle, value in shaft_records()] + list(new_shafts)
     core.validate_network(prospective_pipes, prospective_shafts)
@@ -1401,17 +1508,21 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
             new_handle = _new_object((value["x_m"], value["y_m"]), _node_role(value),
                                      value, preferences, created)
             shaft_handles[value["id"]] = new_handle
-        pipe_handles = [handle]
-        for value in new_pipes[1:]:
+        pipe_handles = [handle] if split_main else []
+        created_pipe_values = new_pipes[1:] if split_main else branch_pipes
+        for value in created_pipe_values:
             new_handle = _new_object((0.0, 0.0), "sewer_pipe", value, preferences, created)
             pipe_handles.append(new_handle)
             _sync_pipe_associations(new_handle, value, shaft_handles)
-        owner_mutated = True
-        _detach_pipe_endpoint_associations(handle, owner_snapshot)
-        _live().write_data(handle, dict(
-            owner_snapshot, pipe=first,
-            preferences=copy.deepcopy(preferences)))
-        _sync_pipe_associations(handle, first, shaft_handles)
+        if split_main:
+            owner_mutated = True
+            _detach_pipe_endpoint_associations(handle, owner_snapshot)
+            _live().write_data(handle, dict(
+                owner_snapshot, pipe=first,
+                preferences=copy.deepcopy(preferences)))
+            _sync_pipe_associations(handle, first, shaft_handles)
+        else:
+            _sync_stub_main_association(shaft_handles[shaft_id], handle)
         owners = [shaft_handles[value["id"]] for value in new_shafts if value["visible"]]
         # Every segment owns a label PIO. The label itself decides dynamically
         # whether this segment is the one representative of its complete
@@ -1425,9 +1536,12 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
             _live().write_data(existing_handle, dict(
                 snapshots[existing_handle], shaft=value,
                 preferences=copy.deepcopy(preferences)))
+            _replace_stub_main_association(
+                existing_handle, snapshots[existing_handle]["shaft"], value)
         for created_handle in created:
             _reset_checked(created_handle)
-        _reset_checked(handle)
+        if split_main:
+            _reset_checked(handle)
         for existing_handle in stub_updates:
             _reset_checked(existing_handle)
         for existing_handle in touched_shafts:
@@ -1440,21 +1554,25 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
                 handle, original, original_endpoint_handles)
             vs.ResetObject(handle)
         for existing_handle, snapshot in snapshots.items():
+            _replace_stub_main_association(
+                existing_handle, stub_updates[existing_handle], snapshot["shaft"])
             _live().write_data(existing_handle, snapshot)
             vs.ResetObject(existing_handle)
         for created_handle in reversed(created):
             if created_handle:
                 vs.DelObject(created_handle)
         raise
-    for identity in (original["start_id"], original["end_id"]):
-        existing_handle = _handle_by_id(core.SHAFT_PREFIX, identity)
-        if existing_handle:
-            vs.ResetObject(existing_handle)
+    if split_main:
+        for identity in (original["start_id"], original["end_id"]):
+            existing_handle = _handle_by_id(core.SHAFT_PREFIX, identity)
+            if existing_handle:
+                vs.ResetObject(existing_handle)
+    branch_handles = pipe_handles[2:] if split_main else pipe_handles
     vs.DSelectAll()
-    for pipe_handle in pipe_handles[2:]:
+    for pipe_handle in branch_handles:
         vs.SetSelect(pipe_handle)
     vs.ReDrawAll()
-    return tuple(pipe_handles[2:]), connection_invert
+    return tuple(branch_handles), connection_invert
 
 
 def connect_stub(handle, point_m, branch_paths, options, preferences):
@@ -2746,17 +2864,14 @@ def _refresh_stub_stationing(shaft):
         return shaft
     result = copy.deepcopy(shaft)
     reference = result[field]
-    # Rebuild the axis from the two local main arms on every reset. Seeding
-    # both arms deliberately crosses only this connection; _holding_component
-    # then follows invisible bends and main arms at other fittings, while any
-    # currently visible shaft forms a new station boundary. Besides keeping
-    # moved geometry current, this upgrades legacy fitting data whose cached
-    # station_pipe_ids contained only the two local arms.
+    # Rebuild the axis from the unchanged host pipe (or the two main arms in a
+    # legacy file) on every reset. _holding_component follows invisible bends,
+    # while any visible shaft forms a station boundary.
     axis_map = {}
     for pipe_id in reference["main_pipe_ids"]:
         pipe_handle = _handle_by_id(core.PIPE_PREFIX, pipe_id)
         if not pipe_handle:
-            raise core.SewerError("Hauptarm der Anschlussstationierung fehlt.")
+            raise core.SewerError("Hauptleitung der Anschlussstationierung fehlt.")
         local_pipe = read_pipe(pipe_handle)
         _current, component_map, component = _holding_component(local_pipe)
         for identity in component:
@@ -2791,6 +2906,8 @@ def _refresh_stub_stationing(shaft):
         points = []
         current = identity
         visited = set()
+        local_main_ids = set(reference["main_pipe_ids"])
+        unsplit_reference = len(local_main_ids) == 1
         while True:
             if current == result["id"]:
                 node = result
@@ -2811,6 +2928,13 @@ def _refresh_stub_stationing(shaft):
                     "Die Achse der Anschlussstationierung ist nicht durchgängig eindeutig.")
             pipe = candidates[0]
             visited.add(pipe["id"])
+            if (unsplit_reference and pipe["id"] in local_main_ids and
+                    result["id"] not in (pipe["start_id"], pipe["end_id"])):
+                # The fitting is an interior reference, deliberately not a
+                # graph node. End the station axis at its projected point
+                # without breaking the host pipe into two graph edges.
+                points.append((result["x_m"], result["y_m"]))
+                return tuple(points)
             current = (pipe["end_id"] if pipe["start_id"] == current
                        else pipe["start_id"])
 
@@ -2911,8 +3035,25 @@ def edit_stub_alignment(handle, preferences):
     if alignment is None:
         return False
     connected = tuple(_connected_pipes(shaft["id"]))
+    connected_by_id = {pipe["id"]: pipe for _pipe_handle, pipe in connected}
+    referenced_mains = []
+    for pipe_id in shaft["stub"].get("main_pipe_ids", ()):
+        pipe = connected_by_id.get(pipe_id)
+        if pipe is None:
+            pipe_handle = _handle_by_id(core.PIPE_PREFIX, pipe_id)
+            if not pipe_handle:
+                raise core.SewerError("Die Hauptleitung des Stutzens fehlt.")
+            pipe = read_pipe(pipe_handle)
+        referenced_mains.append(pipe)
+    main_connection_invert = None
+    if len(referenced_mains) == 1:
+        main_connection_invert, _projected = _pipe_invert_at_point(
+            referenced_mains[0], (shaft["x_m"], shaft["y_m"]))
+    all_pipes = tuple(pipe for _pipe_handle, pipe in connected)
+    all_pipes += tuple(pipe for pipe in referenced_mains
+                       if pipe["id"] not in connected_by_id)
     changed_shaft, changed_branch = core.change_stub_alignment(
-        shaft, tuple(pipe for _pipe_handle, pipe in connected), alignment)
+        shaft, all_pipes, alignment, main_connection_invert)
     pipe_handles = {pipe["id"]: pipe_handle for pipe_handle, pipe in connected}
     branch_handle = pipe_handles.get(changed_branch["id"])
     if not branch_handle:
@@ -3212,25 +3353,60 @@ def _draw_stub_symbol(shaft, data, class_value, color, factor):
 
 
 def _draw_stub_3d(handle, shaft, data, factor):
-    """Draw one continuous tee/wye fitting between all three pipe bodies.
+    """Draw a tee/wye collar against a continuous host pipe.
 
-    The pipe PIOs terminate at the fitting profile.  These overlapping arms
-    bridge the two main segments and the branch in both plan and elevation,
-    so no open pipe ends or detached short pieces remain in a 3D view.
+    New fittings add only the overlapping branch arm: the main pipe remains a
+    single closed 3D body. Two-arm legacy fittings keep their former bridge.
     """
     rows = _junction_rows(shaft)
     main_ids = set(shaft.get("stub", {}).get("main_pipe_ids", ()))
     main_rows = [row for row in rows if row["pipe"]["id"] in main_ids]
     branch_rows = [row for row in rows if row["pipe"]["id"] not in main_ids]
+    preferences = data["preferences"]
+    layer_z = _layer_z_m(handle)
+
+    if len(main_ids) == 1 and not main_rows and len(branch_rows) == 1:
+        main_id = next(iter(main_ids))
+        main_handle = _handle_by_id(core.PIPE_PREFIX, main_id)
+        if not main_handle:
+            return
+        main_pipe = read_pipe(main_handle)
+        branch_row = branch_rows[0]
+        branch_pipe = branch_row["pipe"]
+        if not (main_pipe.get("draw_3d", True) and
+                branch_pipe.get("draw_3d", True)):
+            return
+        main_invert, _projected = _pipe_invert_at_point(
+            main_pipe, (shaft["x_m"], shaft["y_m"]))
+        main_z = (main_invert + core.pipe_axis_offset_m(main_pipe) - layer_z) / factor
+        branch_invert = (
+            branch_pipe["start_invert_m"]
+            if branch_pipe["start_id"] == shaft["id"]
+            else branch_pipe["end_invert_m"])
+        branch_z = (
+            branch_invert + core.pipe_axis_offset_m(branch_pipe) - layer_z) / factor
+        color = color_for({"role": "sewer_pipe", "pipe": branch_pipe}, preferences)
+        ensure_pipe_classes(branch_pipe, preferences, color)
+        radius = branch_pipe["outside_diameter_mm"] / 2000.0 / factor
+        main_radius = main_pipe["outside_diameter_mm"] / 2000.0 / factor
+        trim, _end_width, _cap = _connection_profile(
+            shaft, branch_pipe, radius * 2.0, factor)
+        arm = max(trim + 0.01 / factor, radius * 1.10)
+        direction = branch_row["direction"]
+        end = (direction[0] * arm, direction[1] * arm, branch_z)
+        _draw_pipe_3d(
+            (0.0, 0.0, main_z), end, radius,
+            class_name(branch_pipe, preferences, "_3D"), color,
+            start_radius=min(radius, main_radius) * 0.82,
+            end_radius=radius)
+        return
+
     if len(main_rows) != 2 or len(branch_rows) != 1:
         return
     active_rows = [row for row in main_rows + branch_rows
                    if row["pipe"].get("draw_3d", True)]
     if len(active_rows) < 2:
         return
-    preferences = data["preferences"]
-    layer_z = _layer_z_m(handle)
-
     def axis_height(row):
         pipe = row["pipe"]
         invert = (pipe["start_invert_m"] if pipe["start_id"] == shaft["id"]
@@ -3998,7 +4174,17 @@ def network_component(handle):
             (data["role"] != "sewer_pipe" and data["role"] not in NODE_ROLES)):
         raise core.SewerError("Kein Kanalnetz gewählt.")
     all_pipes = tuple(pipe_records())
+    pipes_by_id = {pipe["id"]: (pipe_handle, pipe)
+                   for pipe_handle, pipe in all_pipes}
     all_shafts = {shaft["id"]: (shaft_handle, shaft) for shaft_handle, shaft in shaft_records()}
+    stub_main_ids = {
+        identity: tuple(shaft.get("stub", {}).get("main_pipe_ids", ()))
+        for identity, (_shaft_handle, shaft) in all_shafts.items()
+        if shaft.get("structure_type") == "stub" and shaft.get("stub")}
+    stubs_by_main = {}
+    for stub_id, main_ids in stub_main_ids.items():
+        for pipe_id in main_ids:
+            stubs_by_main.setdefault(pipe_id, []).append(stub_id)
     if data["role"] == "sewer_pipe":
         pipe = read_pipe(handle, data)
         pending = [pipe["start_id"], pipe["end_id"]]
@@ -4011,10 +4197,17 @@ def network_component(handle):
         if identity in identities:
             continue
         identities.add(identity)
+        for pipe_id in stub_main_ids.get(identity, ()):
+            row = pipes_by_id.get(pipe_id)
+            if not row:
+                continue
+            pipe_ids.add(pipe_id)
+            pending.extend((row[1]["start_id"], row[1]["end_id"]))
         for pipe_handle, pipe in all_pipes:
             if identity not in (pipe["start_id"], pipe["end_id"]):
                 continue
             pipe_ids.add(pipe["id"])
+            pending.extend(stubs_by_main.get(pipe["id"], ()))
             other = pipe["end_id"] if pipe["start_id"] == identity else pipe["start_id"]
             if other not in identities:
                 pending.append(other)
@@ -4379,6 +4572,9 @@ def _preference_targets(selected, scope):
         else:
             node_ids.update(connection["node_id"]
                             for connection in data["rigole"].get("connections", ()))
+    pipes_by_id = {
+        data["pipe"]["id"]: data["pipe"]
+        for _handle, data in rows if data["role"] == "sewer_pipe"}
     changed = True
     while changed:
         changed = False
@@ -4389,6 +4585,24 @@ def _preference_targets(selected, scope):
             if pipe["start_id"] in node_ids or pipe["end_id"] in node_ids:
                 before = len(node_ids)
                 node_ids.update((pipe["start_id"], pipe["end_id"]))
+                changed = changed or len(node_ids) != before
+        for _handle, data in rows:
+            if data["role"] not in NODE_ROLES:
+                continue
+            shaft = data["shaft"]
+            if shaft.get("structure_type") != "stub" or not shaft.get("stub"):
+                continue
+            mains = [pipes_by_id.get(identity)
+                     for identity in shaft["stub"].get("main_pipe_ids", ())]
+            mains = [pipe for pipe in mains if pipe is not None]
+            host_touches_system = any(
+                pipe["start_id"] in node_ids or pipe["end_id"] in node_ids
+                for pipe in mains)
+            if shaft["id"] in node_ids or host_touches_system:
+                before = len(node_ids)
+                node_ids.add(shaft["id"])
+                for pipe in mains:
+                    node_ids.update((pipe["start_id"], pipe["end_id"]))
                 changed = changed or len(node_ids) != before
     return tuple(
         (handle, data) for handle, data in rows
@@ -4526,6 +4740,8 @@ def validate_document(preferences=None):
             errors.append("DN %d ist nicht in der aktuellen Auswahlliste." % pipe["dn_mm"])
         if pipe["material"] not in preferences["materials"]:
             errors.append("Material %s ist nicht in der aktuellen Auswahlliste." % pipe["material"])
+    shaft_index = {shaft["id"]: shaft for shaft in shafts}
+    pipe_index = {pipe["id"]: pipe for pipe in pipes}
     for shaft in shafts:
         connected = []
         for pipe in pipes:
@@ -4533,10 +4749,25 @@ def validate_document(preferences=None):
                 connected.append(pipe["start_invert_m"])
             if pipe["end_id"] == shaft["id"]:
                 connected.append(pipe["end_invert_m"])
+        main_ids = tuple(shaft.get("stub", {}).get("main_pipe_ids", ()))
+        if shaft.get("structure_type") == "stub" and len(main_ids) == 1:
+            main = pipe_index.get(main_ids[0])
+            start = shaft_index.get(main["start_id"]) if main else None
+            end = shaft_index.get(main["end_id"]) if main else None
+            if main and start and end:
+                try:
+                    fraction, _projected = core.project_on_pipe(
+                        (start["x_m"], start["y_m"]),
+                        (end["x_m"], end["y_m"]),
+                        (shaft["x_m"], shaft["y_m"]))
+                    connected.append(main["start_invert_m"] + (
+                        main["end_invert_m"] - main["start_invert_m"]) * fraction)
+                except core.SewerError:
+                    errors.append("Stutzen %s: Anschluss liegt nicht auf der Hauptleitung." %
+                                  (shaft["name"] or shaft["id"]))
         if connected and abs(shaft["ks_m"] - min(connected)) > 0.001:
             errors.append("Schacht %s: KS stimmt nicht mit der tiefsten Rohrsohle überein." %
                           (shaft["name"] or shaft["id"]))
-    shaft_index = {shaft["id"]: shaft for shaft in shafts}
     for rigole in rigoles:
         for connection in rigole.get("connections", ()):
             node = shaft_index.get(connection["node_id"])
