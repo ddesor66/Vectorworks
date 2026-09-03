@@ -171,10 +171,6 @@ def model_options(model_names):
     vs.CreatePullDownMenu(dialog, 24, 24)
     vs.CreatePullDownMenu(dialog, 25, 38)
     vs.CreateEditInteger(dialog, 26, 0, 10)
-    _add_choices(dialog, 20, operations)
-    _add_choices(dialog, 21, model_names)
-    _add_choices(dialog, 24, ("Bestand", "Soll"))
-    _add_choices(dialog, 25, ("– keine –",) + tuple(model_names))
     vs.CreateStaticText(dialog, 30,
         "Eine Kopie wird nach dem Duplizieren als echtes DGM geprüft. Löschen ist nur für vom Modul "
         "erzeugte Sollkopien zulässig. Andere Geländemodelle bleiben geschützt.", 70)
@@ -188,7 +184,16 @@ def model_options(model_names):
     state = {"result": None, "back": False}
 
     def handler(item, _data):
-        if item == BACK:
+        if item == INIT:
+            # Vectorworks 2026 creates the native popup storage only during
+            # the setup event. Choices added before RunLayoutDialog can be
+            # silently discarded, leaving every menu visibly empty even
+            # though the model scan already returned valid names.
+            _add_choices(dialog, 20, operations)
+            _add_choices(dialog, 21, model_names)
+            _add_choices(dialog, 24, ("Bestand", "Soll"))
+            _add_choices(dialog, 25, ("– keine –",) + tuple(model_names))
+        elif item == BACK:
             state["back"] = True
             return 2
         if item == 1:
@@ -234,8 +239,6 @@ def excavation_options(model_names):
     vs.CreateEditReal(dialog, 28, 1, 50.0, 14)
     vs.CreateEditText(dialog, 29, "PD-GB-Baugrube", 38)
     vs.CreateCheckBox(dialog, 30, "Native Sohlenfläche als Pad-Modifikator kennzeichnen")
-    _add_choices(dialog, 20, model_names)
-    _add_choices(dialog, 25, ("1:n", "Prozent", "Grad"))
     vs.SetBooleanItem(dialog, 30, True)
     vs.CreateStaticText(dialog, 31,
         "Vor dem Öffnen genau eine geschlossene Baugrubenbegrenzung markieren. Weitere markierte "
@@ -251,7 +254,10 @@ def excavation_options(model_names):
     state = {"result": None, "back": False}
 
     def handler(item, _data):
-        if item == BACK:
+        if item == INIT:
+            _add_choices(dialog, 20, model_names)
+            _add_choices(dialog, 25, ("1:n", "Prozent", "Grad"))
+        elif item == BACK:
             state["back"] = True
             return 2
         if item == 1:
@@ -299,8 +305,6 @@ def comparison_options(model_names):
     vs.CreateEditReal(dialog, 27, 1, 0.0, 14)
     vs.CreateEditReal(dialog, 28, 1, 0.0, 14)
     vs.CreateEditReal(dialog, 29, 1, 8.0, 14)
-    _add_choices(dialog, 20, model_names, 0)
-    _add_choices(dialog, 21, model_names, 1)
     vs.CreateCheckBox(dialog, 30, "Rasterursprung automatisch am ersten Begrenzungspunkt")
     vs.SetBooleanItem(dialog, 30, True)
     vs.CreateCheckBox(dialog, 31, "Rasterplan und Verschneidungslinien erzeugen")
@@ -320,7 +324,10 @@ def comparison_options(model_names):
     state = {"result": None, "back": False}
 
     def handler(item, _data):
-        if item == BACK:
+        if item == INIT:
+            _add_choices(dialog, 20, model_names, 0)
+            _add_choices(dialog, 21, model_names, 1)
+        elif item == BACK:
             state["back"] = True
             return 2
         if item == 1:

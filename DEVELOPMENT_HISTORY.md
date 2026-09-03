@@ -154,3 +154,8 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   zurückversetzt. Das sichtbare Geländemodell liegt damit wieder deckungsgleich
   auf den ursprünglichen Vermessungsdaten. Die native Höhenprüfung erfolgt
   anschließend an den zurückversetzten Originalkoordinaten.
+- Gelände- und Baugrubenmodul 1.0.25: Die Auswahllisten der Modellverwaltung,
+  Baugrube und des Modellvergleichs werden erst im nativen Vectorworks-
+  Initialisierungsereignis befüllt. Dadurch erscheinen bereits erkannte,
+  benannte Geländemodelle sowie Aktionen und Rollen zuverlässig in den
+  Pulldown-Menüs von Vectorworks 2026.
