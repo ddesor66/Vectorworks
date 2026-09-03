@@ -21,6 +21,7 @@ DEFAULT_COLORS = {
 DEFAULTS = {
     "schema": 1,
     "colors": DEFAULT_COLORS,
+    "types": list(core.UTILITY_TYPES),
     "default_type": "Trinkwasser",
     "materials": list(core.DEFAULT_MATERIALS),
     "default_material": "PE",
@@ -47,6 +48,10 @@ DEFAULTS = {
     "label_interval_m": 10.0,
     "label_frame": False,
     "label_fill": False,
+    "label_bold": False,
+    "label_underline": False,
+    "label_rotation_deg": 0.0,
+    "label_layout": "one_line",
     "font_name": "Arial",
     "font_size_pt": 9.0,
     "draw_3d": True,
@@ -89,10 +94,20 @@ def validate(value):
     result = _merge(DEFAULTS, value)
     if result.get("schema") != 1:
         raise core.UtilityError("Unbekannte Leitungseinstellungen.")
+    result["types"] = list(dict.fromkeys(
+        list(core.UTILITY_TYPES) +
+        [core.utility_type(item) for item in result.get("types", core.UTILITY_TYPES)]))
+    if not result["types"]:
+        raise core.UtilityError("Mindestens ein Leitungstyp ist erforderlich.")
     result["default_type"] = core.utility_type(result.get("default_type"))
+    if result["default_type"] not in result["types"]:
+        result["types"].append(result["default_type"])
+    supplied_colors = result.get("colors", {})
     result["colors"] = {
-        utility_type: _color(result["colors"].get(utility_type), utility_type)
-        for utility_type in core.UTILITY_TYPES
+        utility_type: _color(
+            supplied_colors.get(utility_type, DEFAULT_COLORS.get(utility_type, [0, 0, 0])),
+            utility_type)
+        for utility_type in result["types"]
     }
     result["materials"] = list(dict.fromkeys(
         core.material(item) for item in result.get("materials", ())))
@@ -137,13 +152,19 @@ def validate(value):
         raise core.UtilityError("Die Überdeckung muss zwischen 0 und 100 m liegen.")
     result["surface_tin_type"] = core.integer(
         result.get("surface_tin_type"), "Geländemodellzustand", 0, 2)
-    for key in ("show_heights", "regular_label", "label_frame", "label_fill", "draw_3d"):
+    for key in ("show_heights", "regular_label", "label_frame", "label_fill",
+                "label_bold", "label_underline", "draw_3d"):
         result[key] = bool(result.get(key))
     result["label_text"] = str(result.get("label_text") or "").strip()
     result["label_interval_m"] = core.number(
         result.get("label_interval_m"), "Beschriftungsabstand")
     if result["label_interval_m"] <= 0.0:
         raise core.UtilityError("Der Beschriftungsabstand muss größer als null sein.")
+    result["label_rotation_deg"] = core.number(
+        result.get("label_rotation_deg", 0.0), "Beschriftungsdrehung") % 360.0
+    result["label_layout"] = str(result.get("label_layout", "one_line"))
+    if result["label_layout"] not in core.LABEL_LAYOUTS:
+        raise core.UtilityError("Ungültiges Beschriftungsformat.")
     result["font_name"] = str(result.get("font_name") or "Arial").strip()
     result["font_size_pt"] = core.number(result.get("font_size_pt"), "Schriftgröße")
     if not result["font_name"] or not 1.0 <= result["font_size_pt"] <= 200.0:

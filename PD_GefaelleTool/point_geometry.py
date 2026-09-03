@@ -49,6 +49,7 @@ def _attributes(handle, class_name, color):
     vs.SetClass(handle, class_name)
     vs.SetPenFore(handle, tuple(color))
     vs.SetLSN(handle, 2)
+    vs.SetOpacityN(handle, 100, 100)
 
 
 def native_locus(point, factor, layer_z, class_name, color):
@@ -145,11 +146,24 @@ def marker(point, symbol_name, options, factor, layer_z):
         if abs(vs.GetObjectVariableReal(handle, selector) - options["scale"]) > 1e-8:
             raise SlopeError("Die Symbolskalierung wurde nicht übernommen.")
     if options["mode"] == "3d":
-        x, y, z = _symbol_xyz(handle)
         target = (point["x_m"]/factor, point["y_m"]/factor, point["height_m"]/factor-layer_z)
+        # VW 2026 may defer GetSymLoc3D during the first PIO reset. The symbol
+        # was created at the known XY coordinate and Z=0, so that insertion
+        # location is a deterministic, API-independent fallback.
+        current = vs.GetSymLoc3D(handle)
+        if (isinstance(current, (tuple, list)) and len(current) >= 3 and
+                all(math.isfinite(float(value)) for value in current[:3])):
+            x, y, z = (float(value) for value in current[:3])
+        else:
+            x, y, z = target[0], target[1], 0.0
         vs.Move3DObj(handle, target[0]-x, target[1]-y, target[2]-z)
-        _check_xyz(tuple(v*factor for v in _symbol_xyz(handle)), tuple(v*factor for v in target))
+        vs.ResetObject(handle)
+        actual = vs.GetSymLoc3D(handle)
+        if isinstance(actual, (tuple, list)) and len(actual) >= 3:
+            _check_xyz(tuple(float(v)*factor for v in actual[:3]),
+                       tuple(v*factor for v in target))
     vs.SetClass(handle, options["point_class"])
+    vs.SetOpacityN(handle, 100, 100)
     return handle
 
 

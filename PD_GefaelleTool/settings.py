@@ -88,6 +88,9 @@ def validate(value):
     for key in ("height_decimals", "slope_decimals", "length_decimals"):
         if type(result[key]) is not int or not 0 <= result[key] <= 6:
             raise SlopeError("Nachkommastellen müssen zwischen 0 und 6 liegen.")
+    # Heights have one shared, predictable display precision in every tool.
+    # Calculations and serialized values deliberately retain full precision.
+    result["height_decimals"] = 2
     if not isinstance(result["align_text_to_plan"], bool):
         raise SlopeError("Ungültige Einstellung zur Plandrehung.")
     for key in ("font", "default_level"):

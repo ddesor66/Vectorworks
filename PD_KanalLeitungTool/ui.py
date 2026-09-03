@@ -16,6 +16,36 @@ LEITUNG = 11
 MENGEN = 12
 
 
+def _fit_dialog(dialog, preferred_size=None):
+    """Size and position the chooser inside the active monitor."""
+    try:
+        left, top, right, bottom = (int(value) for value in vs.GetScreen())
+        screen_width = max(1, right - left)
+        screen_height = max(1, bottom - top)
+        max_width = max(1, screen_width - 24)
+        max_height = max(1, screen_height - 48)
+        minimum_width = min(320, max_width)
+        minimum_height = min(240, max_height)
+        if preferred_size:
+            vs.SetLayoutDialogSize(
+                dialog,
+                min(max_width, max(minimum_width, int(preferred_size[0]))),
+                min(max_height, max(minimum_height, int(preferred_size[1]))))
+        size = vs.GetLayoutDialogSize(dialog)
+        if not isinstance(size, (tuple, list)) or len(size) != 2:
+            return
+        width = min(max_width, max(minimum_width, int(size[0])))
+        height = min(max_height, max(minimum_height, int(size[1])))
+        if (width, height) != (int(size[0]), int(size[1])):
+            vs.SetLayoutDialogSize(dialog, width, height)
+        palette_width = max(280, min(420, int(screen_width * 0.22)))
+        x = max(left + 12, right - palette_width - width - 12)
+        y = max(top + 12, min(top + 42, bottom - height - 12))
+        vs.SetLayoutDialogPosition(dialog, x, y)
+    except (AttributeError, TypeError, ValueError):
+        return
+
+
 def choose_module():
     dialog = vs.CreateResizableLayout(
         "Kanal- und Leitungstool | v%s | manufactured by Dirk D." % VERSION, True,
@@ -46,16 +76,7 @@ def choose_module():
         if item == INIT:
             vs.SetBooleanItem(dialog, KANAL, True)
             vs.SetFocusOnItem(dialog, KANAL)
-            try:
-                vs.SetLayoutDialogSize(dialog, 500, 290)
-                width, height = vs.GetLayoutDialogSize(dialog)
-                left, top, right, bottom = vs.GetScreen()
-                palette_width = max(280, min(420, int((right-left)*0.22)))
-                x = max(left+12, right-palette_width-int(width)-12)
-                y = max(top+42, min(top+72, bottom-int(height)-24))
-                vs.SetLayoutDialogPosition(dialog, x, y)
-            except (AttributeError, TypeError, ValueError):
-                pass
+            _fit_dialog(dialog, (500, 290))
         elif item == 1:
             selected["value"] = ("kanal" if vs.GetBooleanItem(dialog, KANAL) else
                                  "leitung" if vs.GetBooleanItem(dialog, LEITUNG) else
@@ -64,4 +85,5 @@ def choose_module():
 
     if not vs.VerifyLayout(dialog):
         raise RuntimeError("Der Auswahldialog konnte nicht aufgebaut werden.")
+    _fit_dialog(dialog, (500, 290))
     return selected["value"] if vs.RunLayoutDialog(dialog, handler) == 1 else None

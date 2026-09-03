@@ -143,7 +143,7 @@ def height_text(value, preferences, mode="absolute", datum_m=0.0):
     if mode == "relative":
         shown -= core.number(datum_m, "Bezugshöhe")
         prefix = "+" if shown >= 0.0 else ""
-    return prefix + core.format_number(shown, preferences["height_decimals"]) + " m"
+    return prefix + core.format_number(shown, 2) + " m"
 
 
 def connection_register(connections, preferences, height_mode="absolute", datum_m=0.0):
@@ -179,27 +179,28 @@ def plan_label_layout(connections, center=(85.5, 88.0), shaft_radius_mm=17.0,
         items.sort(key=lambda item: (-item[0], item[1]["bearing_deg"],
                                     item[1]["connection_id"]))
         top, bottom = cy + 46.0, cy - 46.0
-        ys = []
-        for preferred, _row, _ux, _uy in items:
-            ys.append(min(top, max(bottom, preferred)))
-        for index in range(1, len(ys)):
-            ys[index] = min(ys[index], ys[index - 1] - min_gap_mm)
-        if ys and ys[-1] < bottom:
-            shift = bottom - ys[-1]
-            ys = [value + shift for value in ys]
-            for index in range(len(ys) - 2, -1, -1):
-                ys[index] = max(ys[index], ys[index + 1] + min_gap_mm)
-        for y, (_preferred, row, ux, uy) in zip(ys, items):
-            start = (cx + ux * shaft_radius_mm, cy - uy * shaft_radius_mm)
-            elbow = (cx + ux * (shaft_radius_mm + 7.0), y)
-            label_x = right_x if side == "right" else left_x
-            result.append({
-                "connection_id": row["connection_id"],
-                "tag": row["tag"],
-                "side": side,
-                "label": (label_x, y),
-                "leader": (start, elbow, (label_x - 2.0 if side == "right" else label_x + 2.0, y)),
-            })
+        capacity = max(1, int((top - bottom) // min_gap_mm) + 1)
+        for column, offset in enumerate(range(0, len(items), capacity)):
+            column_items = items[offset:offset + capacity]
+            if len(column_items) == 1:
+                ys = [min(top, max(bottom, column_items[0][0]))]
+            else:
+                gap = min(min_gap_mm, (top - bottom) / (len(column_items) - 1))
+                ys = [top - index * gap for index in range(len(column_items))]
+            label_x = ((right_x - column * 18.0) if side == "right" else
+                       (left_x + column * 18.0))
+            for y, (_preferred, row, ux, uy) in zip(ys, column_items):
+                start = (cx + ux * shaft_radius_mm, cy - uy * shaft_radius_mm)
+                elbow = (cx + ux * (shaft_radius_mm + 7.0 + column * 3.0), y)
+                result.append({
+                    "connection_id": row["connection_id"],
+                    "tag": row["tag"],
+                    "side": side,
+                    "column": column,
+                    "label": (label_x, y),
+                    "leader": (start, elbow,
+                               (label_x - 2.0 if side == "right" else label_x + 2.0, y)),
+                })
     return tuple(sorted(result, key=lambda item: item["connection_id"]))
 
 
@@ -209,20 +210,18 @@ def section_label_layout(connections, top_mm=55.0, bottom_mm=126.0,
     values = sorted(connections, key=lambda row: (-row["invert_m"], row["connection_id"]))
     if not values:
         return ()
-    high = values[0]["invert_m"]
-    low = values[-1]["invert_m"]
-    span = max(high - low, 0.001)
-    baselines = []
-    for row in values:
-        preferred = top_mm + (high - row["invert_m"]) / span * (bottom_mm - top_mm)
-        baselines.append(preferred)
-    for index in range(1, len(baselines)):
-        baselines[index] = max(baselines[index], baselines[index - 1] + min_gap_mm)
-    if baselines and baselines[-1] > bottom_mm:
-        shift = baselines[-1] - bottom_mm
-        baselines = [value - shift for value in baselines]
-        for index in range(len(baselines) - 2, -1, -1):
-            baselines[index] = min(baselines[index], baselines[index + 1] - min_gap_mm)
-    return tuple({"connection_id": row["connection_id"], "tag": row["tag"],
-                  "invert_m": row["invert_m"], "baseline_mm": baseline}
-                 for row, baseline in zip(values, baselines))
+    banks = {"left": values[::2], "right": values[1::2]}
+    result = []
+    for side, rows in banks.items():
+        if not rows:
+            continue
+        if len(rows) == 1:
+            baselines = [(top_mm + bottom_mm) * 0.5]
+        else:
+            gap = min(min_gap_mm, (bottom_mm - top_mm) / (len(rows) - 1))
+            baselines = [top_mm + index * gap for index in range(len(rows))]
+        result.extend({"connection_id": row["connection_id"], "tag": row["tag"],
+                       "invert_m": row["invert_m"], "baseline_mm": baseline,
+                       "side": side}
+                      for row, baseline in zip(rows, baselines))
+    return tuple(sorted(result, key=lambda row: row["connection_id"]))

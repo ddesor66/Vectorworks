@@ -1,8 +1,25 @@
-# PD Kanaltool 1.1.4
+# PD Kanaltool 1.3.2
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und
 greift nicht in das Datenmodell oder die Bedienoberfläche des Gefälletools ein.
+
+Schachtblätter werden als echte DIN-A4-Layoutebenen im Querformat erzeugt. Die
+physische Blatt- und Papiergröße wird unabhängig von Meter-, Zentimeter- oder
+Millimeter-Dokumenteinheiten in Zoll an Vectorworks übergeben. Für eine
+gemeinsame mehrseitige PDF aktiviert der Export jede vorbereitete Layoutebene,
+bevor sie in die vom Benutzer gewählte Datei geschrieben wird.
+
+Kanalobjekte können auch mit dem normalen Vectorworks-Löschbefehl entfernt
+werden. Beim Löschen eines Schachts verschwinden nur die davon abhängigen
+Haltungen; beim Löschen einer Haltung bleiben die Endschächte erhalten und
+werden aktualisiert. Vorhandene Mengenblätter werden aus dem verbleibenden
+Objektbestand neu aufgebaut.
+
+Alle sichtbaren Deckel-, Sohl-, Anschluss- und sonstigen Höhenwerte werden in
+Dialogen, Meldungen, Planbeschriftungen und Schachtblättern einheitlich mit
+genau zwei Nachkommastellen ausgegeben. Die intern gespeicherten Werte und die
+Berechnungen behalten ihre volle Genauigkeit.
 
 ## Einstieg und Zeichenrichtung
 
@@ -38,6 +55,10 @@ greift nicht in das Datenmodell oder die Bedienoberfläche des Gefälletools ein
 - Ein neuer Kanalstrang kann an einer markierten Haltung oder direkt an einem
   markierten Schacht beginnen. Die grafische Auswahl ist auch ohne
   Vorselektion möglich.
+- Der Abschluss eines neuen Kanalstrangs und die direkte Verbindung zweier
+  Schächte laufen ohne reentrante Schreibzugriffe im parametrischen
+  Objektcallback. Eine vorhandene Mengentabelle wird erst nach dem vollständig
+  aufgebauten Kanalnetz genau einmal aktualisiert.
 - Ein einzelner markierter Schacht öffnet seinen vollständigen Eigenschaftsdialog.
   Bei mehreren markierten runden Schächten oder Sonderschächten werden dieselben
   vollständigen Dialoge nacheinander geöffnet und erst anschließend gemeinsam
@@ -45,6 +66,13 @@ greift nicht in das Datenmodell oder die Bedienoberfläche des Gefälletools ein
   Bauart/Material, Wandstärke, Schachtdeckel, Zusatztext und alle übrigen
   Schachtwerte gezielt je Schacht geändert werden können. Angeschlossene
   Haltungen und Beschriftungen werden danach automatisch neu aufgebaut.
+- Zu- und Ablaufhöhen erhalten am Schacht jeweils ein eigenständig
+  verschiebbares, an der Leitung ausgerichtetes Beschriftungsobjekt. Diese
+  Außenbeschriftungen können in den Voreinstellungen gemeinsam ein- oder
+  ausgeschaltet und durch Anwenden auf Auswahl, Kanalsystem oder Zeichnung auch
+  bei vorhandenen Schächten aktualisiert werden. Im Schachttextfeld stehen
+  unabhängig von der geometrischen Anschlussreihenfolge stets zuerst alle
+  Zuläufe und danach alle Abläufe.
 
 ## Kanalhaltungen
 
@@ -68,10 +96,20 @@ liegende Schacht; unsichtbare Zwischenknoten werden bis zum nächsten sichtbaren
 Schacht durchlaufen. Nach einer bestätigten Fließrichtungsänderung oder einer
 Umbenennung des unteren Schachts wird der Haltungsname automatisch erneuert.
 Anzeige und Schriftgröße des Haltungsnamens sind in den Voreinstellungen unter
-`Beschriftung` unabhängig voneinander einstellbar.
+`Beschriftung` unabhängig voneinander einstellbar. Ist der Name eingeschaltet,
+steht er immer als eigene erste Zeile oberhalb der technischen Angaben. Die
+Auswahl `Technische Angaben in einer/ zwei Zeilen` betrifft nur Gefälle, Länge,
+DN und Material; ohne Haltungsnamen entfällt die zusätzliche Namenszeile.
 
 Die Voreinstellungen sind in die kompakten Register `Kataloge und Farben`,
-`Darstellung`, `Beschriftung` sowie `Schächte und Schachtdeckel` gegliedert. Beim Speichern kann
+`Schachtfarben`, `Darstellung`, `Beschriftung` sowie
+`Schächte und Schachtdeckel` gegliedert. Für RW, SW und MW können unabhängig
+von den Rohrfarben jeweils Schacht-Linienfarbe, Schacht-Füllfarbe und
+Fülltransparenz von 0 bis 100 % festgelegt werden. Die Kontur bleibt dabei
+immer vollständig deckend. In der Einzelbearbeitung eines Schachts können
+diese drei Werte bei Bedarf abweichend vom Kanalsystem gespeichert werden.
+Die Darstellung gilt einheitlich für Rundschächte, Sonderschächte und
+Bodenabläufe in 2D und 3D. Beim Speichern kann
 gezielt gewählt werden, ob die Vorgaben nur für neue Objekte, für die aktuelle
 Markierung, für die vollständigen verbundenen Kanalsysteme der Markierung oder
 für alle Kanalobjekte der Zeichnung gelten. Eine Bestandsaktualisierung erhält
@@ -91,8 +129,30 @@ Die kompakte Plan-Schachtbeschriftung zeigt keine Rohrmaterialkürzel. Zu- und
 Ablaufzeilen erscheinen nur, wenn sich die dargestellten Anschlusshöhen
 unterscheiden. Ein einzelner Anschluss heißt schlicht `Zulauf` bzw. `Ablauf`;
 erst mehrere Zuläufe oder Abläufe erhalten `Z1`, `Z2` bzw. `A1`, `A2`.
+Die zusätzlichen Höhenhinweise an den Rohranschlüssen sind eigenständige,
+mit dem Schacht verknüpfte Beschriftungsobjekte. Sie können einzeln verschoben
+und gedreht werden; eine manuell gewählte Lage bleibt bei späteren
+Schachtaktualisierungen erhalten. Ihre Schriftgröße ist im Register
+`Beschriftung` separat einstellbar.
 Schachtblätter behalten ihre vollständigen Anschlussdaten einschließlich
 Material und eindeutiger Kennung.
+
+Beim Bearbeiten eines Schachts erhält jeder vorhandene Zulauf ein eigenes,
+eindeutig mit `Z1`, `Z2` usw. und dem Haltungsnamen bezeichnetes Feld für die
+Kanalsohle. Alle Felder stehen gleichzeitig sichtbar in einer kompakten
+mehrspaltigen Matrix; auch viele Zuläufe verlängern das Fenster nicht. Direkt
+hinter jedem Zulauf steht `ΔA`, der vorzeichenbehaftete Höhenversatz zur
+Ablaufsohle in Zentimetern. Die Ablaufhöhe folgt unmittelbar unter der
+Zulaufmatrix. Eine geänderte Zulaufhöhe wird ausschließlich an der zugeordneten
+Haltung gespeichert; andere Zuläufe und der Ablauf bleiben unverändert. Die
+Option `Alle Zu- und Abläufe mit gleicher Höhe` kann die Werte weiterhin
+bewusst gemeinsam setzen. Eine daraus entstehende Umkehr der Fließrichtung
+wird vor dem Speichern angezeigt und nur nach Bestätigung übernommen.
+
+Schachtbearbeitung, Kanal- und Leitungseinstellungen, Gefälle- sowie
+Mengendialoge begrenzen Größe und Position auf die aktuelle Monitorfläche.
+Der Schachteditor ist zusätzlich in die kurzen Register `Allgemein`,
+`Anschlusshöhen`, `Schachtbau` und `Deckel und Darstellung` aufgeteilt.
 
 ## Stutzen und Anschlüsse
 
@@ -145,7 +205,11 @@ durch einen freien Text ersetzt werden. Ein Schacht kann
 durch Anklicken einer darüberliegenden geschlossenen Polygon- oder
 Polylinienkontur in einen Sonderschacht umgewandelt werden. Anschlüsse enden
 dann an der tatsächlichen Kontur; in der Beschriftung entfällt der runde
-Schachtdurchmesser.
+Schachtdurchmesser. Als Kontur werden nur frei gezeichnete Objekte direkt auf
+der Konstruktionsebene angenommen; die interne Polygongeometrie eines
+Kanalobjekts wird sicher ausgeschlossen. Die Umwandlung setzt den Schacht und
+seine angeschlossenen Haltungen genau einmal zurück. Scheitert der Neuaufbau,
+bleibt die Ausgangskontur für einen erneuten Versuch erhalten.
 
 `Absturz vor Schacht` speichert und beschriftet die obere Sohle der
 ankommenden Haltung sowie die Unterkante der Absturzleitung. Eine Nullhöhe wird
@@ -154,7 +218,10 @@ aus oberem Anschlussarm, senkrechtem Fallrohr und unterem Anschlussarm zum
 Schacht; wiederholtes Bearbeiten ersetzt den vorhandenen Absturz derselben
 Haltung. Wird ein Schacht
 in eine Haltung eingesetzt, wird die darunterliegende Haltung entfernt und in
-zwei sauber am Schacht endende Resthaltungen aufgeteilt. Beschriftungen,
+zwei sauber am Schacht endende Resthaltungen aufgeteilt. Vor dem Austausch
+werden neben den Beschriftungen auch beide nativen Verknüpfungen der alten
+Haltung zu ihren Endschächten gezielt gelöst; die neuen Resthaltungen behalten
+ihre eigenen Verknüpfungen. Beschriftungen,
 Fließrichtungspfeile und 3D-Rohre werden dabei gemeinsam neu aufgebaut. Die
 ursprüngliche Haltung wird erst nach dem vollständigen Ersatz gelöscht; ihr
 Verschwinden und das Löschen ihrer Beschriftung werden anschließend geprüft.
@@ -249,3 +316,9 @@ gekennzeichnet. Nach erfolgreicher Objektänderung wird ein bereits vorhandenes
 Mengen-Arbeitsblatt automatisch neu aufgebaut. Der Excel-Export enthält
 getrennte Blätter für Übersicht, Haltungen, Schächte, Leitungen, Erdmassen und
 Prüfhinweise.
+
+Die Rigole wird in 3D aus einer ausdrücklich geschlossenen Vierpunktkontur als
+native Vectorworks-Extrusion erzeugt. Damit besitzt der Körper vier Seiten
+sowie eine geschlossene Boden- und Deckfläche; der globale Polygonmodus wird
+direkt danach wieder auf offen zurückgestellt, damit nachfolgende Kanalachsen
+nicht unbeabsichtigt geschlossen werden.

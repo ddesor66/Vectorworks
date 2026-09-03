@@ -17,6 +17,33 @@ sewer_settings = settings
 sewer_ui = ui
 
 
+def _with_quantity_refresh(callback):
+    """Keep report rebuilding outside an asynchronous drawing transaction.
+
+    Native VST callbacks run after ``app.run`` has returned.  The former
+    command-level batch therefore ended too early and every PIO reset could
+    rebuild the quantity worksheets while a branch was only half-created.
+    Wrapping the actual completion callback makes the complete network change
+    one atomic reporting batch in both native and fallback tool modes.
+    """
+    def complete(*args, **kwargs):
+        from PD_KanalLeitungMengen import reporting as quantity_reporting
+        quantity_reporting.begin_changes()
+        try:
+            return callback(*args, **kwargs)
+        finally:
+            try:
+                quantity_reporting.end_changes(refresh=True)
+            except Exception as error:
+                # A worksheet failure must never undo or cancel geometry that
+                # was already built successfully.  The report can be renewed
+                # independently from the quantity command.
+                adapter.alert(
+                    "Kanalobjekte wurden erstellt; die Mengenliste konnte nicht aktualisiert werden: %s"
+                    % error)
+    return complete
+
+
 def _drawing_defaults(options, preferences):
     value = dict(options)
     value.setdefault("graphics_mode", preferences["graphics_mode"])
@@ -53,13 +80,22 @@ def _create(preferences, paths=None):
     if paths:
         complete(paths)
     else:
-        adapter.draw_points(lambda points: complete((points,)))
+        adapter.draw_points(_with_quantity_refresh(
+            lambda points: complete((points,))))
 
 
 def _edit(preferences, managed):
     if not managed:
         raise core.SewerError("Zuerst eine Kanalstrecke, einen Schacht oder deren Beschriftung markieren.")
     if len(managed) == 1:
+        if managed[0][1].get("role") == "sewer_rigole":
+            handle = managed[0][0]
+            current = sewer_live.read_rigole(handle)
+            changed = sewer_ui.rigole_dialog(current)
+            if changed is not None and sewer_live.update_rigole(
+                    handle, changed, preferences):
+                adapter.alert("Rigolenbauwerk und Mengen wurden aktualisiert.")
+            return
         if sewer_live.edit(managed[0][0], preferences):
             adapter.alert("Kanalobjekt und angeschlossene Darstellung wurden aktualisiert.")
         return
@@ -86,14 +122,68 @@ def _split(preferences, managed):
             adapter.alert("Kanalstrecke geteilt und neuer verbundener Schacht angelegt.")
         except Exception as error:
             adapter.alert("Kanalstrecke konnte nicht geteilt werden: %s" % error)
-    adapter.pick_connection_point(complete)
+    adapter.pick_connection_point(_with_quantity_refresh(complete))
 
 
 def _connect(preferences, managed):
-    if len(managed) != 1 or managed[0][1].get("role") not in ("sewer_pipe", "sewer_shaft"):
-        raise core.SewerError("Zum Anschließen genau eine bestehende Kanalstrecke oder einen Schacht markieren.")
+    if len(managed) != 1 or managed[0][1].get("role") not in (
+            "sewer_pipe", "sewer_shaft", "sewer_rigole"):
+        raise core.SewerError(
+            "Zum Anschließen genau eine Haltung, einen Schacht oder eine Rigole markieren.")
     handle, data = managed[0]
     role = data["role"]
+    if role == "sewer_rigole":
+        owner = sewer_live.read_rigole(handle)
+        connection_height = sewer_ui.rigole_connection_height_dialog(owner)
+        if connection_height is None:
+            return
+        initial = {
+            "kind": preferences["default_kind"],
+            "dn_mm": preferences["default_dn_mm"],
+            "material": preferences["default_material"],
+            "start_invert_m": connection_height,
+            "calculation_mode": "start", "calculation_value": 1.5,
+            "reverse_flow": True, "cover_height_m": owner["terrain_top_m"],
+            "shaft_diameter_m": preferences["shaft_diameter_m"],
+            "shaft_mode": "all",
+            "shaft_construction_material": preferences["shaft_construction_material"],
+            "shaft_wall_thickness_m": preferences["shaft_wall_thickness_m"],
+            "cover_diameter_m": preferences["shaft_cover_diameter_m"],
+            "cover_symbol": preferences["shaft_cover_symbol"],
+            "cover_placement": preferences["shaft_cover_placement"],
+            "cover_rotation_deg": preferences["shaft_cover_rotation_deg"],
+            "join_style": preferences["join_style"],
+            "fillet_radius_m": preferences["fillet_radius_m"],
+            "flow_arrow_scale": preferences["flow_arrow_scale"],
+            "label_layout": preferences["label_layout"],
+            "label_width_m": 0.0,
+            "label_rotation_deg": preferences["label_rotation_deg"],
+            "draw_3d": preferences["draw_3d"],
+            "graphics_mode": preferences["graphics_mode"],
+            "color_override": None,
+        }
+        options = sewer_ui.pipe_properties_dialog(
+            preferences, initial, source_count=0, editing=False, purpose="connect")
+        if options is None:
+            return
+        options = _drawing_defaults(options, preferences)
+        options["rigole_connection_invert_m"] = connection_height
+
+        def complete_rigole(points):
+            try:
+                created, height = sewer_live.connect_from_rigole(
+                    handle, (points,), options, preferences)
+                adapter.alert(
+                    "%d Haltung(en) bei KS = %.2f m an %s angeschlossen." %
+                    (len(created), height, owner["name"]))
+            except Exception as error:
+                adapter.alert("Kanal konnte nicht an die Rigole angeschlossen werden: %s" % error)
+        adapter.draw_points(
+            _with_quantity_refresh(complete_rigole),
+            help_text=("RIGOLENANSCHLUSS: Zuerst die Lage auf der markierten Rigole anklicken, "
+                       "danach weitere Kanalpunkte setzen. Doppelklick oder Enter beendet."),
+            undo_name="PD Kanal an Rigole anschließen")
+        return
     if role == "sewer_pipe":
         owner = sewer_live.read_pipe(handle)
         connection_proposal = (owner["start_invert_m"] + owner["end_invert_m"]) * 0.5
@@ -136,12 +226,12 @@ def _connect(preferences, managed):
             try:
                 created, height = connector((points,))
                 adapter.alert(
-                    "%d neue Kanalstrecke(n) bei KS = %.3f m höhengleich angeschlossen." %
+                    "%d neue Kanalstrecke(n) bei KS = %.2f m höhengleich angeschlossen." %
                     (len(created), height))
             except Exception as error:
                 adapter.alert("Neue Leitung konnte nicht angeschlossen werden: %s" % error)
         adapter.draw_points(
-            complete, first_point=start_xy,
+            _with_quantity_refresh(complete), first_point=start_xy,
             help_text=("KANALANSCHLUSS: Weitere Schacht-, Knick- oder Endpunkte anklicken. "
                        "Doppelklick beendet den neuen Kanalstrang."),
             undo_name="PD Kanalstrang anschließen")
@@ -167,7 +257,7 @@ def _connect(preferences, managed):
             created, height = sewer_live.connect_branch(
                 handle, xy, (branch,), adjusted, preferences)
             adapter.alert(
-                "%d neue Kanalstrecke(n) bei KS = %.3f m höhengleich angeschlossen." %
+                "%d neue Kanalstrecke(n) bei KS = %.2f m höhengleich angeschlossen." %
                 (len(created), height))
         except Exception as error:
             adapter.alert("Neue Leitung konnte nicht angeschlossen werden: %s" % error)
@@ -176,7 +266,7 @@ def _connect(preferences, managed):
     # callback is not reliable in Vectorworks 2026 and caused the branch tool
     # to disappear after the first click on an existing pipe.
     adapter.draw_points(
-        complete_pipe_branch,
+        _with_quantity_refresh(complete_pipe_branch),
         help_text=("KANALANSCHLUSS: Als ersten Punkt die markierte Haltung anklicken. "
                    "Danach weitere Schacht-, Knick- oder Endpunkte setzen. "
                    "Doppelklick beendet den neuen Kanalstrang."),
@@ -298,12 +388,12 @@ def _stub(preferences, managed):
             created, height = sewer_live.connect_stub(
                 handle, xy, (branch,), options, preferences)
             adapter.alert(
-                "Kanalstutzen %s bei Anschlusshöhe %.3f m und %d Anschlussleitung(en) erstellt." %
+                "Kanalstutzen %s bei Anschlusshöhe %.2f m und %d Anschlussleitung(en) erstellt." %
                 (core.connection_alignment_label(alignment), height, len(created)))
         except Exception as error:
             adapter.alert("Kanalstutzen konnte nicht erstellt werden: %s" % error)
     adapter.draw_points(
-        complete,
+        _with_quantity_refresh(complete),
         help_text=("KANALSTUTZEN: Zuerst die Lage auf der gewählten Haltung anklicken. "
                    "Danach die DN-%d-Anschlussleitung zeichnen; Doppelklick beendet." % options["dn_mm"]),
         undo_name="PD Kanalstutzen herstellen")
@@ -313,7 +403,9 @@ def _special(preferences, managed):
     shaft = _selected_or_picked(managed, "sewer_shaft")
     if not shaft:
         return
-    polygon = adapter.pick_polygon()
+    polygon = adapter.pick_polygon(
+        "Geschlossene, frei gezeichnete Kontur auf der Konstruktionsebene anklicken. "
+        "Die Geometrie innerhalb eines Kanalobjekts kann nicht als Vorlage verwendet werden. Esc: abbrechen.")
     if not polygon:
         return
     sewer_live.replace_with_special(shaft, polygon, preferences)
@@ -342,17 +434,37 @@ def _terminal(preferences, structure_type):
         try:
             created, height = sewer_live.connect_terminal(points, value, preferences)
             noun = "Bodenablauf" if structure_type == "floor_drain" else "Hausanschluss"
-            adapter.alert("%s mit %d Haltung(en) bei Anschluss KS = %.3f m erstellt." %
+            adapter.alert("%s mit %d Haltung(en) bei Anschluss KS = %.2f m erstellt." %
                           (noun, len(created), height))
         except Exception as error:
             adapter.alert("Anschluss konnte nicht erstellt werden: %s" % error)
     adapter.draw_points(
-        complete,
+        _with_quantity_refresh(complete),
         help_text=("Vom Bodenablauf zur Hauptleitung zeichnen. " if structure_type == "floor_drain" else
                    "Vom freien Hausanschlussende zur Hauptleitung zeichnen. ") +
                   "Der Doppelklickpunkt muss auf der bestehenden Haltung liegen.",
         undo_name="PD Bodenablauf anschließen" if structure_type == "floor_drain" else
                   "PD Hausanschluss anschließen")
+
+
+def _rigole(preferences):
+    values = sewer_ui.rigole_dialog()
+    if values is None:
+        return
+
+    def complete(point_m):
+        try:
+            handle = sewer_live.create_rigole(point_m, values, preferences)
+            rigole = sewer_live.read_rigole(handle)
+            adapter.alert(
+                "%s eingesetzt: Rigolenvolumen %.2f m³, Rückhaltevolumen (95 %% FV) %.2f m³."
+                % (rigole["name"], rigole["gross_volume_m3"],
+                   rigole["storage_volume_m3"]))
+        except Exception as error:
+            adapter.alert("Rigolenbauwerk konnte nicht eingesetzt werden: %s" % error)
+    adapter.pick_connection_point(
+        _with_quantity_refresh(complete),
+        "RIGOLE: Mittelpunkt des Bauwerks anklicken. Esc: abbrechen.")
 
 
 def _shaft_sheets(preferences, managed):
@@ -399,8 +511,11 @@ def _shaft_sheets(preferences, managed):
 
 _QUANTITY_MUTATIONS = frozenset((
     "sources", "draw", "edit", "split", "connect", "connect_shafts", "stub",
-    "special", "drop", "floor_drain", "house", "merge", "delete",
+    "special", "drop", "floor_drain", "house", "rigole", "merge", "delete",
     "terrain_covers", "settings", "smart",
+))
+_NATIVE_TOOL_MUTATIONS = frozenset((
+    "draw", "connect", "stub", "floor_drain", "house",
 ))
 
 
@@ -423,7 +538,10 @@ def run(action=None):
                 selected_pipe_count)
         if action is None:
             return
-        if action in _QUANTITY_MUTATIONS:
+        native_tool_change = (
+            action in _NATIVE_TOOL_MUTATIONS or
+            action == "smart" and not managed and not sources)
+        if action in _QUANTITY_MUTATIONS and not native_tool_change:
             from PD_KanalLeitungMengen import reporting as quantity_reporting
             quantity_reporting.begin_changes()
             quantity_batch = True
@@ -435,6 +553,8 @@ def run(action=None):
             _create(preferences, sources)
         elif action == "draw":
             _create(preferences)
+        elif action == "rigole":
+            _rigole(preferences)
         elif action == "edit":
             _edit(preferences, managed)
         elif action == "split":
@@ -458,13 +578,15 @@ def run(action=None):
             adapter.alert("Zwei Kanalstrecken wurden vereinigt; der Zwischenknoten wurde entfernt.")
         elif action == "delete":
             if sewer_ui.confirm_delete(len(managed)):
-                pipes, shafts = sewer_live.delete_selected(managed)
-                adapter.alert("%d Kanalstrecke(n) und %d Schacht/Schächte gelöscht. Rückgängig bleibt verfügbar." %
-                              (pipes, shafts))
+                pipes, shafts, rigoles = sewer_live.delete_selected(managed)
+                adapter.alert(
+                    "%d Kanalstrecke(n), %d Schacht/Schächte und %d Rigole(n) gelöscht. Rückgängig bleibt verfügbar."
+                    % (pipes, shafts, rigoles))
         elif action == "validate":
             result = sewer_live.validate_document(preferences)
-            adapter.alert("Kanalnetz fehlerfrei: %d Rohrstrecken, %d sichtbare Schächte, %d Verbindungsknoten." %
-                          (result["pipes"], result["shafts"], result["nodes"]))
+            adapter.alert(
+                "Kanalnetz fehlerfrei: %d Rohrstrecken, %d sichtbare Schächte, %d Verbindungsknoten, %d Rigolen."
+                % (result["pipes"], result["shafts"], result["nodes"], result["rigoles"]))
         elif action == "terrain_covers":
             selected_shafts = tuple(handle for handle, data in managed
                                     if data.get("role") == "sewer_shaft")
@@ -481,7 +603,8 @@ def run(action=None):
         elif action == "settings":
             has_channel_objects = bool(
                 sewer_live.objects("sewer_pipe") or
-                sewer_live.objects("sewer_shaft"))
+                sewer_live.objects("sewer_shaft") or
+                sewer_live.objects("sewer_rigole"))
             updated, update_scope = sewer_ui.preferences_dialog(
                 preferences,
                 _preference_default_scope(managed, has_channel_objects))

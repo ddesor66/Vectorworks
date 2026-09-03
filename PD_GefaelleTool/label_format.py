@@ -31,7 +31,7 @@ def options(value=None):
 
 def annotation(kind, value, preferences):
     style = options(preferences.get("labels"))[kind]
-    decimals = preferences.get(kind + "_decimals", 2)
+    decimals = 2 if kind == "height" else preferences.get(kind + "_decimals", 2)
     if type(decimals) is not int or not 0 <= decimals <= 6:
         raise SlopeError("Nachkommastellen müssen zwischen 0 und 6 liegen.")
     numeric = ("%.*f" % (decimals, _number(value, "Beschriftungswert"))).replace(".", ",")

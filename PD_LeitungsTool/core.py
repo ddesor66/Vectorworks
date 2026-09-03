@@ -16,6 +16,7 @@ TYPE_TOKENS = {
     "Gas": "Gas",
 }
 GRAPHICS_MODES = ("single_line", "double_line")
+LABEL_LAYOUTS = ("one_line", "two_line")
 AXIS_REFERENCES = ("left", "center", "right")
 ELEVATION_MODES = ("fixed", "surface_cover")
 DEFAULT_MATERIALS = ("PE", "PVC", "GGG", "Stahl", "Kabelschutzrohr")
@@ -80,8 +81,10 @@ def stations(points):
 
 def utility_type(value):
     result = str(value or "").strip()
-    if result not in UTILITY_TYPES:
-        raise UtilityError("Unbekannter Leitungstyp.")
+    if (not result or len(result) > 64 or
+            any(char in result for char in "\r\n\t|;")):
+        raise UtilityError("Ungültiger Leitungstyp.")
+    class_token(result, "Leitungstyp")
     return result
 
 
@@ -155,7 +158,8 @@ def line_class_name(prefix, type_value, dn_mm, suffix=""):
         raise UtilityError("Der Klassenanhang ist ungültig.")
     return "%s-%s-DN%d%s" % (
         class_token(prefix, "Leitungs-Klassenpräfix"),
-        TYPE_TOKENS[utility_type(type_value)],
+        TYPE_TOKENS.get(utility_type(type_value),
+                        class_token(type_value, "Leitungstyp")),
         integer(dn_mm, "Nennweite", 1, 10000), suffix)
 
 
@@ -598,6 +602,10 @@ def validate_route(value):
     result["route_heights_m"] = tuple(normalized_heights)
     result["heights_m"] = result["route_heights_m"][0]
     result["start_height_m"] = result["heights_m"][0]
+    route_length = stations(result["points_m"])[-1]
+    result["slope_percent"] = (
+        (result["heights_m"][0] - result["heights_m"][-1]) /
+        route_length * 100.0)
     profile_keys = ("surface_profile_stations_m", "surface_profile_heights_m",
                     "surface_profile_surface_m")
     if result["elevation_mode"] != "surface_cover":
@@ -639,6 +647,13 @@ def validate_route(value):
         sample_path(result["points_m"], result["label_interval_m"])
     result["label_frame"] = bool(result.get("label_frame", False))
     result["label_fill"] = bool(result.get("label_fill", False))
+    result["label_bold"] = bool(result.get("label_bold", False))
+    result["label_underline"] = bool(result.get("label_underline", False))
+    result["label_rotation_deg"] = number(
+        result.get("label_rotation_deg", 0.0), "Beschriftungsdrehung") % 360.0
+    result["label_layout"] = str(result.get("label_layout", "one_line"))
+    if result["label_layout"] not in LABEL_LAYOUTS:
+        raise UtilityError("Ungültiges Beschriftungsformat.")
     result["font_name"] = str(result.get("font_name") or "Arial").strip()
     result["font_size_pt"] = number(result.get("font_size_pt", 9.0), "Schriftgröße")
     if not result["font_name"] or not 1.0 <= result["font_size_pt"] <= 200.0:

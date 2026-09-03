@@ -27,11 +27,52 @@ def _title(value):
     return "%s | v%s | %s" % (value, VERSION, MANUFACTURER)
 
 
-def _run(dialog, handler):
+def _right_side_position(dialog, preferred_size=None):
+    """Keep every slope dialog inside the current monitor work area."""
+    try:
+        screen = vs.GetScreen()
+        if not isinstance(screen, (tuple, list)) or len(screen) != 4:
+            return
+        left, top, right, bottom = (int(value) for value in screen)
+        screen_width = max(1, right - left)
+        screen_height = max(1, bottom - top)
+        max_width = max(1, screen_width - 24)
+        max_height = max(1, screen_height - 48)
+        minimum_width = min(320, max_width)
+        minimum_height = min(240, max_height)
+        if preferred_size:
+            vs.SetLayoutDialogSize(
+                dialog,
+                min(max_width, max(minimum_width, int(preferred_size[0]))),
+                min(max_height, max(minimum_height, int(preferred_size[1]))))
+        size = vs.GetLayoutDialogSize(dialog)
+        if not isinstance(size, (tuple, list)) or len(size) != 2:
+            return
+        width = min(max_width, max(minimum_width, int(size[0])))
+        height = min(max_height, max(minimum_height, int(size[1])))
+        if (width, height) != (int(size[0]), int(size[1])):
+            vs.SetLayoutDialogSize(dialog, width, height)
+        palette_width = max(280, min(420, int(screen_width * 0.22)))
+        x = max(left + 12, right - palette_width - width - 12)
+        y = max(top + 12, min(top + 42, bottom - height - 12))
+        vs.SetLayoutDialogPosition(dialog, x, y)
+    except (AttributeError, TypeError, ValueError):
+        return
+
+
+def _run(dialog, handler, preferred_size=None):
     if not vs.VerifyLayout(dialog):
         vw_adapter.alert("Das Fenster konnte nicht sicher aufgebaut werden.")
         return 2
-    return vs.RunLayoutDialog(dialog, handler)
+    _right_side_position(dialog, preferred_size)
+
+    def positioned_handler(item, data):
+        result = handler(item, data)
+        if item == INIT_EVENT:
+            _right_side_position(dialog, preferred_size)
+        return result
+
+    return vs.RunLayoutDialog(dialog, positioned_handler)
 
 
 def _choice_index(dialog, item_id):
@@ -47,6 +88,11 @@ def _float(dialog, item_id, label):
         return core._number(value, label)
     except ValueError:
         raise ValueError("%s ist keine gültige Zahl." % label)
+
+
+def _height_text(value):
+    """Format a visible elevation without rounding the model value."""
+    return ("%.2f" % float(value)).replace(".", ",")
 
 
 def _init_symbol_resource(dialog, control, unique_id, selected_name):
@@ -179,7 +225,7 @@ def single_point_dialog(number, level, lock_level=False, default_height=0.0,
                                       "Punkt setzen", "Abbrechen", True, True)
     vs.CreateStyledStatic(dialog, 10, "EINZELNER HÖHENPUNKT  |  P:%d" % number, -1, TITLE_STYLE)
     vs.CreateStaticText(dialog, 11, "Höhe [m]:", -1)
-    vs.CreateEditText(dialog, 12, str(default_height).replace(".", ","), 18)
+    vs.CreateEditText(dialog, 12, _height_text(default_height), 18)
     vs.CreateStaticText(dialog, 13, "Level / Gefällebene:", -1)
     vs.CreateEditText(dialog, 14, str(level), 28)
     vs.CreateCheckBox(dialog, 16, "Mehrere Höhenpunkte nacheinander setzen")
@@ -241,7 +287,8 @@ def connect_points_dialog(points, level):
     def handler(item, _data):
         if item == INIT_EVENT:
             for index, (_, point) in enumerate(points):
-                caption = "P:%d  |  H=%s m" % (point["number"], ("%.3f" % point["height_m"]).replace(".", ","))
+                caption = "P:%d  |  H=%s m" % (
+                    point["number"], _height_text(point["height_m"]))
                 vs.AddChoice(dialog, 12, caption, index)
                 vs.AddChoice(dialog, 14, caption, index)
             vs.SelectChoice(dialog, 12, 0, True)
@@ -271,7 +318,8 @@ def insert_point_dialog(info):
         return ("%.4f" % value).replace(".", ",")
     rows = (
         (10, "ANSCHLUSSHÖHE PRÜFEN", TITLE_STYLE),
-        (11, "Neuer Punkt P:%d   |   Höhe H=%s m" % (info["number"], fmt(info["height_m"])), SECTION_STYLE),
+        (11, "Neuer Punkt P:%d   |   Höhe H=%s m" %
+         (info["number"], _height_text(info["height_m"])), SECTION_STYLE),
         (12, "Verbindung P:%d → P:%d wird in zwei Gefällesegmente geteilt." %
          (info["from_number"], info["to_number"]), None),
         (13, "P:%d → P:%d: %s m\nP:%d → P:%d: %s m" %
@@ -404,8 +452,8 @@ def branch_dialog(points, default_level, next_number, lock_level=False):
         if item == INIT_EVENT:
             vs.EnableItem(dialog, I_LEVEL, not lock_level)
             for index, row in enumerate(points):
-                vs.AddChoice(dialog, I_POINT, "P:%d  H=%.3fm  |  %s" % (
-                    row[2], row[3], row[1]), index)
+                vs.AddChoice(dialog, I_POINT, "P:%d  H=%s m  |  %s" % (
+                    row[2], _height_text(row[3]), row[1]), index)
             vs.SelectChoice(dialog, I_POINT, 0, True)
             vs.AddChoice(dialog, I_MODE, "Durchgängiges Gefälle in Prozent", 0)
             vs.AddChoice(dialog, I_MODE, "Endhöhe interpolieren", 1)
@@ -453,13 +501,13 @@ def edit_point_dialog(chain):
     def handler(item, _data):
         if item == INIT_EVENT:
             for index, point in enumerate(points):
-                vs.AddChoice(dialog, I_POINT, "P:%d  H=%.3fm" % (
-                    point["number"], point["height_m"]), index)
+                vs.AddChoice(dialog, I_POINT, "P:%d  H=%s m" % (
+                    point["number"], _height_text(point["height_m"])), index)
             vs.SelectChoice(dialog, I_POINT, 0, True)
-            vs.SetItemText(dialog, I_HEIGHT, "%.3f" % points[0]["height_m"])
+            vs.SetItemText(dialog, I_HEIGHT, _height_text(points[0]["height_m"]))
         elif item == I_POINT:
             point = points[_choice_index(dialog, I_POINT)]
-            vs.SetItemText(dialog, I_HEIGHT, "%.3f" % point["height_m"])
+            vs.SetItemText(dialog, I_HEIGHT, _height_text(point["height_m"]))
         elif item == 1:
             try:
                 point = points[_choice_index(dialog, I_POINT)]
@@ -568,6 +616,9 @@ def chain_selection_dialog(chain, previous=None, highlight=None):
     overrides = dict(previous.get("height_overrides", {}))
     def fmt(value):
         return ("%.4f" % value).replace(".", ",")
+
+    def height_fmt(value):
+        return _height_text(value)
     dialog = vs.CreateResizableLayout(_title("PD Gefälle-Tool – Kette auswählen"), False,
                                       "Vorschau", "Abbrechen", True, True)
     vs.CreateStyledStatic(dialog, TITLE, "KETTE ÄNDERN  |  Punkthöhen und Gefälle", -1, TITLE_STYLE)
@@ -646,7 +697,7 @@ def chain_selection_dialog(chain, previous=None, highlight=None):
         try:
             if mode() == "points":
                 data = [("P:%d%s" % (p["number"], " *" if p["number"] in overrides else ""),
-                         fmt(overrides.get(p["number"], p["height_m"])), "", "") for p in points]
+                         height_fmt(overrides.get(p["number"], p["height_m"])), "", "") for p in points]
             else:
                 draft = chain_edit.edit_heights(chain, overrides)[0] if overrides else chain
                 data = [("P:%d → P:%d" % (s["from"],s["to"]), "", fmt(s["length_m"]), fmt(s["slope_percent"]))
@@ -672,7 +723,7 @@ def chain_selection_dialog(chain, previous=None, highlight=None):
         text, label = "", "Punkthöhe [m]:"
         if row is not None:
             point = points[row]
-            text = fmt(overrides.get(point["number"], point["height_m"]))
+            text = height_fmt(overrides.get(point["number"], point["height_m"]))
             label = "Höhe P:%d [m]:" % point["number"]
         state["edit_text"] = text
         vs.SetItemText(dialog, HEIGHT, text)
@@ -763,6 +814,9 @@ def chain_preview_dialog(info):
     TITLE, SUMMARY, LIST, BOUNDARY, NOTE = range(10,15)
     def fmt(value):
         return ("%.4f" % value).replace(".", ",")
+
+    def height_fmt(value):
+        return _height_text(value)
     manual = info.get("operation") == "heights"
     apply_label = "Höhen anwenden" if manual else "Gefälle anwenden"
     dialog = vs.CreateResizableLayout(_title("PD Gefälle-Tool – Kettenvorschau"), False,
@@ -772,7 +826,7 @@ def chain_preview_dialog(info):
                % len(info["points"]) if manual else
         "P:%d → P:%d | Länge %s m | neues Gefälle %s %%\nFest: P:%d auf H=%s m" % (
             info["from_number"],info["to_number"],fmt(info["length_m"]),fmt(info["slope_percent"]),
-            info["fixed_number"],fmt(info["fixed_height_m"])))
+            info["fixed_number"],height_fmt(info["fixed_height_m"])))
     vs.CreateStaticText(dialog, SUMMARY, summary, 72)
     vs.CreateLB(dialog, LIST, 94, 16)
     boundary = "\n".join("Anschluss P:%d → P:%d: %s %% → %s %%" % (
@@ -798,7 +852,9 @@ def chain_preview_dialog(info):
         if item == INIT_EVENT:
             _chain_table_columns(dialog, LIST, (("Höhenpunkt",140), ("Bisher [m]",115), ("Neu [m]",115), ("Änderung [m]",115)), single=True)
             _chain_table_rows(dialog, LIST, [("P:%d%s" % (p["number"], " (fest)" if p["fixed"] else ""),
-                                            fmt(p["old_height_m"]),fmt(p["new_height_m"]),fmt(p["delta_m"])) for p in info["points"]])
+                                            height_fmt(p["old_height_m"]),
+                                            height_fmt(p["new_height_m"]),
+                                            height_fmt(p["delta_m"])) for p in info["points"]])
         return item
     return _run(dialog, handler) == 1
 

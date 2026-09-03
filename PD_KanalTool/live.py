@@ -24,8 +24,73 @@ sewer_settings = settings
 sewer_ui = ui
 
 
-ROLES = ("sewer_pipe", "sewer_shaft", "sewer_label", "sewer_fitting")
+ROLES = ("sewer_pipe", "sewer_shaft", "sewer_rigole", "sewer_label", "sewer_fitting")
 TEXT_COLOR = (0, 0, 0)
+RENDER_OK = "ok"
+RENDER_ERROR = "error"
+_RENDER_RESULTS = {}
+_PENDING_RENDER_CHECKS = set()
+
+# Vectorworks object-association actions. A structural owner deletes its
+# dependent object; the dependent object only resets a surviving owner when
+# it is deleted directly. Keeping the two directions separate makes the
+# normal Delete key safe for a connected network.
+DELETE_WITH_OWNER = 4
+RESET_ON_OWNER_DELETE = 5
+
+
+def _render_key(handle):
+    """Return a process-local key without writing into the PIO record.
+
+    Writing a render marker with ``SetRField`` from the object's reset event
+    schedules another reset in Vectorworks 2026.  That re-entered the current
+    PIO while connection commands were still creating their objects and made
+    both branch creation and shaft-to-shaft creation roll back.  Object names
+    are stable and unique for every managed object, so they are the safest
+    key at this API boundary.
+    """
+    try:
+        name = _name(handle)
+    except Exception:
+        name = ""
+    if name:
+        return "name:" + name
+    try:
+        return "handle:%d" % int(handle)
+    except (TypeError, ValueError):
+        return "wrapper:%d" % id(handle)
+
+
+def _record_render_result(handle, status, error=None):
+    key = _render_key(handle)
+    if key in _PENDING_RENDER_CHECKS:
+        _RENDER_RESULTS[key] = (
+            str(status), "" if error is None else str(error))
+
+
+def _require_render_ok(handle):
+    key = _render_key(handle)
+    result = _RENDER_RESULTS.pop(key, None)
+    _PENDING_RENDER_CHECKS.discard(key)
+    if result and result[0] == RENDER_ERROR:
+        detail = result[1]
+        raise core.SewerError(
+            "Kanalobjekt konnte nicht vollständig neu aufgebaut werden%s." %
+            (": " + detail if detail else ""))
+    # ResetObject is synchronous in the normal document path.  Vectorworks
+    # can defer the reset while an OIP button callback is unwinding, though;
+    # absence of a result is therefore not an error.  A later object reset
+    # still shows its own explicit error marker and dialog.
+    return bool(result and result[0] == RENDER_OK)
+
+
+def _reset_checked(handle):
+    """Reset one PIO and surface a synchronous render failure without re-entry."""
+    key = _render_key(handle)
+    _RENDER_RESULTS.pop(key, None)
+    _PENDING_RENDER_CHECKS.add(key)
+    vs.ResetObject(handle)
+    return _require_render_ok(handle)
 
 
 def _live():
@@ -50,11 +115,37 @@ def _rgb(value):
 
 
 def color_for(data, preferences):
+    if data.get("role") == "sewer_rigole":
+        return _rgb((data.get("rigole") or {}).get("fill_color"))
     payload = data.get("pipe") or data.get("shaft") or {}
+    if data.get("role") == "sewer_shaft":
+        pen_colors = preferences.get("shaft_pen_colors", preferences["colors"])
+        return _rgb(payload.get("pen_color_override") or
+                    payload.get("color_override") or pen_colors[payload["kind"]])
     return _rgb(payload.get("color_override") or preferences["colors"][payload["kind"]])
 
 
+def shaft_graphics_for(shaft, preferences):
+    """Return independent contour, fill and transparency for one shaft."""
+    kind = shaft["kind"]
+    pen_colors = preferences.get("shaft_pen_colors", preferences["colors"])
+    fill_colors = preferences.get("shaft_fill_colors", pen_colors)
+    transparencies = preferences.get(
+        "shaft_fill_transparency_percent",
+        {current_kind: 50.0 for current_kind in core.KINDS})
+    pen = _rgb(shaft.get("pen_color_override") or
+               shaft.get("color_override") or pen_colors[kind])
+    fill = _rgb(shaft.get("fill_color_override") or fill_colors[kind])
+    transparency = shaft.get("fill_transparency_percent_override")
+    if transparency is None:
+        transparency = transparencies.get(kind, 50.0)
+    transparency = max(0.0, min(100.0, float(transparency)))
+    return pen, fill, transparency
+
+
 def class_name(value, preferences, suffix=""):
+    if isinstance(value, dict) and "gross_volume_m3" in value:
+        return "%s-Rigole%s" % (preferences["class_prefix"], suffix)
     if isinstance(value, dict) and "dn_mm" in value:
         return core.pipe_class_name(preferences["class_prefix"], value, suffix)
     kind = value.get("kind") if isinstance(value, dict) else value
@@ -65,12 +156,13 @@ def axis_class_name(pipe, preferences):
     return core.pipe_class_name(preferences["class_prefix"], pipe, "-Achse")
 
 
-def _ensure_class(name, color, fill=True, line_type=1):
+def _ensure_class(name, color, fill=True, line_type=1, fill_color=None):
+    fill_color = color if fill_color is None else fill_color
     vs.NameClass(name)
     vs.SetClUseGraphic(name, True)
     vs.SetClFPat(name, 1 if fill else 0)
-    vs.SetClFillFore(name, color)
-    vs.SetClFillBack(name, color)
+    vs.SetClFillFore(name, fill_color)
+    vs.SetClFillBack(name, fill_color)
     vs.SetClPenFore(name, color)
     vs.SetClPenBack(name, color)
     vs.SetClLSN(name, int(line_type))
@@ -81,10 +173,17 @@ def ensure_classes(preferences):
     active = str(vs.ActiveClass() or "")
     try:
         for kind in core.KINDS:
-            color = _rgb(preferences["colors"][kind])
+            color = _rgb(preferences.get(
+                "shaft_pen_colors", preferences["colors"])[kind])
+            fill_color = _rgb(preferences.get(
+                "shaft_fill_colors", preferences.get(
+                    "shaft_pen_colors", preferences["colors"]))[kind])
             for suffix in ("", "_3D"):
                 name = class_name(kind, preferences, suffix)
-                _ensure_class(name, color)
+                _ensure_class(name, color, fill_color=fill_color)
+        for suffix in ("", "_3D"):
+            _ensure_class("%s-Rigole%s" % (preferences["class_prefix"], suffix),
+                          (36000, 52000, 65535))
         vs.NameClass(preferences["text_class"])
         vs.SetClUseGraphic(preferences["text_class"], True)
         vs.SetClFPat(preferences["text_class"], 0)
@@ -119,6 +218,96 @@ def _handle_by_id(prefix, identity):
     return handle if handle and int(vs.GetTypeN(handle) or 0) == 86 else None
 
 
+def _remove_association(owner, kind, target):
+    """Remove every duplicate of one exact association, returning its count."""
+    if not hasattr(vs, "RemoveAssociation"):
+        return 0
+    removed = 0
+    # Old files can contain duplicates from interrupted transactions. The
+    # finite guard also protects against a defective host/mock implementation.
+    for _index in range(32):
+        if not owner or not target or not vs.RemoveAssociation(owner, kind, target):
+            break
+        removed += 1
+    return removed
+
+
+def _add_association(owner, kind, target, message):
+    if not owner or not target or not vs.AddAssociation(owner, kind, target):
+        raise core.SewerError(message)
+
+
+def _sync_pipe_associations(handle, pipe, endpoint_handles=None):
+    """Install deletion-safe bidirectional links for one holding."""
+    identities = tuple(dict.fromkeys((pipe["start_id"], pipe["end_id"])))
+    if endpoint_handles is None:
+        endpoint_handles = {
+            identity: _handle_by_id(core.SHAFT_PREFIX, identity)
+            for identity in identities}
+    endpoints = []
+    for identity in identities:
+        endpoint = endpoint_handles.get(identity)
+        if not endpoint:
+            raise core.SewerError(
+                "Rohr-Schacht-Verknüpfung fehlt am Anschluss %s." % identity)
+        endpoints.append(endpoint)
+    # Remove the former shaft->pipe reset link and any duplicate of the new
+    # graph before installing exactly one relationship in each direction.
+    removed = []
+    for endpoint in endpoints:
+        for owner, kind, target in (
+                (endpoint, RESET_ON_OWNER_DELETE, handle),
+                (endpoint, DELETE_WITH_OWNER, handle),
+                (handle, RESET_ON_OWNER_DELETE, endpoint)):
+            for _index in range(_remove_association(owner, kind, target)):
+                removed.append((owner, kind, target))
+    added = []
+    try:
+        for endpoint in endpoints:
+            _add_association(
+                endpoint, DELETE_WITH_OWNER, handle,
+                "Rohr-Schacht-Löschverknüpfung konnte nicht gespeichert werden.")
+            added.append((endpoint, DELETE_WITH_OWNER, handle))
+            _add_association(
+                handle, RESET_ON_OWNER_DELETE, endpoint,
+                "Rohr-Schacht-Aktualisierungsverknüpfung konnte nicht gespeichert werden.")
+            added.append((handle, RESET_ON_OWNER_DELETE, endpoint))
+    except Exception:
+        for owner, kind, target in reversed(added):
+            _remove_association(owner, kind, target)
+        for owner, kind, target in removed:
+            vs.AddAssociation(owner, kind, target)
+        raise
+    return tuple(endpoints)
+
+
+def _sync_rigole_junction_association(rigole_handle, junction_handle):
+    """Delete a rigole connection node with the rigole and refresh survivors."""
+    removed = []
+    for owner, kind, target in (
+            (rigole_handle, RESET_ON_OWNER_DELETE, junction_handle),
+            (rigole_handle, DELETE_WITH_OWNER, junction_handle),
+            (junction_handle, RESET_ON_OWNER_DELETE, rigole_handle)):
+        for _index in range(_remove_association(owner, kind, target)):
+            removed.append((owner, kind, target))
+    added = []
+    try:
+        _add_association(
+            rigole_handle, DELETE_WITH_OWNER, junction_handle,
+            "Rigolen-Anschlussknoten konnte nicht löschsicher verknüpft werden.")
+        added.append((rigole_handle, DELETE_WITH_OWNER, junction_handle))
+        _add_association(
+            junction_handle, RESET_ON_OWNER_DELETE, rigole_handle,
+            "Rigolen-Aktualisierungsverknüpfung konnte nicht gespeichert werden.")
+        added.append((junction_handle, RESET_ON_OWNER_DELETE, rigole_handle))
+    except Exception:
+        for owner, kind, target in reversed(added):
+            _remove_association(owner, kind, target)
+        for owner, kind, target in removed:
+            vs.AddAssociation(owner, kind, target)
+        raise
+
+
 def read_shaft(handle, data=None):
     data = data or _live().data_of(handle)
     if not is_sewer_data(data) or data["role"] != "sewer_shaft":
@@ -127,14 +316,35 @@ def read_shaft(handle, data=None):
     if _name(handle) != core.SHAFT_PREFIX + shaft["id"]:
         raise core.SewerError("Schachtidentität wurde geändert oder kopiert.")
     factor = adapter.units_to_meters()
-    location = vs.GetSymLoc(handle)
+    location = adapter.symbol_location_2d(
+        handle, (shaft["x_m"] / factor, shaft["y_m"] / factor))
     shaft["x_m"], shaft["y_m"] = float(location[0]) * factor, float(location[1]) * factor
     return core.validate_shaft(shaft, allow_hidden=True)
+
+
+def read_rigole(handle, data=None):
+    data = data or _live().data_of(handle)
+    if not is_sewer_data(data) or data["role"] != "sewer_rigole":
+        raise core.SewerError("Rigolenbauwerk konnte nicht gelesen werden.")
+    rigole = core.validate_rigole(data["rigole"])
+    if _name(handle) != core.RIGOLE_PREFIX + rigole["id"]:
+        raise core.SewerError("Rigolenidentität wurde geändert oder kopiert.")
+    factor = adapter.units_to_meters()
+    location = adapter.symbol_location_2d(
+        handle, (rigole["x_m"] / factor, rigole["y_m"] / factor))
+    rigole["x_m"], rigole["y_m"] = (
+        float(location[0]) * factor, float(location[1]) * factor)
+    return core.validate_rigole(rigole)
 
 
 def shaft_records():
     return tuple((handle, read_shaft(handle, data))
                  for handle, data in objects("sewer_shaft"))
+
+
+def rigole_records():
+    return tuple((handle, read_rigole(handle, data))
+                 for handle, data in objects("sewer_rigole"))
 
 
 def _endpoints(pipe):
@@ -171,6 +381,11 @@ def _holding_name_live(pipe, following_index=None):
         if not shaft_handle:
             break
         shaft = read_shaft(shaft_handle)
+        rigole_id = str(shaft.get("rigole_id") or "")
+        if rigole_id:
+            rigole_handle = _handle_by_id(core.RIGOLE_PREFIX, rigole_id)
+            if rigole_handle:
+                return "H-" + read_rigole(rigole_handle).get("name", rigole_id)
         if (shaft.get("visible", True) and
                 shaft.get("structure_type") not in ("junction", "stub") and
                 shaft.get("name")):
@@ -238,6 +453,16 @@ def _next_named_number(prefix):
     return "%s.%03d" % (prefix, result)
 
 
+def _next_rigole_name():
+    result = 1
+    pattern = re.compile(r"RIG\.(\d+)$", re.IGNORECASE)
+    for _handle, data in objects("sewer_rigole"):
+        match = pattern.fullmatch(str((data.get("rigole") or {}).get("name") or ""))
+        if match:
+            result = max(result, int(match.group(1)) + 1)
+    return "RIG.%03d" % result
+
+
 def selected_managed():
     result = {}
     for handle in adapter.selected_handles():
@@ -273,10 +498,17 @@ def selected_source_paths():
 def _new_object(xy_m, role, payload, preferences, created):
     factor = adapter.units_to_meters()
     identity = payload["id"]
-    prefix = core.SHAFT_PREFIX if role == "sewer_shaft" else core.PIPE_PREFIX
+    prefixes = {"sewer_shaft": core.SHAFT_PREFIX,
+                "sewer_pipe": core.PIPE_PREFIX,
+                "sewer_rigole": core.RIGOLE_PREFIX}
+    keys = {"sewer_shaft": "shaft", "sewer_pipe": "pipe",
+            "sewer_rigole": "rigole"}
+    if role not in prefixes:
+        raise core.SewerError("Unbekannter Kanalobjekttyp.")
+    prefix = prefixes[role]
     data = {"schema": core.SCHEMA, "role": role,
             "preferences": copy.deepcopy(preferences),
-            "shaft" if role == "sewer_shaft" else "pipe": copy.deepcopy(payload)}
+            keys[role]: copy.deepcopy(payload)}
     handle = _live()._new_object((xy_m[0] / factor, xy_m[1] / factor), data,
                                  prefix + identity, created)
     return handle
@@ -296,6 +528,9 @@ def _default_label_position(owner, data):
         shaft = read_shaft(owner, data)
         return (shaft["x_m"] / factor + core.shaft_outer_diameter_m(shaft) / factor / 2.0 + offset,
                 shaft["y_m"] / factor + offset)
+    if data["role"] == "sewer_rigole":
+        rigole = read_rigole(owner, data)
+        return rigole["x_m"] / factor, rigole["y_m"] / factor
     pipe = read_pipe(owner, data)
     (_a, start), (_b, end) = _endpoints(pipe)
     first = start["x_m"] / factor, start["y_m"] / factor
@@ -306,6 +541,110 @@ def _default_label_position(owner, data):
     distance = pipe["dn_mm"] / 2000.0 / factor + offset
     return ((first[0] + second[0]) * 0.5 + nx * distance,
             (first[1] + second[1]) * 0.5 + ny * distance)
+
+
+def _connection_label_position(shaft, row, index, factor):
+    """Return the automatic world position of one shaft endpoint label."""
+    base_radius_m = max(core.shaft_outer_diameter_m(shaft) * 0.5, 0.25)
+    # Alternating radial spacing prevents coincident texts at nearby endpoints,
+    # while every label still starts on its actual connection ray.
+    offset_m = base_radius_m + 0.16 + (index % 2) * 0.07
+    ux, uy = row["direction"]
+    return (shaft["x_m"] / factor + ux * offset_m / factor,
+            shaft["y_m"] / factor + uy * offset_m / factor)
+
+
+def _connection_label_context(owner, owner_data, connection_id, include_hidden=False):
+    """Resolve a persisted connection id to its current derived shaft row."""
+    if owner_data.get("role") != "sewer_shaft":
+        return None
+    if not owner_data.get("preferences", {}).get(
+            "shaft_connection_labels_visible", True):
+        return None
+    shaft = read_shaft(owner, owner_data)
+    if (not shaft.get("visible", True) or
+            shaft.get("structure_type", "round") not in ("round", "special")):
+        return None
+    rows = shaft_connection_views(shaft)
+    for index, row in enumerate(rows):
+        if row["connection_id"] == connection_id:
+            counts = {
+                role: sum(1 for candidate in rows if candidate["role"] == role)
+                for role in ("in", "out")}
+            return shaft, row, index, counts
+    return None
+
+
+def _label_default_position(owner, owner_data, label_data=None):
+    """Return the automatic position for the primary or an endpoint label."""
+    if (label_data or {}).get("label_kind") == "connection_height":
+        context = _connection_label_context(
+            owner, owner_data, label_data.get("connection_id", ""), True)
+        if context:
+            shaft, row, index, _counts = context
+            return _connection_label_position(
+                shaft, row, index, adapter.units_to_meters())
+    return _default_label_position(owner, owner_data)
+
+
+def _ensure_connection_height_labels(owner, data, created):
+    """Create one independently movable label PIO per current shaft endpoint."""
+    if data.get("role") != "sewer_shaft":
+        return data
+    if not data.get("preferences", {}).get(
+            "shaft_connection_labels_visible", True):
+        return data
+    shaft = read_shaft(owner, data)
+    if (not shaft.get("visible", True) or
+            shaft.get("structure_type", "round") not in ("round", "special")):
+        return data
+    owner_name = _name(owner)
+    rows = shaft_connection_views(shaft)
+    labels = list(dict.fromkeys(data.get("labels", ())))
+    factor = adapter.units_to_meters()
+    for index, row in enumerate(rows):
+        identity = str(uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            owner_name + ":connection-height:" + row["connection_id"]))
+        name = core.LABEL_PREFIX + identity
+        label = vs.GetObject(name)
+        if label:
+            label_data = _live().data_of(label)
+            if (not is_sewer_data(label_data) or
+                    label_data.get("role") != "sewer_label" or
+                    label_data.get("owner") != owner_name or
+                    label_data.get("label_kind") != "connection_height" or
+                    label_data.get("connection_id") != row["connection_id"]):
+                raise core.SewerError(
+                    "Name einer Zu-/Ablaufbeschriftung ist bereits belegt.")
+        else:
+            position = _connection_label_position(shaft, row, index, factor)
+            payload = {
+                "schema": core.SCHEMA, "role": "sewer_label", "id": identity,
+                "owner": owner_name, "owner_role": "sewer_shaft",
+                "label_kind": "connection_height",
+                "connection_id": row["connection_id"],
+                "auto_position": True,
+                "auto_xy": [position[0], position[1]],
+                "preferences": copy.deepcopy(data["preferences"]),
+            }
+            label = _live()._new_object(
+                (position[0], position[1]), payload, name, created)
+            layer = vs.GetLayer(owner)
+            if (vs.GetParent(label) != layer and
+                    (not vs.SetParent(label, layer) or vs.GetParent(label) != layer)):
+                raise core.SewerError(
+                    "Zu-/Ablaufbeschriftung konnte nicht auf der Objektebene angelegt werden.")
+            if not vs.AddAssociation(owner, 4, label):
+                raise core.SewerError(
+                    "Verknüpfung der Zu-/Ablaufbeschriftung konnte nicht gespeichert werden.")
+        if name not in labels:
+            labels.append(name)
+    updated = copy.deepcopy(data)
+    updated["labels"] = labels
+    if updated != data:
+        _live().write_data(owner, updated)
+    return updated
 
 
 def ensure_label(owner, data, created):
@@ -329,8 +668,10 @@ def ensure_label(owner, data, created):
         if not vs.AddAssociation(owner, 4, label):
             raise core.SewerError("Verknüpfung der Kanalbeschriftung konnte nicht gespeichert werden.")
     updated = copy.deepcopy(data)
-    updated["labels"] = [name]
+    updated["labels"] = [name] + [
+        value for value in data.get("labels", ()) if value != name]
     _live().write_data(owner, updated)
+    updated = _ensure_connection_height_labels(owner, updated, created)
     return label
 
 
@@ -340,8 +681,9 @@ def _reset_labels(data):
         if handle:
             label_data = _live().data_of(handle)
             if label_data and label_data.get("auto_position", True):
-                old_auto = tuple(label_data.get("auto_xy", vs.GetSymLoc(handle)))
-                actual = tuple(vs.GetSymLoc(handle))
+                actual = adapter.symbol_location_2d(
+                    handle, label_data.get("auto_xy"))
+                old_auto = tuple(label_data.get("auto_xy", actual))
                 if math.dist(actual, old_auto) > 1e-5:
                     label_data["auto_position"] = False
                     _live().write_data(handle, label_data)
@@ -349,7 +691,7 @@ def _reset_labels(data):
                     owner = vs.GetObject(label_data.get("owner", ""))
                     owner_data = _live().data_of(owner)
                     if owner and is_sewer_data(owner_data):
-                        target = _default_label_position(owner, owner_data)
+                        target = _label_default_position(owner, owner_data, label_data)
                         vs.HMove(handle, target[0] - actual[0], target[1] - actual[1])
                         label_data["auto_xy"] = [target[0], target[1]]
                         _live().write_data(handle, label_data)
@@ -365,6 +707,7 @@ def create(paths, options, preferences):
     existing = tuple(shaft for _handle, shaft in shaft_records())
     built = core.build_network(paths, options, existing, _next_numbers())
     created = []
+    existing_shaft_snapshots = {}
     try:
         shaft_handles = {}
         for shaft in built["shafts"]:
@@ -377,31 +720,94 @@ def create(paths, options, preferences):
         for pipe in built["pipes"]:
             handle = _new_object((0.0, 0.0), "sewer_pipe", pipe, preferences, created)
             pipe_handles.append(handle)
-            for identity in (pipe["start_id"], pipe["end_id"]):
-                if not vs.AddAssociation(shaft_handles[identity], 5, handle):
-                    raise core.SewerError("Rohr-Schacht-Verknüpfung konnte nicht gespeichert werden.")
+            _sync_pipe_associations(handle, pipe, shaft_handles)
         owners = list(shaft_handles.values()) + pipe_handles
+        existing_shaft_snapshots = {
+            handle: copy.deepcopy(_live().data_of(handle))
+            for handle in shaft_handles.values() if handle not in created}
         for owner in owners:
             data = _live().data_of(owner)
             if data["role"] == "sewer_shaft" and not data["shaft"]["visible"]:
                 continue
             ensure_label(owner, data, created)
         for handle in created:
-            vs.ResetObject(handle)
+            _reset_checked(handle)
         for shaft_handle in shaft_handles.values():
             if shaft_handle not in created:
-                vs.ResetObject(shaft_handle)
+                _reset_checked(shaft_handle)
         validate_document(preferences)
     except Exception:
         for handle in reversed(created):
             if handle:
                 vs.DelObject(handle)
+        for existing_handle, snapshot in existing_shaft_snapshots.items():
+            _live().write_data(existing_handle, snapshot)
+            vs.ResetObject(existing_handle)
         raise
     vs.DSelectAll()
     for handle in pipe_handles:
         vs.SetSelect(handle)
     vs.ReDrawAll()
     return tuple(pipe_handles)
+
+
+def create_rigole(point_m, values, preferences):
+    """Create one managed rigole plus its initially centred movable label."""
+    xy = core.point(point_m)
+    preferences = sewer_settings.validate(preferences)
+    ensure_classes(preferences)
+    supplied = dict(values or {})
+    supplied.update(schema=core.SCHEMA, id=str(uuid.uuid4()),
+                    name=str(supplied.get("name") or _next_rigole_name()),
+                    x_m=xy[0], y_m=xy[1], connections=[])
+    rigole = core.validate_rigole(supplied)
+    created = []
+    vs.NameUndoEvent("PD Rigolenbauwerk einsetzen")
+    try:
+        handle = _new_object(xy, "sewer_rigole", rigole, preferences, created)
+        ensure_label(handle, _live().data_of(handle), created)
+        for created_handle in created:
+            _reset_checked(created_handle)
+    except Exception:
+        for created_handle in reversed(created):
+            if created_handle:
+                vs.DelObject(created_handle)
+        raise
+    vs.DSelectAll()
+    vs.SetSelect(handle)
+    vs.ReDrawAll()
+    return handle
+
+
+def update_rigole(handle, changes, preferences):
+    """Update engineering and appearance fields without changing identity."""
+    data = _live().data_of(handle)
+    original = read_rigole(handle, data)
+    allowed = {
+        "name", "length_m", "width_m", "height_m", "bottom_m",
+        "terrain_top_m", "rotation_deg", "slope_angle_deg", "fill_color",
+        "pen_color", "transparency_percent", "note",
+    }
+    updated = dict(original)
+    updated.update({key: copy.deepcopy(value) for key, value in dict(changes or {}).items()
+                    if key in allowed})
+    updated = core.validate_rigole(updated)
+    # Existing side references are dimensionless. Their positions therefore
+    # remain valid after length, width or rotation changes.
+    preferences = sewer_settings.validate(preferences)
+    snapshot = copy.deepcopy(data)
+    vs.NameUndoEvent("PD Rigolenbauwerk bearbeiten")
+    try:
+        _live().write_data(handle, dict(
+            data, rigole=updated, preferences=copy.deepcopy(preferences)))
+        _reset_checked(handle)
+        _reset_labels(_live().data_of(handle))
+    except Exception:
+        _live().write_data(handle, snapshot)
+        vs.ResetObject(handle)
+        raise
+    vs.ReDrawAll()
+    return True
 
 
 def connect_selected_shafts(handles, options, preferences):
@@ -425,14 +831,19 @@ def connect_selected_shafts(handles, options, preferences):
     core.validate_network(prospective_pipes, prospective_shafts)
     vs.NameUndoEvent("PD Zwei Schächte verbinden")
     created = []
+    shaft_snapshots = {
+        handle: copy.deepcopy(_live().data_of(handle))
+        for handle, _shaft in shaft_rows}
     try:
         pipe_handle = _new_object((0.0, 0.0), "sewer_pipe", pipe, preferences, created)
         _associate_pipe(pipe_handle, pipe)
         ensure_label(pipe_handle, _live().data_of(pipe_handle), created)
-        for created_handle in created:
-            vs.ResetObject(created_handle)
         for shaft_handle, _shaft in shaft_rows:
-            vs.ResetObject(shaft_handle)
+            ensure_label(shaft_handle, _live().data_of(shaft_handle), created)
+        for created_handle in created:
+            _reset_checked(created_handle)
+        for shaft_handle, _shaft in shaft_rows:
+            _reset_checked(shaft_handle)
             _reset_labels(_live().data_of(shaft_handle))
         validate_document(preferences)
     except Exception:
@@ -440,6 +851,7 @@ def connect_selected_shafts(handles, options, preferences):
             if created_handle:
                 vs.DelObject(created_handle)
         for shaft_handle, _shaft in shaft_rows:
+            _live().write_data(shaft_handle, shaft_snapshots[shaft_handle])
             vs.ResetObject(shaft_handle)
             _reset_labels(_live().data_of(shaft_handle))
         raise
@@ -449,13 +861,46 @@ def connect_selected_shafts(handles, options, preferences):
     return pipe_handle
 
 
+def _detach_pipe_endpoint_associations(handle, data):
+    """Detach every endpoint link before a controlled pipe replacement."""
+    if not isinstance(data, dict) or data.get("role") != "sewer_pipe":
+        return ()
+    pipe = data.get("pipe")
+    if not isinstance(pipe, dict):
+        return ()
+    detached = []
+    for identity in dict.fromkeys((pipe.get("start_id"), pipe.get("end_id"))):
+        if not identity:
+            continue
+        shaft_handle = _handle_by_id(core.SHAFT_PREFIX, identity)
+        if not shaft_handle:
+            continue
+        for owner, kind, target in (
+                (shaft_handle, DELETE_WITH_OWNER, handle),
+                (shaft_handle, RESET_ON_OWNER_DELETE, handle),
+                (handle, RESET_ON_OWNER_DELETE, shaft_handle)):
+            for _index in range(_remove_association(owner, kind, target)):
+                detached.append((owner, kind, target))
+    return tuple(detached)
+
+
+def _restore_pipe_endpoint_associations(handle, associations):
+    """Restore exact endpoint links removed for a failed replacement."""
+    failures = []
+    for owner, kind, target in associations:
+        if not owner or not target or not vs.AddAssociation(owner, kind, target):
+            failures.append(_name(owner) if owner else "unbekanntes Kanalobjekt")
+    return tuple(failures)
+
+
 def _delete_with_labels(handle, data, verify=False):
     """Delete an owner and its dependent labels in Vectorworks-safe order.
 
     Vectorworks refuses to delete a channel owner while its kind-4 label PIO
-    still exists.  Labels therefore have to disappear first.  For verified
-    replacement transactions, a rejected owner deletion recreates the label
-    before the caller rolls the newly created replacement objects back.
+    or a shaft-to-pipe association still exists.  Labels and incoming endpoint
+    links therefore have to disappear first.  For verified replacement
+    transactions, a rejected owner deletion recreates both dependencies before
+    the caller rolls the newly created replacement objects back.
     """
     owner_name = _name(handle)
     label_names = tuple(str(name) for name in data.get("labels", ()))
@@ -470,9 +915,15 @@ def _delete_with_labels(handle, data, verify=False):
                 "Die alte Kanalbeschriftung konnte nicht gelöscht werden: %s"
                 % ", ".join(remaining))
 
+    detached_owners = _detach_pipe_endpoint_associations(handle, data)
     vs.DelObject(handle)
     if verify and owner_name and vs.GetObject(owner_name):
         restoration_errors = []
+        association_errors = _restore_pipe_endpoint_associations(
+            handle, detached_owners)
+        if association_errors:
+            restoration_errors.append(
+                "Schachtverknüpfung (%s)" % ", ".join(association_errors))
         if is_sewer_data(data):
             restored = []
             try:
@@ -493,10 +944,7 @@ def _delete_with_labels(handle, data, verify=False):
 
 
 def _associate_pipe(handle, pipe):
-    for identity in (pipe["start_id"], pipe["end_id"]):
-        shaft_handle = _handle_by_id(core.SHAFT_PREFIX, identity)
-        if not shaft_handle or not vs.AddAssociation(shaft_handle, 5, handle):
-            raise core.SewerError("Rohr-Schacht-Verknüpfung konnte nicht gespeichert werden.")
+    return _sync_pipe_associations(handle, pipe)
 
 
 def _stub_reference_updates(original, first, second):
@@ -653,9 +1101,9 @@ def split_selected(handle, point_m, preferences):
                 snapshots[existing_handle], shaft=value,
                 preferences=copy.deepcopy(preferences)))
         for created_handle in created:
-            vs.ResetObject(created_handle)
+            _reset_checked(created_handle)
         for existing_handle in stub_updates:
-            vs.ResetObject(existing_handle)
+            _reset_checked(existing_handle)
         # Delete only after every replacement is valid, but keep the deletion
         # inside the guarded transaction.  The name lookup proves that the old
         # parametric holding and its labels no longer overlap the replacements.
@@ -771,7 +1219,7 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
             connected_values.append(pipe["end_invert_m"])
     if not connected_values or any(abs(value - connection_invert) > 0.001 for value in connected_values):
         raise core.SewerError(
-            "Die neue Leitung muss am Bestand mit KS = %.3f m anschließen. Berechnungsrichtung prüfen." %
+            "Die neue Leitung muss am Bestand mit KS = %.2f m anschließen. Berechnungsrichtung prüfen." %
             connection_invert)
     new_shafts = (shaft,) + tuple(built["shafts"])
     new_pipes = (first, second) + tuple(built["pipes"])
@@ -798,9 +1246,7 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
         for value in new_pipes:
             new_handle = _new_object((0.0, 0.0), "sewer_pipe", value, preferences, created)
             pipe_handles.append(new_handle)
-            for identity in (value["start_id"], value["end_id"]):
-                if not vs.AddAssociation(shaft_handles[identity], 5, new_handle):
-                    raise core.SewerError("Rohr-Schacht-Verknüpfung konnte nicht gespeichert werden.")
+            _sync_pipe_associations(new_handle, value, shaft_handles)
         owners = [shaft_handles[value["id"]] for value in new_shafts if value["visible"]]
         # Every segment owns a label PIO. The label itself decides dynamically
         # whether this segment is the one representative of its complete
@@ -813,9 +1259,9 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
                 snapshots[existing_handle], shaft=value,
                 preferences=copy.deepcopy(preferences)))
         for created_handle in created:
-            vs.ResetObject(created_handle)
+            _reset_checked(created_handle)
         for existing_handle in stub_updates:
-            vs.ResetObject(existing_handle)
+            _reset_checked(existing_handle)
         # The original must disappear before the transaction is accepted.
         # This prevents the duplicated main holding reported for branch and
         # stub connections.
@@ -934,28 +1380,36 @@ def replace_with_special(handle, source_polygon, preferences):
     shaft = read_shaft(handle, data)
     if shaft["structure_type"] not in ("round", "special"):
         raise core.SewerError("Nur ein runder Schacht oder Sonderschacht kann umgewandelt werden.")
-    source = adapter.extract_path(source_polygon)["points"]
-    if not vs.IsPolyClosed(source_polygon):
+    if adapter.object_type(source_polygon) not in (
+            adapter.TYPE_POLYGON, adapter.TYPE_POLYLINE):
+        raise core.SewerError(
+            "Die gewählte Sonderschachtkontur ist nicht mehr vorhanden. "
+            "Bitte ein geschlossenes Polygon oder eine geschlossene Polylinie erneut wählen.")
+    try:
+        closed = bool(vs.IsPolyClosed(source_polygon))
+    except Exception as error:
+        raise core.SewerError(
+            "Die gewählte Sonderschachtkontur konnte nicht gelesen werden.") from error
+    if not closed:
         raise core.SewerError("Die Kontur des Sonderschachts muss geschlossen sein.")
+    source = adapter.extract_path(source_polygon)["points"]
     outline = core.special_outline(
         tuple((x - shaft["x_m"], y - shaft["y_m"]) for x, y in source))
     updated = core.validate_shaft(dict(
         shaft, structure_type="special", special_outline_m=list(outline)), allow_hidden=True)
-    snapshot = copy.deepcopy(data)
-    vs.NameUndoEvent("PD Sonderschacht herstellen")
+    _commit_network_updates(
+        {}, {handle: updated}, preferences, "PD Sonderschacht herstellen")
+    # The network transaction already resets the shaft and every connected
+    # pipe exactly once. A second reset here used to re-enter those PIOs while
+    # the tracked source object was still current and made a repeated command
+    # unstable. Consume the top-level construction contour only after the
+    # complete network redraw; failure to remove this helper must not roll
+    # back a successfully converted shaft.
     try:
-        _live().write_data(handle, dict(data, shaft=updated,
-                                       preferences=copy.deepcopy(preferences)))
-        vs.ResetObject(handle)
+        vs.SetDSelect(source_polygon)
+        vs.DelObject(source_polygon)
     except Exception:
-        _live().write_data(handle, snapshot)
-        vs.ResetObject(handle)
-        raise
-    # The clicked construction polygon has been consumed by the new live
-    # shaft. Undo restores both the former shaft and the polygon.
-    vs.DelObject(source_polygon)
-    for pipe_handle, _pipe in _connected_pipes(shaft["id"]):
-        vs.ResetObject(pipe_handle)
+        pass
     vs.ReDrawAll()
     return updated
 
@@ -1035,18 +1489,120 @@ def connect_from_shaft(handle, branch_paths, options, preferences):
         for value in built["pipes"]:
             new_handle = _new_object((0.0, 0.0), "sewer_pipe", value, preferences, created)
             pipe_handles.append(new_handle)
-            for identity in (value["start_id"], value["end_id"]):
-                endpoint = shaft_handles.get(identity)
-                if not endpoint or not vs.AddAssociation(endpoint, 5, new_handle):
-                    raise core.SewerError("Rohr-Schacht-Verknüpfung konnte nicht gespeichert werden.")
+            _sync_pipe_associations(new_handle, value, shaft_handles)
         owners = [shaft_handles[value["id"]] for value in built["shafts"] if value["visible"]]
         owners.extend(pipe_handles)
         for owner in owners:
             ensure_label(owner, _live().data_of(owner), created)
         for created_handle in created:
-            vs.ResetObject(created_handle)
-        vs.ResetObject(handle)
+            _reset_checked(created_handle)
+        _reset_checked(handle)
     except Exception:
+        for created_handle in reversed(created):
+            if created_handle:
+                vs.DelObject(created_handle)
+        raise
+    vs.DSelectAll()
+    for pipe_handle in pipe_handles:
+        vs.SetSelect(pipe_handle)
+    vs.ReDrawAll()
+    return tuple(pipe_handles), connection_invert
+
+
+def connect_from_rigole(handle, branch_paths, options, preferences):
+    """Connect a new canal at a graphically chosen point of a rigole side."""
+    rigole_data = _live().data_of(handle)
+    rigole = read_rigole(handle, rigole_data)
+    paths = tuple(core.path(value) for value in branch_paths)
+    if not paths:
+        raise core.SewerError("Keine Anschlussleitung zur Rigole gezeichnet.")
+    attachment = core.project_on_rigole(rigole, paths[0][0])
+    first_path = ((attachment["x_m"], attachment["y_m"]),) + tuple(paths[0][1:])
+    paths = (core.path(first_path),) + paths[1:]
+    connection_invert = core.number(
+        options.get("rigole_connection_invert_m"), "Anschlusshöhe an der Rigole")
+    if not rigole["bottom_m"] - 1e-9 <= connection_invert <= rigole["top_m"] + 1e-9:
+        raise core.SewerError(
+            "Die Anschlusshöhe muss zwischen UK und OK der Rigole liegen.")
+    raw_slope = (options.get("calculation_value", 1.5)
+                 if options.get("calculation_mode") in ("slope", "start") else 1.5)
+    slope = max(0.0, core.number(raw_slope, "Gefälle der Rigolen-Anschlussleitung"))
+    anchored = dict(options)
+    anchored.update(
+        start_invert_m=connection_invert,
+        calculation_mode="start" if anchored.get("reverse_flow", True) else "slope",
+        calculation_value=slope,
+        shaft_mode=anchored.get("shaft_mode", "all"))
+    node_id = str(uuid.uuid4())
+    junction = core.validate_shaft({
+        "schema": core.SCHEMA, "id": node_id, "kind": anchored.get("kind"),
+        "name": "", "note": "", "x_m": attachment["x_m"],
+        "y_m": attachment["y_m"], "kd_m": rigole["terrain_top_m"],
+        "ks_m": connection_invert, "diameter_m": 0.0,
+        "construction_material": "PP", "wall_thickness_m": 0.0,
+        "cover_diameter_m": 0.625, "cover_symbol": "",
+        "cover_placement": "center", "cover_rotation_deg": 0.0,
+        "structure_type": "junction", "special_outline_m": [],
+        "drops": [], "visible": False, "color_override": None,
+        "rigole_id": rigole["id"],
+    }, allow_hidden=True)
+    existing_rows = tuple(shaft_records())
+    existing_shafts = tuple(value for _existing_handle, value in existing_rows) + (junction,)
+    built = core.build_network(paths, anchored, existing_shafts, _next_numbers())
+    connected_values = []
+    for pipe in built["pipes"]:
+        if pipe["start_id"] == node_id:
+            connected_values.append(pipe["start_invert_m"])
+        if pipe["end_id"] == node_id:
+            connected_values.append(pipe["end_invert_m"])
+    if not connected_values or any(
+            abs(value - connection_invert) > 0.001 for value in connected_values):
+        raise core.SewerError(
+            "Die Anschlussleitung konnte nicht mit der gewählten Rigolen-Anschlusshöhe aufgebaut werden.")
+    prospective_pipes = [value for _pipe_handle, value in pipe_records()] + list(built["pipes"])
+    prospective_shafts = list(existing_shafts) + list(built["shafts"])
+    core.validate_network(prospective_pipes, prospective_shafts)
+    preferences = sewer_settings.validate(preferences)
+    ensure_classes(preferences)
+    created = []
+    snapshot = copy.deepcopy(rigole_data)
+    vs.NameUndoEvent("PD Kanal an Rigole anschließen")
+    try:
+        shaft_handles = {value["id"]: existing_handle
+                         for existing_handle, value in existing_rows}
+        junction_handle = _new_object(
+            (junction["x_m"], junction["y_m"]), "sewer_shaft",
+            junction, preferences, created)
+        shaft_handles[node_id] = junction_handle
+        for value in built["shafts"]:
+            new_handle = _new_object((value["x_m"], value["y_m"]), "sewer_shaft",
+                                     value, preferences, created)
+            shaft_handles[value["id"]] = new_handle
+        pipe_handles = []
+        for value in built["pipes"]:
+            new_handle = _new_object((0.0, 0.0), "sewer_pipe", value, preferences, created)
+            pipe_handles.append(new_handle)
+            _sync_pipe_associations(new_handle, value, shaft_handles)
+        _sync_rigole_junction_association(handle, junction_handle)
+        connections = list(rigole.get("connections", ()))
+        connections.append({
+            "node_id": node_id, "side": attachment["side"],
+            "fraction": attachment["fraction"], "invert_m": connection_invert})
+        updated_rigole = core.validate_rigole(dict(rigole, connections=connections))
+        _live().write_data(handle, dict(
+            rigole_data, rigole=updated_rigole,
+            preferences=copy.deepcopy(preferences)))
+        owners = [shaft_handles[value["id"]] for value in built["shafts"]
+                  if value["visible"]]
+        owners.extend(pipe_handles)
+        for owner in owners:
+            ensure_label(owner, _live().data_of(owner), created)
+        for created_handle in created:
+            _reset_checked(created_handle)
+        _reset_checked(handle)
+    except Exception:
+        _live().write_data(handle, snapshot)
+        vs.ResetObject(handle)
         for created_handle in reversed(created):
             if created_handle:
                 vs.DelObject(created_handle)
@@ -1101,7 +1657,7 @@ def merge_selected(handles, preferences):
         _associate_pipe(new_handle, merged)
         ensure_label(new_handle, _live().data_of(new_handle), created)
         for created_handle in created:
-            vs.ResetObject(created_handle)
+            _reset_checked(created_handle)
     except Exception:
         for created_handle in reversed(created):
             if created_handle:
@@ -1121,6 +1677,7 @@ def delete_selected(handles):
     """Delete selected pipes; selected shafts also delete their connected pipes."""
     pipe_rows = {}
     shaft_rows = {}
+    rigole_rows = {}
     for handle, data in handles:
         if data.get("role") == "sewer_pipe":
             pipe_rows[handle] = (data, read_pipe(handle, data))
@@ -1129,7 +1686,19 @@ def delete_selected(handles):
             shaft_rows[handle] = (data, shaft)
             for pipe_handle, pipe in _connected_pipes(shaft["id"]):
                 pipe_rows[pipe_handle] = (_live().data_of(pipe_handle), pipe)
-    if not pipe_rows and not shaft_rows:
+        elif data.get("role") == "sewer_rigole":
+            rigole = read_rigole(handle, data)
+            rigole_rows[handle] = (data, rigole)
+            for connection in rigole.get("connections", ()):
+                node_handle = _handle_by_id(core.SHAFT_PREFIX, connection["node_id"])
+                if not node_handle:
+                    continue
+                node_data = _live().data_of(node_handle)
+                node = read_shaft(node_handle, node_data)
+                shaft_rows[node_handle] = (node_data, node)
+                for pipe_handle, pipe in _connected_pipes(node["id"]):
+                    pipe_rows[pipe_handle] = (_live().data_of(pipe_handle), pipe)
+    if not pipe_rows and not shaft_rows and not rigole_rows:
         raise core.SewerError("Keine löschbaren Kanalobjekte markiert.")
     remaining_pipes = [pipe for handle, pipe in pipe_records() if handle not in pipe_rows]
     remaining_shafts = [shaft for handle, shaft in shaft_records() if handle not in shaft_rows]
@@ -1142,12 +1711,14 @@ def delete_selected(handles):
         _delete_with_labels(handle, data)
     for handle, (data, _shaft) in shaft_rows.items():
         _delete_with_labels(handle, data)
+    for handle, (data, _rigole) in rigole_rows.items():
+        _delete_with_labels(handle, data)
     for identity in affected_shaft_ids - removed_shaft_ids:
         shaft_handle = _handle_by_id(core.SHAFT_PREFIX, identity)
         if shaft_handle:
             vs.ResetObject(shaft_handle)
     vs.ReDrawAll()
-    return len(pipe_rows), len(shaft_rows)
+    return len(pipe_rows), len(shaft_rows), len(rigole_rows)
 
 
 def _set_graphics(handle, class_value, color, fill=True, opacity=100):
@@ -1158,6 +1729,37 @@ def _set_graphics(handle, class_value, color, fill=True, opacity=100):
     vs.SetFillBack(handle, color)
     vs.SetFPat(handle, 1 if fill else 0)
     vs.SetOpacityN(handle, 100, int(opacity))
+
+
+def _set_shaft_graphics(handle, class_value, pen_color, fill_color,
+                        transparency_percent, fill=True):
+    """Apply shaft graphics without making its contour transparent."""
+    pen = _rgb(pen_color)
+    fill_color = _rgb(fill_color)
+    fill_opacity = int(round(
+        100.0 - max(0.0, min(100.0, float(transparency_percent)))))
+    vs.SetClass(handle, class_value)
+    vs.SetPenFore(handle, pen)
+    vs.SetPenBack(handle, pen)
+    vs.SetFillFore(handle, fill_color)
+    vs.SetFillBack(handle, fill_color)
+    vs.SetFPat(handle, 1 if fill else 0)
+    vs.SetOpacityN(handle, 100, fill_opacity if fill else 100)
+
+
+def _set_rigole_graphics(handle, class_value, pen_color, fill_color,
+                         transparency_percent):
+    """Apply independent rigole outline/fill while keeping outlines at 100 %."""
+    pen = _rgb(pen_color)
+    fill = _rgb(fill_color)
+    opacity = int(round(100.0 - max(0.0, min(100.0, transparency_percent))))
+    vs.SetClass(handle, class_value)
+    vs.SetPenFore(handle, pen)
+    vs.SetPenBack(handle, pen)
+    vs.SetFillFore(handle, fill)
+    vs.SetFillBack(handle, fill)
+    vs.SetFPat(handle, 1)
+    vs.SetOpacityN(handle, 100, opacity)
 
 
 def _draw_open_polyline(points, class_value, color, line_type=None):
@@ -1445,6 +2047,11 @@ def _center(value):
 
 def _connection_profile(shaft, pipe, width, factor):
     """Return center-line trim, end width and whether an end cap is needed."""
+    if shaft.get("diameter_m", 0.0) <= 0.0 and shaft.get("structure_type") in (
+            "round", "junction"):
+        # A zero-diameter node is a closed pipe termination, never a hidden
+        # junction that joins neighbouring pipe bands through the node.
+        return 0.0, width, True
     if shaft.get("structure_type") == "special":
         other_id = pipe["end_id"] if pipe["start_id"] == shaft["id"] else pipe["start_id"]
         other_handle = _handle_by_id(core.SHAFT_PREFIX, other_id)
@@ -1501,7 +2108,7 @@ def _trim_plan_band(first, second, width, start, end, factor, pipe):
             start_width, end_width, cap_start, cap_end)
 
 
-def _mesh(faces, class_value, color):
+def _mesh(faces, class_value, color, fill_color=None, fill_opacity=100):
     """Create a closed native mesh without relying on rotated extrudes."""
     prepared = []
     for face in faces:
@@ -1529,9 +2136,10 @@ def _mesh(faces, class_value, color):
     vs.SetClass(handle, class_value)
     vs.SetPenFore(handle, color)
     vs.SetPenBack(handle, color)
-    vs.SetFillFore(handle, color)
-    vs.SetFillBack(handle, color)
-    vs.SetOpacity(handle, 100)
+    fill_color = color if fill_color is None else fill_color
+    vs.SetFillFore(handle, fill_color)
+    vs.SetFillBack(handle, fill_color)
+    vs.SetOpacityN(handle, 100, int(fill_opacity))
     return handle
 
 
@@ -1674,13 +2282,120 @@ def _layer_z_m(handle):
         raise core.SewerError("Ebenenhöhe konnte nicht gelesen werden.") from error
 
 
+def _sync_rigole_connection_nodes(rigole, factor):
+    """Keep attached hidden nodes on their dimensionless rigole-side anchors."""
+    for connection in rigole.get("connections", ()):
+        node_handle = _handle_by_id(core.SHAFT_PREFIX, connection["node_id"])
+        if not node_handle:
+            raise core.SewerError(
+                "Ein Anschlussknoten der Rigole fehlt. Kanalnetz prüfen.")
+        node_data = _live().data_of(node_handle)
+        node = read_shaft(node_handle, node_data)
+        target = core.rigole_connection_xy(
+            rigole, connection["side"], connection["fraction"])
+        distance = math.dist((node["x_m"], node["y_m"]), target)
+        if distance <= 1e-8:
+            continue
+        dx, dy = target[0] - node["x_m"], target[1] - node["y_m"]
+        moved = core.validate_shaft(dict(
+            node, x_m=target[0], y_m=target[1],
+            ks_m=connection["invert_m"], rigole_id=rigole["id"]),
+            allow_hidden=True)
+        _live().write_data(node_handle, dict(node_data, shaft=moved))
+        vs.HMove(node_handle, dx / factor, dy / factor)
+        _reset_checked(node_handle)
+        for pipe_handle, _pipe in _connected_pipes(node["id"]):
+            _reset_checked(pipe_handle)
+
+
+def _closed_extrude(points, bottom, top):
+    """Create one capped Vectorworks extrude from a closed polygon profile.
+
+    ``BeginPoly`` follows Vectorworks' global open/closed polygon creation
+    mode.  The former rigole implementation never switched that mode, so its
+    four profile points produced only three extruded wall segments and no
+    top/bottom caps.  Keep the closed mode tightly scoped and verify the
+    documented extrude object type (24) before returning the body.
+    """
+    values = tuple(points)
+    if len(values) < 3 or float(top) <= float(bottom):
+        raise core.SewerError("Ungültige Abmessungen des 3D-Rigolenkörpers.")
+    previous = vs.LNewObj()
+    try:
+        vs.BeginXtrd(float(bottom), float(top))
+        vs.ClosePoly()
+        try:
+            vs.BeginPoly()
+            for value in values:
+                vs.AddPoint(value)
+            vs.EndPoly()
+        finally:
+            # Never leak the global closed-polygon mode into pipe axes or
+            # later user geometry created during the same reset.
+            vs.OpenPoly()
+        vs.EndXtrd()
+    except Exception as error:
+        try:
+            vs.OpenPoly()
+        except Exception:
+            pass
+        raise core.SewerError(
+            "Der geschlossene 3D-Rigolenkörper konnte nicht erzeugt werden.") from error
+    body = vs.LNewObj()
+    if (not body or body == previous or
+            int(vs.GetTypeN(body) or 0) != 24):
+        raise core.SewerError(
+            "Vectorworks hat für die Rigole keinen geschlossenen Extrusionskörper erzeugt.")
+    return body
+
+
+def draw_rigole(handle, data):
+    """Draw one rotated rectangle and one closed 3D storage body."""
+    rigole = read_rigole(handle, data)
+    preferences = data["preferences"]
+    ensure_classes(preferences)
+    factor = adapter.units_to_meters()
+    class_value = class_name(rigole, preferences)
+    class_3d = class_name(rigole, preferences, "_3D")
+    world_corners = core.rigole_corners(rigole)
+    local = tuple(((x - rigole["x_m"]) / factor,
+                   (y - rigole["y_m"]) / factor)
+                  for x, y in world_corners)
+    _set_rigole_graphics(
+        handle, class_value, rigole["pen_color"], rigole["fill_color"],
+        rigole["transparency_percent"])
+    vs.BeginPoly()
+    for value in local:
+        vs.AddPoint(value)
+    vs.EndPoly()
+    plan = vs.LNewObj()
+    if not plan:
+        raise core.SewerError("2D-Rigole konnte nicht erzeugt werden.")
+    vs.SetPolyClosed(plan, True)
+    _set_rigole_graphics(
+        plan, class_value, rigole["pen_color"], rigole["fill_color"],
+        rigole["transparency_percent"])
+    layer_z = _layer_z_m(handle)
+    bottom = (rigole["bottom_m"] - layer_z) / factor
+    top = (rigole["top_m"] - layer_z) / factor
+    body = _closed_extrude(local, bottom, top)
+    _set_rigole_graphics(
+        body, class_3d, rigole["pen_color"], rigole["fill_color"],
+        rigole["transparency_percent"])
+    vs.ResetOrientation3D()
+    _sync_rigole_connection_nodes(rigole, factor)
+    updated = dict(data, rigole=rigole)
+    _live().write_data(handle, updated)
+    _reset_labels(updated)
+
+
 def draw_pipe(handle, data):
     pipe = read_pipe(handle, data)
     (_start_handle, start), (_end_handle, end) = _endpoints(pipe)
     preferences = data["preferences"]
     ensure_classes(preferences)
     factor = adapter.units_to_meters()
-    origin = vs.GetSymLoc(handle)
+    origin = adapter.symbol_location_2d(handle, (0.0, 0.0))
     first = (start["x_m"] / factor - origin[0], start["y_m"] / factor - origin[1])
     second = (end["x_m"] / factor - origin[0], end["y_m"] / factor - origin[1])
     color = color_for(data, preferences)
@@ -1710,7 +2425,7 @@ def draw_pipe(handle, data):
                      preferences["flow_arrow_class"])
     if pipe["draw_3d"]:
         layer_z = _layer_z_m(handle)
-        axis_offset = pipe["dn_mm"] / 2000.0
+        axis_offset = core.pipe_axis_offset_m(pipe)
         full_length = math.dist(first, second)
         start_fraction = math.dist(first, plan_first) / full_length
         end_fraction = math.dist(first, plan_second) / full_length
@@ -1743,7 +2458,8 @@ def _frustum_faces(bottom_center, bottom_radius, top_center, top_radius, segment
     return tuple(faces)
 
 
-def _draw_shaft_3d(handle, shaft, class_value, color, factor):
+def _draw_shaft_3d(handle, shaft, class_value, pen_color, fill_color,
+                   transparency_percent, factor):
     layer_z = _layer_z_m(handle)
     z0 = (shaft["ks_m"] - layer_z) / factor
     z1 = (shaft["kd_m"] - layer_z) / factor
@@ -1760,11 +2476,15 @@ def _draw_shaft_3d(handle, shaft, class_value, color, factor):
         body = vs.LNewObj()
         if not body:
             raise core.SewerError("3D-Schachtkörper konnte nicht erzeugt werden.")
-        _set_graphics(body, class_value, color, fill=True, opacity=100)
+        _set_shaft_graphics(
+            body, class_value, pen_color, fill_color,
+            transparency_percent, fill=True)
     cover_center = _cover_center(shaft, factor)
+    fill_opacity = int(round(100.0 - transparency_percent))
     _mesh(_frustum_faces(
         (0.0, 0.0, transition_bottom), radius,
-        (cover_center[0], cover_center[1], z1), cover_radius), class_value, color)
+        (cover_center[0], cover_center[1], z1), cover_radius),
+        class_value, pen_color, fill_color, fill_opacity)
     cover = 0.05 / factor
     vs.BeginXtrd(z1, z1 + cover)
     vs.Oval(((cover_center[0] - cover_radius), (cover_center[1] + cover_radius)),
@@ -1773,7 +2493,9 @@ def _draw_shaft_3d(handle, shaft, class_value, color, factor):
     lid = vs.LNewObj()
     if not lid:
         raise core.SewerError("3D-Schachtdeckel konnte nicht erzeugt werden.")
-    _set_graphics(lid, class_value, color, fill=True, opacity=100)
+    _set_shaft_graphics(
+        lid, class_value, pen_color, fill_color,
+        transparency_percent, fill=True)
 
 
 def _connected_pipes(identity):
@@ -1965,7 +2687,8 @@ def _cover_center(shaft, factor):
         direction = _cover_direction(shaft)
         radians = math.radians(direction)
         dx, dy = math.cos(radians), math.sin(radians)
-        support = max(x * dx + y * dy for x, y in shaft["special_outline_m"]) / factor
+        support = core.ray_polygon_distance(
+            shaft["special_outline_m"], (dx, dy)) / factor
         cover_radius = shaft["cover_diameter_m"] / factor * 0.5
         offset = 0.0 if shaft["cover_placement"] == "center" else max(0.0, support - cover_radius)
         return offset * dx, offset * dy
@@ -1997,7 +2720,8 @@ def _draw_shaft_cover(shaft, factor, class_value, color):
     return circle
 
 
-def _draw_local_polygon(points, class_value, color, fill=True, opacity=50):
+def _draw_local_polygon(points, class_value, color, fill=True, opacity=50,
+                        fill_color=None, transparency_percent=None):
     values = tuple(points)
     if len(values) < 3:
         raise core.SewerError("Bauwerkskontur besitzt zu wenige Punkte.")
@@ -2009,28 +2733,45 @@ def _draw_local_polygon(points, class_value, color, fill=True, opacity=50):
     if not handle:
         raise core.SewerError("Bauwerkskontur konnte nicht erzeugt werden.")
     vs.SetPolyClosed(handle, True)
-    _set_graphics(handle, class_value, color, fill=fill, opacity=opacity)
+    if fill_color is None:
+        _set_graphics(handle, class_value, color, fill=fill, opacity=opacity)
+    else:
+        _set_shaft_graphics(
+            handle, class_value, color, fill_color,
+            transparency_percent if transparency_percent is not None
+            else 100.0 - opacity, fill=fill)
     return handle
 
 
-def _draw_special_shaft_3d(handle, shaft, class_value, color, factor):
+def _draw_special_shaft_3d(handle, shaft, class_value, pen_color, fill_color,
+                           transparency_percent, factor):
     layer_z = _layer_z_m(handle)
     z0 = (shaft["ks_m"] - layer_z) / factor
     z1 = (shaft["kd_m"] - layer_z) / factor
     if z1 <= z0:
         z1 = z0 + 0.01 / factor
-    vs.BeginXtrd(z0, z1)
-    vs.BeginPoly()
-    for x, y in shaft["special_outline_m"]:
-        vs.AddPoint((x / factor, y / factor))
-    vs.EndPoly()
-    vs.EndXtrd()
-    body = vs.LNewObj()
-    if not body:
-        raise core.SewerError("3D-Sonderschacht konnte nicht erzeugt werden.")
-    _set_graphics(body, class_value, color, fill=True, opacity=100)
     cover_center = _cover_center(shaft, factor)
     cover_radius = shaft["cover_diameter_m"] / factor * 0.5
+    outline = tuple((x / factor, y / factor) for x, y in shaft["special_outline_m"])
+    transition_height = min(0.60 / factor, z1 - z0)
+    transition_bottom = z1 - transition_height
+    if transition_bottom > z0 + 1e-9:
+        vs.BeginXtrd(z0, transition_bottom)
+        vs.BeginPoly()
+        for point in outline:
+            vs.AddPoint(point)
+        vs.EndPoly()
+        vs.EndXtrd()
+        body = vs.LNewObj()
+        if not body:
+            raise core.SewerError("3D-Sonderschacht konnte nicht erzeugt werden.")
+        _set_shaft_graphics(
+            body, class_value, pen_color, fill_color,
+            transparency_percent, fill=True)
+    fill_opacity = int(round(100.0 - transparency_percent))
+    _mesh(_special_loft_faces(
+        outline, cover_center, cover_radius, transition_bottom, z1),
+        class_value, pen_color, fill_color, fill_opacity)
     vs.BeginXtrd(z1, z1 + 0.05 / factor)
     vs.Oval(((cover_center[0] - cover_radius), (cover_center[1] + cover_radius)),
             ((cover_center[0] + cover_radius), (cover_center[1] - cover_radius)))
@@ -2038,10 +2779,61 @@ def _draw_special_shaft_3d(handle, shaft, class_value, color, factor):
     lid = vs.LNewObj()
     if not lid:
         raise core.SewerError("3D-Schachtdeckel des Sonderschachts konnte nicht erzeugt werden.")
-    _set_graphics(lid, class_value, color, fill=True, opacity=100)
+    _set_shaft_graphics(
+        lid, class_value, pen_color, fill_color,
+        transparency_percent, fill=True)
 
 
-def _draw_floor_drain(handle, shaft, class_value, color, factor, draw_3d):
+def _sample_closed_outline(points, count):
+    values = tuple((float(x), float(y)) for x, y in points)
+    lengths = tuple(math.dist(first, second)
+                    for first, second in zip(values, values[1:] + values[:1]))
+    total = sum(lengths)
+    if len(values) < 3 or total <= 1e-9:
+        raise core.SewerError("Ungültige 3D-Sonderschachtkontur.")
+    result = []
+    for index in range(int(count)):
+        target = total * index / float(count)
+        accumulated = 0.0
+        for edge, (first, second) in enumerate(zip(values, values[1:] + values[:1])):
+            following = accumulated + lengths[edge]
+            if target <= following + 1e-12:
+                ratio = 0.0 if lengths[edge] <= 1e-12 else (
+                    target - accumulated) / lengths[edge]
+                result.append((first[0] + (second[0] - first[0]) * ratio,
+                               first[1] + (second[1] - first[1]) * ratio))
+                break
+            accumulated = following
+    return tuple(result)
+
+
+def _special_loft_faces(outline, cover_center, cover_radius, bottom_z, top_z,
+                        segments=24):
+    """Create a closed transition from any simple shaft outline to the lid ring."""
+    values = tuple(outline)
+    count = max(int(segments), len(values))
+    sampled = _sample_closed_outline(values, count)
+    area = sum(first[0] * second[1] - second[0] * first[1]
+               for first, second in zip(sampled, sampled[1:] + sampled[:1]))
+    direction = 1.0 if area >= 0.0 else -1.0
+    first_angle = math.atan2(sampled[0][1] - cover_center[1],
+                             sampled[0][0] - cover_center[0])
+    bottom = tuple((x, y, bottom_z) for x, y in sampled)
+    top = tuple((cover_center[0] + math.cos(
+                    first_angle + direction * 2.0 * math.pi * index / count) * cover_radius,
+                 cover_center[1] + math.sin(
+                    first_angle + direction * 2.0 * math.pi * index / count) * cover_radius,
+                 top_z)
+                for index in range(count))
+    faces = [tuple(reversed(bottom)), top]
+    for index in range(count):
+        following = (index + 1) % count
+        faces.append((bottom[index], bottom[following], top[following], top[index]))
+    return tuple(faces)
+
+
+def _draw_floor_drain(handle, shaft, class_value, pen_color, fill_color,
+                      transparency_percent, factor, draw_3d):
     width = shaft["terminal_width_m"] / factor
     symbol_name = shaft.get("terminal_symbol", "")
     definition = vs.GetObject(symbol_name) if symbol_name else None
@@ -2057,7 +2849,9 @@ def _draw_floor_drain(handle, shaft, class_value, color, factor, draw_3d):
         square = vs.LNewObj()
         if not square:
             raise core.SewerError("2D-Bodenablauf konnte nicht erzeugt werden.")
-        _set_graphics(square, class_value, color, fill=True, opacity=50)
+        _set_shaft_graphics(
+            square, class_value, pen_color, fill_color,
+            transparency_percent, fill=True)
     if draw_3d and (not symbol_used or not shaft.get("terminal_symbol_has_3d", False)):
         layer_z = _layer_z_m(handle)
         z0 = (shaft["ks_m"] - layer_z) / factor
@@ -2068,7 +2862,9 @@ def _draw_floor_drain(handle, shaft, class_value, color, factor, draw_3d):
         body = vs.LNewObj()
         if not body:
             raise core.SewerError("3D-Bodenablaufkasten konnte nicht erzeugt werden.")
-        _set_graphics(body, class_value, color, fill=True, opacity=100)
+        _set_shaft_graphics(
+            body, class_value, pen_color, fill_color,
+            transparency_percent, fill=True)
 
 
 def _draw_stub_symbol(shaft, data, class_value, color, factor):
@@ -2117,7 +2913,7 @@ def _draw_stub_3d(handle, shaft, data, factor):
         pipe = row["pipe"]
         invert = (pipe["start_invert_m"] if pipe["start_id"] == shaft["id"]
                   else pipe["end_invert_m"])
-        return (invert + pipe["dn_mm"] / 2000.0 - layer_z) / factor
+        return (invert + core.pipe_axis_offset_m(pipe) - layer_z) / factor
 
     main_z = sum(axis_height(row) for row in main_rows) / 2.0
     for row in active_rows:
@@ -2179,7 +2975,7 @@ def _draw_drops(handle, shaft, preferences, class_value, color, factor):
             _set_graphics(marker, pipe_class, pipe_color, fill=False, opacity=100)
         _draw_open_polyline((wall_point, center), pipe_class, pipe_color)
         if pipe.get("draw_3d", preferences.get("draw_3d", True)):
-            axis_offset = pipe["dn_mm"] / 2000.0
+            axis_offset = core.pipe_axis_offset_m(pipe)
             lower_z = (drop["lower_invert_m"] + axis_offset - layer_z) / factor
             upper_z = (drop["upper_invert_m"] + axis_offset - layer_z) / factor
             class_3d = class_name(pipe, preferences, "_3D")
@@ -2209,9 +3005,13 @@ def draw_shaft(handle, data):
     ensure_classes(preferences)
     factor = adapter.units_to_meters()
     radius = core.shaft_outer_diameter_m(shaft) / factor / 2.0
-    color = color_for(data, preferences)
+    pen_color, fill_color, transparency_percent = shaft_graphics_for(
+        shaft, preferences)
+    color = pen_color
     class_value = class_name(shaft, preferences)
-    _set_graphics(handle, class_value, color, fill=True, opacity=50)
+    _set_shaft_graphics(
+        handle, class_value, pen_color, fill_color,
+        transparency_percent, fill=True)
     structure = shaft.get("structure_type", "round" if radius > 0.0 else "junction")
     if structure == "round" and shaft["visible"]:
         if radius > 0.0:
@@ -2219,7 +3019,9 @@ def draw_shaft(handle, data):
             circle = vs.LNewObj()
             if not circle:
                 raise core.SewerError("2D-Schacht konnte nicht erzeugt werden.")
-            _set_graphics(circle, class_value, color, fill=True, opacity=50)
+            _set_shaft_graphics(
+                circle, class_value, pen_color, fill_color,
+                transparency_percent, fill=True)
             if (shaft["construction_material"] == "concrete" and
                     shaft["wall_thickness_m"] > 0.0):
                 inner_radius = shaft["diameter_m"] / factor * 0.5
@@ -2230,20 +3032,26 @@ def draw_shaft(handle, data):
                 _set_graphics(inner, class_value, color, fill=False, opacity=100)
             _draw_shaft_cover(shaft, factor, class_value, color)
             if preferences.get("draw_3d", True):
-                _draw_shaft_3d(handle, shaft, class_name(shaft, preferences, "_3D"), color, factor)
+                _draw_shaft_3d(
+                    handle, shaft, class_name(shaft, preferences, "_3D"),
+                    pen_color, fill_color, transparency_percent, factor)
                 vs.ResetOrientation3D()
     elif structure == "special" and shaft["visible"]:
         _draw_local_polygon(
             tuple((x / factor, y / factor) for x, y in shaft["special_outline_m"]),
-            class_value, color, fill=True, opacity=50)
+            class_value, pen_color, fill=True,
+            fill_color=fill_color,
+            transparency_percent=transparency_percent)
         _draw_shaft_cover(shaft, factor, class_value, color)
         if preferences.get("draw_3d", True):
             _draw_special_shaft_3d(
-                handle, shaft, class_name(shaft, preferences, "_3D"), color, factor)
+                handle, shaft, class_name(shaft, preferences, "_3D"),
+                pen_color, fill_color, transparency_percent, factor)
             vs.ResetOrientation3D()
     elif structure == "floor_drain" and shaft["visible"]:
         _draw_floor_drain(
-            handle, shaft, class_value, color, factor, preferences.get("draw_3d", True))
+            handle, shaft, class_value, pen_color, fill_color,
+            transparency_percent, factor, preferences.get("draw_3d", True))
         vs.ResetOrientation3D()
     elif structure == "house" and shaft["visible"]:
         # The contractual plan representation has no terminal symbol.  The
@@ -2258,8 +3066,6 @@ def draw_shaft(handle, data):
     else:
         _draw_hidden_join(shaft, data)
     _draw_drops(handle, shaft, preferences, class_value, color, factor)
-    if shaft["visible"] and structure in ("round", "special"):
-        _draw_connection_height_labels(shaft, preferences, factor)
     updated = dict(data, shaft=shaft)
     _live().write_data(handle, updated)
     _reset_labels(updated)
@@ -2405,7 +3211,7 @@ def _holding_label_pipe(pipe):
     return core.validate_pipe(result)
 
 
-def _create_text(text, angle, preferences, wrap_width=0.0):
+def _create_text(text, angle, preferences, wrap_width=0.0, point_size=None):
     vs.TextOrigin((0.0, 0.0))
     vs.CreateText(text)
     handle = vs.LNewObj()
@@ -2415,7 +3221,9 @@ def _create_text(text, angle, preferences, wrap_width=0.0):
     font_id = int(vs.GetFontID("Arial") or 0)
     if font_id:
         vs.SetTextFont(handle, 0, len(text), font_id)
-    vs.SetTextSize(handle, 0, len(text), preferences["point_size"])
+    vs.SetTextSize(
+        handle, 0, len(text),
+        preferences["point_size"] if point_size is None else point_size)
     if wrap_width > 1e-9:
         vs.SetTextWidth(handle, wrap_width)
     vs.SetTextJust(handle, 2)
@@ -2425,30 +3233,6 @@ def _create_text(text, angle, preferences, wrap_width=0.0):
     vs.SetPenFore(handle, TEXT_COLOR)
     vs.SetFPat(handle, 0)
     return handle
-
-
-def _draw_connection_height_labels(shaft, preferences, factor):
-    """Label every differing endpoint height directly at its pipe direction."""
-    rows = shaft_connection_views(shaft)
-    if len({round(row["invert_m"], preferences["height_decimals"])
-            for row in rows}) <= 1:
-        return
-    counts = {
-        role: sum(1 for row in rows if row["role"] == role)
-        for role in ("in", "out")}
-    base_radius_m = max(core.shaft_outer_diameter_m(shaft) * 0.5, 0.25)
-    for index, row in enumerate(rows):
-        ux, uy = row["direction"]
-        # Stagger close labels radially while retaining the exact connection ray.
-        offset_m = base_radius_m + 0.16 + (index % 2) * 0.07
-        x, y = ux * offset_m / factor, uy * offset_m / factor
-        text = "%s KS %s m" % (
-            core.connection_plan_name(
-                row["role"], row["tag"], counts[row["role"]]),
-            core.format_number(row["invert_m"], preferences["height_decimals"]))
-        angle = core.readable_line_angle(ux, uy)
-        text_handle = _create_text(text, angle, preferences)
-        vs.HMove(text_handle, x, y)
 
 
 def _bbox(value):
@@ -2503,8 +3287,9 @@ def draw_label(handle, data):
     preferences = owner_data["preferences"]
     ensure_classes(preferences)
     factor = adapter.units_to_meters()
-    label_position = vs.GetSymLoc(handle)
-    default_position = _default_label_position(owner, owner_data)
+    default_position = _label_default_position(owner, owner_data, data)
+    label_position = adapter.symbol_location_2d(
+        handle, data.get("auto_xy", default_position))
     old_auto = tuple(data.get("auto_xy", label_position))
     if data.get("auto_position", True) and math.dist(label_position, old_auto) > 1e-5:
         data = dict(data, auto_position=False)
@@ -2514,7 +3299,25 @@ def draw_label(handle, data):
     shaft_label = False
     shaft_name = ""
     pipe_name = ""
-    if owner_data["role"] == "sewer_pipe":
+    point_size = None
+    if data.get("label_kind") == "connection_height":
+        context = _connection_label_context(
+            owner, owner_data, data.get("connection_id", ""))
+        if not context:
+            return
+        shaft, row, _index, counts = context
+        ux, uy = row["direction"]
+        text = "%s KS %s m" % (
+            core.connection_plan_name(
+                row["role"], row["tag"], counts[row["role"]]),
+            core.format_number(row["invert_m"], 2))
+        angle = core.readable_line_angle(ux, uy)
+        radius_m = max(core.shaft_outer_diameter_m(shaft) * 0.5, 0.25)
+        anchor_m = (shaft["x_m"] + ux * radius_m,
+                    shaft["y_m"] + uy * radius_m)
+        point_size = preferences.get(
+            "connection_point_size", preferences["point_size"])
+    elif owner_data["role"] == "sewer_pipe":
         pipe = read_pipe(owner, owner_data)
         pipe = _holding_label_pipe(pipe)
         (_a, start), (_b, end) = _endpoints(pipe)
@@ -2526,20 +3329,29 @@ def draw_label(handle, data):
         pipe_name = pipe.get("name", "") if preferences.get("pipe_name_visible", True) else ""
         anchor_m = _pipe_anchor(pipe)
         wrap_width = pipe.get("label_width_m", 0.0) / factor
-    else:
+    elif owner_data["role"] == "sewer_shaft":
         shaft_label = True
         shaft = read_shaft(owner, owner_data)
         rows = shaft_connection_views(shaft)
         text = core.shaft_label(shaft, rows, preferences)
         shaft_name = shaft.get("name", "")
         anchor_m = shaft["x_m"], shaft["y_m"]
+    elif owner_data["role"] == "sewer_rigole":
+        shaft_label = True
+        rigole = read_rigole(owner, owner_data)
+        text = core.rigole_label(rigole, preferences)
+        shaft_name = rigole.get("name", "")
+        anchor_m = rigole["x_m"], rigole["y_m"]
+    else:
+        return
     if not text:
         return
     # Keep the line-parallel angle in the label object's local coordinates.
     # Rotating the parametric label with Vectorworks' normal Rotate command
     # now adds the user's angle instead of being cancelled during every reset.
     rotation = float(vs.GetSymRot(handle) or 0.0)
-    text_handle = _create_text(text, angle, preferences, wrap_width)
+    text_handle = _create_text(
+        text, angle, preferences, wrap_width, point_size=point_size)
     if pipe_name and text.startswith(pipe_name):
         vs.SetTextSize(
             text_handle, 0, len(pipe_name),
@@ -2687,7 +3499,10 @@ def _commit_network_updates(pipe_updates, shaft_updates, preferences, undo_name)
     requested_resets = tuple(requested_resets)
     pipes, shafts = _prepare_network_updates(pipe_updates, shaft_updates)
     rows = tuple(dict.fromkeys(tuple(shafts) + tuple(pipes)))
-    snapshots = {handle: copy.deepcopy(_live().data_of(handle)) for handle in rows}
+    reset_handles = tuple(dict.fromkeys(rows + requested_resets))
+    snapshots = {handle: copy.deepcopy(_live().data_of(handle))
+                 for handle in reset_handles}
+    created_labels = []
     vs.NameUndoEvent(undo_name)
     try:
         for handle, value in shafts.items():
@@ -2696,9 +3511,24 @@ def _commit_network_updates(pipe_updates, shaft_updates, preferences, undo_name)
         for handle, value in pipes.items():
             _live().write_data(handle, dict(
                 snapshots[handle], pipe=value, preferences=copy.deepcopy(preferences)))
-        for handle in tuple(dict.fromkeys(rows + requested_resets)):
-            vs.ResetObject(handle)
+        # Endpoint heights are individual PIO labels.  Reconcile them before
+        # resetting the owning shafts so an old drawing is migrated as soon as
+        # one of its heights is edited, without creating objects from a PIO
+        # reset callback (which is re-entrant in Vectorworks 2026).
+        for handle in reset_handles:
+            current = _live().data_of(handle)
+            if (current and current.get("role") == "sewer_shaft" and
+                    current.get("labels")):
+                _ensure_connection_height_labels(
+                    handle, current, created_labels)
+        for handle in reset_handles:
+            if handle not in pipes and handle not in shafts:
+                _live().write_data(handle, snapshots[handle])
+            _reset_checked(handle)
     except Exception:
+        for label in reversed(created_labels):
+            if label:
+                vs.DelObject(label)
         for handle, snapshot in snapshots.items():
             _live().write_data(handle, snapshot)
             vs.ResetObject(handle)
@@ -2893,6 +3723,49 @@ def edit_network_chain(handles, preferences):
     return True
 
 
+def _shaft_inlet_dialog_rows(shaft, connected):
+    """Describe each inlet with its stable pipe id and graphical Z tag."""
+    current_by_id = {
+        pipe["id"]: pipe for _pipe_handle, pipe in connected
+        if pipe["end_id"] == shaft["id"]}
+    rows = []
+    seen = set()
+    for view in shaft_connection_views(shaft):
+        pipe = current_by_id.get(view["pipe_id"])
+        if view["role"] != "in" or pipe is None:
+            continue
+        rows.append({
+            "pipe_id": pipe["id"],
+            "connection_id": view["connection_id"],
+            "tag": view["tag"],
+            "pipe_name": view.get("pipe_name") or pipe.get("name", ""),
+            "invert_m": pipe["end_invert_m"],
+        })
+        seen.add(pipe["id"])
+    # A local fallback keeps editing possible if a connection view from an
+    # older file lacks display metadata. The pipe id remains the update key.
+    for pipe_id in sorted(set(current_by_id) - seen):
+        pipe = current_by_id[pipe_id]
+        rows.append({
+            "pipe_id": pipe_id,
+            "connection_id": "%s:end" % pipe_id,
+            "tag": "Z%d" % (len(rows) + 1),
+            "pipe_name": pipe.get("name", ""),
+            "invert_m": pipe["end_invert_m"],
+        })
+    return tuple(rows)
+
+
+def _chosen_inlet_height(choice, pipe):
+    """Return one selected inlet height without changing sibling inlets."""
+    values = choice.get("inlet_inverts_m")
+    if isinstance(values, dict) and pipe["id"] in values:
+        return core.number(values[pipe["id"]], "Zulaufsohle")
+    if choice.get("inlet_changed", True):
+        return core.number(choice["inlet_invert_m"], "Zulaufsohle")
+    return pipe["end_invert_m"]
+
+
 def edit(handle, preferences):
     data = _live().data_of(handle)
     if data and data["role"] == "sewer_label":
@@ -2952,11 +3825,10 @@ def edit(handle, preferences):
     if data["role"] == "sewer_shaft":
         original = read_shaft(handle, data)
         connected = _connected_pipes(original["id"])
-        incoming = tuple(pipe["end_invert_m"] for _pipe_handle, pipe in connected
-                         if pipe["end_id"] == original["id"])
+        inlet_rows = _shaft_inlet_dialog_rows(original, connected)
         outgoing = tuple(pipe["start_invert_m"] for _pipe_handle, pipe in connected
                          if pipe["start_id"] == original["id"])
-        choice = sewer_ui.shaft_dialog(original, preferences, incoming, outgoing)
+        choice = sewer_ui.shaft_dialog(original, preferences, inlet_rows, outgoing)
         if choice is None:
             return False
         updated = choice["shaft"]
@@ -2964,7 +3836,6 @@ def edit(handle, preferences):
         changed_pipes = {}
         old_outlet = min(outgoing) if outgoing else choice["outlet_invert_m"]
         outlet_changed = choice.get("outlet_changed", True)
-        inlet_changed = choice.get("inlet_changed", True)
         delta = choice["outlet_invert_m"] - old_outlet if outlet_changed else 0.0
         following = _downstream_pipes(original["id"]) if abs(delta) > 1e-9 else ()
         propagation = "slope"
@@ -2981,8 +3852,8 @@ def edit(handle, preferences):
                 following, original["id"], delta, propagation))
         for pipe_handle, pipe in connected:
             changed = dict(changed_pipes.get(pipe_handle, pipe))
-            if inlet_changed and pipe["end_id"] == original["id"]:
-                changed["end_invert_m"] = choice["inlet_invert_m"]
+            if pipe["end_id"] == original["id"]:
+                changed["end_invert_m"] = _chosen_inlet_height(choice, pipe)
             if outlet_changed and pipe["start_id"] == original["id"]:
                 changed["start_invert_m"] = choice["outlet_invert_m"]
             if changed != pipe:
@@ -3027,15 +3898,13 @@ def edit_shafts(handles, preferences):
             pipe = staged_pipes.get(pipe_handle, persisted)
             if original["id"] in (pipe["start_id"], pipe["end_id"]):
                 connected.append((pipe_handle, pipe))
-        incoming = tuple(pipe["end_invert_m"] for _pipe_handle, pipe in connected
-                         if pipe["end_id"] == original["id"])
+        inlet_rows = _shaft_inlet_dialog_rows(original, connected)
         outgoing = tuple(pipe["start_invert_m"] for _pipe_handle, pipe in connected
                          if pipe["start_id"] == original["id"])
-        choice = sewer_ui.shaft_dialog(original, preferences, incoming, outgoing)
+        choice = sewer_ui.shaft_dialog(original, preferences, inlet_rows, outgoing)
         if choice is None:
             return False
         shaft_updates[handle] = choice["shaft"]
-        inlet_changed = choice.get("inlet_changed", True)
         outlet_changed = choice.get("outlet_changed", True)
         old_outlet = min(outgoing) if outgoing else choice["outlet_invert_m"]
         delta = choice["outlet_invert_m"] - old_outlet if outlet_changed else 0.0
@@ -3056,8 +3925,8 @@ def edit_shafts(handles, preferences):
                     following, original["id"], delta, propagation))
         for pipe_handle, pipe in connected:
             changed = copy.deepcopy(staged_pipes.get(pipe_handle, pipe))
-            if inlet_changed and pipe["end_id"] == original["id"]:
-                changed["end_invert_m"] = choice["inlet_invert_m"]
+            if pipe["end_id"] == original["id"]:
+                changed["end_invert_m"] = _chosen_inlet_height(choice, pipe)
             if outlet_changed and pipe["start_id"] == original["id"]:
                 changed["start_invert_m"] = choice["outlet_invert_m"]
             if changed != pipe:
@@ -3113,7 +3982,7 @@ def _preference_targets(selected, scope):
     if scope not in ("selection", "systems", "drawing"):
         raise core.SewerError("Ungültiger Aktualisierungsumfang der Kanaleinstellungen.")
     rows = tuple((handle, data) for handle, data in objects()
-                 if data.get("role") in ("sewer_pipe", "sewer_shaft"))
+                 if data.get("role") in ("sewer_pipe", "sewer_shaft", "sewer_rigole"))
     if scope == "drawing":
         return rows
     selected_handles = {handle for handle, _data in tuple(selected or ())}
@@ -3130,8 +3999,11 @@ def _preference_targets(selected, scope):
     for _handle, data in chosen:
         if data["role"] == "sewer_shaft":
             node_ids.add(data["shaft"]["id"])
-        else:
+        elif data["role"] == "sewer_pipe":
             node_ids.update((data["pipe"]["start_id"], data["pipe"]["end_id"]))
+        else:
+            node_ids.update(connection["node_id"]
+                            for connection in data["rigole"].get("connections", ()))
     changed = True
     while changed:
         changed = False
@@ -3148,7 +4020,10 @@ def _preference_targets(selected, scope):
         if ((data["role"] == "sewer_pipe" and
              data["pipe"]["start_id"] in node_ids and
              data["pipe"]["end_id"] in node_ids) or
-            (data["role"] == "sewer_shaft" and data["shaft"]["id"] in node_ids)))
+            (data["role"] == "sewer_shaft" and data["shaft"]["id"] in node_ids) or
+            (data["role"] == "sewer_rigole" and any(
+                connection["node_id"] in node_ids
+                for connection in data["rigole"].get("connections", ())))))
 
 
 def _data_with_preferences(data, preferences):
@@ -3165,7 +4040,7 @@ def _data_with_preferences(data, preferences):
             "axis_line_type": preferences["axis_line_type"],
         })
         updated["pipe"] = core.validate_pipe(pipe)
-    else:
+    elif updated["role"] == "sewer_shaft":
         shaft = copy.deepcopy(updated["shaft"])
         if (shaft.get("visible", True) and
                 shaft.get("structure_type", "round") in ("round", "special") and
@@ -3179,6 +4054,8 @@ def _data_with_preferences(data, preferences):
                 "cover_rotation_deg": preferences["shaft_cover_rotation_deg"],
             })
         updated["shaft"] = core.validate_shaft(shaft, allow_hidden=True)
+    elif updated["role"] == "sewer_rigole":
+        updated["rigole"] = core.validate_rigole(updated["rigole"])
     return updated
 
 
@@ -3196,9 +4073,13 @@ def apply_preferences(preferences, selected=None, scope="drawing"):
     for data in planned.values():
         if data["role"] == "sewer_shaft":
             affected_nodes.add(data["shaft"]["id"])
-        else:
+        elif data["role"] == "sewer_pipe":
             affected_nodes.update((data["pipe"]["start_id"], data["pipe"]["end_id"]))
+        else:
+            affected_nodes.update(connection["node_id"]
+                                  for connection in data["rigole"].get("connections", ()))
     redraw = set(planned)
+    created_labels = []
     # Pipe trims and hidden junction fillets depend on their neighbouring
     # object.  Redraw those dependants without applying their standards.
     for handle, data in objects():
@@ -3209,14 +4090,27 @@ def apply_preferences(preferences, selected=None, scope="drawing"):
         elif (data.get("role") == "sewer_shaft" and
               data["shaft"]["id"] in affected_nodes):
             redraw.add(handle)
+    rollback_snapshots = dict(snapshots)
+    for handle in redraw:
+        rollback_snapshots.setdefault(
+            handle, copy.deepcopy(_live().data_of(handle)))
     vs.NameUndoEvent("PD Kanaleinstellungen anwenden")
     try:
         for handle, data in planned.items():
             _live().write_data(handle, data)
         for handle in redraw:
+            current = _live().data_of(handle)
+            if (current and current.get("role") == "sewer_shaft" and
+                    current.get("labels")):
+                _ensure_connection_height_labels(
+                    handle, current, created_labels)
+        for handle in redraw:
             vs.ResetObject(handle)
     except Exception:
-        for handle, data in snapshots.items():
+        for label in reversed(created_labels):
+            if label:
+                vs.DelObject(label)
+        for handle, data in rollback_snapshots.items():
             _live().write_data(handle, data)
             vs.ResetObject(handle)
         raise
@@ -3229,12 +4123,13 @@ def apply_standard_colors(preferences):
     for handle, data in objects():
         if data["role"] not in ("sewer_pipe", "sewer_shaft"):
             continue
-        payload = data.get("pipe") or data.get("shaft")
-        if payload.get("color_override") is None:
-            _live().write_data(handle, dict(data, preferences=copy.deepcopy(preferences)))
-            vs.ResetObject(handle)
-            _reset_labels(data)
-            count += 1
+        # Store the current system standards on every managed object.  Any
+        # explicit pipe or shaft overrides remain in their payload and thus
+        # continue to take precedence during the redraw.
+        _live().write_data(handle, dict(data, preferences=copy.deepcopy(preferences)))
+        vs.ResetObject(handle)
+        _reset_labels(data)
+        count += 1
     return count
 
 
@@ -3242,6 +4137,7 @@ def validate_document(preferences=None):
     preferences = sewer_settings.validate(preferences or sewer_settings.load())
     pipes = tuple(pipe for _handle, pipe in pipe_records())
     shafts = tuple(shaft for _handle, shaft in shaft_records())
+    rigoles = tuple(rigole for _handle, rigole in rigole_records())
     core.validate_network(pipes, shafts)
     errors = []
     for pipe in pipes:
@@ -3259,29 +4155,208 @@ def validate_document(preferences=None):
         if connected and abs(shaft["ks_m"] - min(connected)) > 0.001:
             errors.append("Schacht %s: KS stimmt nicht mit der tiefsten Rohrsohle überein." %
                           (shaft["name"] or shaft["id"]))
+    shaft_index = {shaft["id"]: shaft for shaft in shafts}
+    for rigole in rigoles:
+        for connection in rigole.get("connections", ()):
+            node = shaft_index.get(connection["node_id"])
+            if not node:
+                errors.append("Rigole %s: Anschlussknoten fehlt." % rigole["name"])
+                continue
+            expected = core.rigole_connection_xy(
+                rigole, connection["side"], connection["fraction"])
+            if math.dist((node["x_m"], node["y_m"]), expected) > 0.001:
+                errors.append("Rigole %s: Anschlussknoten liegt nicht auf der Rigolenkante." %
+                              rigole["name"])
+            if abs(node["ks_m"] - connection["invert_m"]) > 0.001:
+                errors.append("Rigole %s: Anschlusshöhe und Knoten-Sohlhöhe unterscheiden sich." %
+                              rigole["name"])
     if errors:
         raise core.SewerError("\n".join(sorted(set(errors))))
     return {"pipes": len(pipes), "shafts": len([value for value in shafts if value["visible"]]),
-            "nodes": len(shafts), "errors": ()}
+            "nodes": len(shafts), "rigoles": len(rigoles), "errors": ()}
+
+
+def _clone_translation_m(handle, role, payload):
+    factor = adapter.units_to_meters()
+    location = adapter.symbol_location_2d(handle, (0.0, 0.0))
+    current = location[0] * factor, location[1] * factor
+    if role in ("sewer_shaft", "sewer_rigole"):
+        return current[0] - payload["x_m"], current[1] - payload["y_m"]
+    return current
+
+
+def _repair_shaft_clone(handle, data, translation=None):
+    payload = copy.deepcopy(data["shaft"])
+    old_id = payload.get("clone_origin_id") or payload["id"]
+    translation = translation or _clone_translation_m(handle, "sewer_shaft", payload)
+    payload["id"] = str(uuid.uuid4())
+    payload["clone_origin_id"] = str(old_id)
+    payload["clone_translation_m"] = [float(translation[0]), float(translation[1])]
+    payload["x_m"] = float(payload["x_m"]) + float(translation[0])
+    payload["y_m"] = float(payload["y_m"]) + float(translation[1])
+    if payload["visible"]:
+        next_number = 1
+        pattern = re.compile(r"%s\.(\d+)$" % re.escape(payload["kind"]))
+        for _peer, peer_data in objects("sewer_shaft"):
+            peer = peer_data.get("shaft") or {}
+            match = pattern.fullmatch(str(peer.get("name") or ""))
+            if match:
+                next_number = max(next_number, int(match.group(1)) + 1)
+        payload["name"] = "%s.%03d" % (payload["kind"], next_number)
+    changed = dict(data, shaft=payload, labels=[])
+    vs.SetName(handle, core.SHAFT_PREFIX + payload["id"])
+    _live().write_data(handle, changed)
+    _retarget_cloned_references(translation)
+    created = []
+    ensure_label(handle, changed, created)
+    for label in created:
+        vs.ResetObject(label)
+    return _live().data_of(handle)
+
+
+def _same_clone_translation(payload, translation, tolerance=1e-5):
+    stored = payload.get("clone_translation_m")
+    if not isinstance(stored, (tuple, list)) or len(stored) < 2:
+        return False
+    try:
+        return math.dist(tuple(float(value) for value in stored[:2]), translation) <= tolerance
+    except (TypeError, ValueError):
+        return False
+
+
+def _retarget_cloned_references(translation):
+    """Rewrite every resolvable copied-network reference for one translation."""
+    rows = tuple(objects())
+    shaft_map, pipe_map, shaft_names = {}, {}, {}
+    for _handle, row in rows:
+        payload = row.get("shaft") or row.get("pipe") or {}
+        if not _same_clone_translation(payload, translation):
+            continue
+        old_id = str(payload.get("clone_origin_id") or "")
+        new_id = str(payload.get("id") or "")
+        if not old_id or not new_id:
+            continue
+        if row.get("role") == "sewer_shaft":
+            shaft_map[old_id] = new_id
+            shaft_names[new_id] = str(payload.get("name") or "")
+        elif row.get("role") == "sewer_pipe":
+            pipe_map[old_id] = new_id
+
+    def map_station(value):
+        if not isinstance(value, dict):
+            return value
+        result = copy.deepcopy(value)
+        for key in ("main_start_id", "main_end_id", "station_zero_id"):
+            if result.get(key) in shaft_map:
+                result[key] = shaft_map[result[key]]
+        for key in ("main_pipe_ids", "station_pipe_ids"):
+            if isinstance(result.get(key), (tuple, list)):
+                result[key] = [pipe_map.get(identity, identity)
+                               for identity in result[key]]
+        if result.get("station_zero_id") in shaft_names:
+            result["station_zero_name"] = shaft_names[result["station_zero_id"]]
+        return result
+
+    for handle, row in rows:
+        payload_key = "shaft" if row.get("role") == "sewer_shaft" else "pipe"
+        payload = copy.deepcopy(row.get(payload_key) or {})
+        if not _same_clone_translation(payload, translation):
+            continue
+        before = copy.deepcopy(payload)
+        if payload_key == "pipe":
+            for key in ("start_id", "end_id"):
+                if payload.get(key) in shaft_map:
+                    payload[key] = shaft_map[payload[key]]
+        else:
+            payload["stub"] = map_station(payload.get("stub"))
+            payload["connection_station"] = map_station(
+                payload.get("connection_station"))
+            if isinstance(payload.get("drops"), list):
+                payload["drops"] = [dict(
+                    drop, pipe_id=pipe_map.get(drop.get("pipe_id"), drop.get("pipe_id")))
+                    if isinstance(drop, dict) else drop for drop in payload["drops"]]
+        if payload != before:
+            _live().write_data(handle, dict(row, **{payload_key: payload}))
+
+
+def _cloned_endpoint_id(old_id, translation):
+    tolerance = 1e-5
+    pending = []
+    for shaft_handle, shaft_data in objects("sewer_shaft"):
+        payload = shaft_data.get("shaft") or {}
+        stored_translation = payload.get("clone_translation_m")
+        if (payload.get("clone_origin_id") == old_id and
+                isinstance(stored_translation, (tuple, list)) and
+                len(stored_translation) >= 2 and
+                math.dist(tuple(float(value) for value in stored_translation[:2]),
+                          translation) <= tolerance):
+            return payload["id"]
+        if payload.get("id") == old_id and _name(shaft_handle) != core.SHAFT_PREFIX + old_id:
+            try:
+                candidate_translation = _clone_translation_m(
+                    shaft_handle, "sewer_shaft", payload)
+            except core.SewerError:
+                continue
+            if math.dist(candidate_translation, translation) <= tolerance:
+                pending.append((shaft_handle, shaft_data, candidate_translation))
+    if len(pending) == 1:
+        repaired = _repair_shaft_clone(*pending[0])
+        return repaired["shaft"]["id"]
+    if len(pending) > 1:
+        raise core.SewerError(
+            "Kopierte Kanalanlage ist nicht eindeutig. Bitte Kopieren rückgängig machen und erneut einfügen.")
+    return None
 
 
 def _repair_duplicate(handle, data):
-    payload_key = "shaft" if data["role"] == "sewer_shaft" else "pipe"
+    payload_keys = {"sewer_shaft": "shaft", "sewer_pipe": "pipe",
+                    "sewer_rigole": "rigole"}
+    prefixes = {"sewer_shaft": core.SHAFT_PREFIX,
+                "sewer_pipe": core.PIPE_PREFIX,
+                "sewer_rigole": core.RIGOLE_PREFIX}
+    payload_key = payload_keys[data["role"]]
     payload = copy.deepcopy(data[payload_key])
-    prefix = core.SHAFT_PREFIX if data["role"] == "sewer_shaft" else core.PIPE_PREFIX
+    prefix = prefixes[data["role"]]
     expected = prefix + payload["id"]
     if _name(handle) == expected:
         return data
     if not vs.GetObject(expected):
         vs.SetName(handle, expected)
         return data
+    if data["role"] == "sewer_shaft":
+        return _repair_shaft_clone(handle, data)
+    if data["role"] == "sewer_rigole":
+        factor = adapter.units_to_meters()
+        location = adapter.symbol_location_2d(
+            handle, (payload["x_m"] / factor, payload["y_m"] / factor))
+        payload.update(
+            id=str(uuid.uuid4()), name=_next_rigole_name(),
+            x_m=float(location[0]) * factor, y_m=float(location[1]) * factor,
+            connections=[])
+        payload = core.validate_rigole(payload)
+        data = dict(data, rigole=payload, labels=[])
+        vs.SetName(handle, core.RIGOLE_PREFIX + payload["id"])
+        _live().write_data(handle, data)
+        created = []
+        ensure_label(handle, data, created)
+        for label in created:
+            vs.ResetObject(label)
+        return _live().data_of(handle)
+    translation = _clone_translation_m(handle, "sewer_pipe", payload)
+    start_id = _cloned_endpoint_id(payload["start_id"], translation)
+    end_id = _cloned_endpoint_id(payload["end_id"], translation)
+    if not start_id or not end_id:
+        raise core.SewerError(
+            "Eine kopierte Haltung kann nicht mit den Originalschächten verbunden werden. "
+            "Bitte die vollständige Anlage einschließlich beider Schächte kopieren.")
+    payload["clone_origin_id"] = payload["id"]
+    payload["clone_translation_m"] = [float(translation[0]), float(translation[1])]
     payload["id"] = str(uuid.uuid4())
-    if data["role"] == "sewer_shaft" and payload["visible"]:
-        next_number = _next_numbers()[payload["kind"]]
-        payload["name"] = "%s.%03d" % (payload["kind"], next_number)
+    payload["start_id"], payload["end_id"] = start_id, end_id
     data = dict(data, **{payload_key: payload}, labels=[])
     vs.SetName(handle, prefix + payload["id"])
     _live().write_data(handle, data)
+    _retarget_cloned_references(translation)
     created = []
     ensure_label(handle, data, created)
     for label in created:
@@ -3302,13 +4377,35 @@ def reset():
     try:
         if data["role"] == "sewer_label":
             draw_label(handle, data)
+            _record_render_result(handle, RENDER_OK)
             return
         data = _repair_duplicate(handle, data)
         if data["role"] == "sewer_pipe":
+            # Reset also migrates holdings saved by older releases from the
+            # unsafe shaft->pipe reset relationship to the deletion-safe graph.
+            if isinstance(data.get("pipe"), dict):
+                _sync_pipe_associations(handle, core.validate_pipe(data["pipe"]))
             draw_pipe(handle, data)
         elif data["role"] == "sewer_shaft":
             draw_shaft(handle, data)
+        elif data["role"] == "sewer_rigole":
+            rigole = read_rigole(handle, data)
+            valid_connections = []
+            for connection in rigole.get("connections", ()):
+                junction = _handle_by_id(core.SHAFT_PREFIX, connection["node_id"])
+                if not junction:
+                    continue
+                _sync_rigole_junction_association(handle, junction)
+                valid_connections.append(connection)
+            if len(valid_connections) != len(rigole.get("connections", ())):
+                rigole = core.validate_rigole(dict(
+                    rigole, connections=valid_connections))
+                data = dict(data, rigole=rigole)
+                _live().write_data(handle, data)
+            draw_rigole(handle, data)
+        _record_render_result(handle, RENDER_OK)
     except Exception as error:
+        _record_render_result(handle, RENDER_ERROR, error)
         vs.TextOrigin((0.0, 0.0))
         vs.CreateText("KANAL PRÜFEN: " + str(error))
         adapter.alert("Kanalanlage konnte nicht neu aufgebaut werden: %s" % error)

@@ -5,6 +5,7 @@ from __future__ import absolute_import
 import importlib
 import sys
 import unittest
+from unittest import mock
 
 
 class DialogAPI(object):
@@ -22,6 +23,7 @@ class DialogAPI(object):
         self.multi_select = {}
         self.tab_panes = {}
         self.group_first = {}
+        self.below_items = []
         self.colors = {}
         self.line_types = {}
         self.questions = []
@@ -47,6 +49,12 @@ class DialogAPI(object):
         return self._dialog()
 
     def CreateEditText(self, dialog, item, value, width):
+        self._control(dialog, item)
+        self.text[(dialog, item)] = str(value)
+        self.edit_widths[(dialog, item)] = int(width)
+
+    def CreateEditTextBox(self, dialog, item, value, width, height):
+        del height
         self._control(dialog, item)
         self.text[(dialog, item)] = str(value)
         self.edit_widths[(dialog, item)] = int(width)
@@ -96,6 +104,7 @@ class DialogAPI(object):
     def SetBelowItem(self, dialog, first, second, *args):
         del args
         self._require(dialog, first, second)
+        self.below_items.append((dialog, first, second))
 
     def SetRightItem(self, dialog, first, second, *args):
         del args
@@ -214,12 +223,12 @@ class DialogAPI(object):
         return self.yn_result
 
 
-def load_ui(fake):
+def load_ui(fake, package="PD_KanalTool"):
     sys.modules["vs"] = fake
     for name in tuple(sys.modules):
-        if name == "PD_KanalTool" or name.startswith("PD_KanalTool."):
+        if name == package or name.startswith(package + "."):
             sys.modules.pop(name, None)
-    return importlib.import_module("PD_KanalTool.ui")
+    return importlib.import_module(package + ".ui")
 
 
 def shaft(identity, name, x_m, ks_m):
@@ -243,6 +252,62 @@ def pipe(identity, start, end, start_m, end_m):
 
 
 class KanalDialogTests(unittest.TestCase):
+    def test_related_tool_dialog_helpers_stay_inside_small_screen(self):
+        api = DialogAPI()
+        sizes = {}
+        positions = {}
+        api.GetScreen = lambda: (0, 0, 800, 500)
+        api.SetLayoutDialogSize = lambda dialog, width, height: sizes.update(
+            {dialog: (int(width), int(height))})
+        api.GetLayoutDialogSize = lambda dialog: sizes.get(dialog, (1200, 900))
+        api.SetLayoutDialogPosition = lambda dialog, x, y: positions.update(
+            {dialog: (int(x), int(y))})
+        for package, helper_name in (
+                ("PD_KanalTool", "_right_side_position"),
+                ("PD_LeitungsTool", "_right_side_position"),
+                ("PD_GefaelleTool", "_right_side_position"),
+                ("PD_KanalLeitungTool", "_fit_dialog"),
+                ("PD_KanalLeitungMengen", "_fit_dialog")):
+            sys.modules["vs"] = api
+            for name in tuple(sys.modules):
+                if name == package or name.startswith(package + "."):
+                    sys.modules.pop(name, None)
+            module = importlib.import_module(package + ".ui")
+            dialog = api.CreateResizableLayout("Test", True, "OK", "Abbrechen")
+            getattr(module, helper_name)(dialog, (1200, 900))
+            width, height = sizes[dialog]
+            x, y = positions[dialog]
+            self.assertLessEqual(width, 776, package)
+            self.assertLessEqual(height, 452, package)
+            self.assertGreaterEqual(x, 12, package)
+            self.assertGreaterEqual(y, 12, package)
+            self.assertLessEqual(x + width, 788, package)
+            self.assertLessEqual(y + height, 488, package)
+
+    def test_rigole_dialog_preserves_multiline_note_and_fits_screen(self):
+        api = DialogAPI()
+        api.on_run = lambda _dialog, handler: handler(1, 0)
+        sizes = {}
+        api.GetScreen = lambda: (0, 0, 1366, 768)
+        api.SetLayoutDialogSize = lambda dialog, width, height: sizes.update(
+            {dialog: (int(width), int(height))})
+        api.GetLayoutDialogSize = lambda dialog: sizes.get(dialog, (900, 900))
+        api.SetLayoutDialogPosition = lambda *_args: None
+        ui = load_ui(api)
+        initial = {
+            "schema": 1, "id": "rig-1", "name": "RIG.001",
+            "x_m": 0.0, "y_m": 0.0, "length_m": 10.0, "width_m": 3.0,
+            "height_m": 1.0, "bottom_m": 99.0, "terrain_top_m": 101.0,
+            "rotation_deg": 15.0, "slope_angle_deg": 60.0,
+            "fill_color": [36000, 52000, 65535],
+            "pen_color": [0, 20000, 50000], "transparency_percent": 40.0,
+            "note": "Zeile 1\nZeile 2", "connections": [],
+        }
+        result = ui.rigole_dialog(initial)
+        self.assertEqual("Zeile 1\nZeile 2", result["note"])
+        self.assertEqual(52, api.edit_widths[(api.next_dialog, 30)])
+        self.assertLessEqual(sizes[api.next_dialog][1], 720)
+
     def test_unchanged_shaft_dialog_preserves_distinct_connection_heights(self):
         api = DialogAPI()
         api.on_run = lambda _dialog, handler: handler(1, 0)
@@ -254,6 +319,91 @@ class KanalDialogTests(unittest.TestCase):
         choice = ui.shaft_dialog(current, settings, (100.2, 100.1), (100.0,))
         self.assertFalse(choice["inlet_changed"])
         self.assertFalse(choice["outlet_changed"])
+
+    def test_shaft_dialog_edits_z2_without_changing_z1(self):
+        api = DialogAPI()
+
+        def accept(dialog, handler):
+            self.assertIn("Z1", api.text[(dialog, 100)])
+            self.assertIn("H-RW.002", api.text[(dialog, 100)])
+            self.assertIn("ΔA +20,0 cm", api.text[(dialog, 100)])
+            self.assertIn("Z2", api.text[(dialog, 102)])
+            self.assertIn("H-RW.003", api.text[(dialog, 102)])
+            self.assertIn("ΔA +10,0 cm", api.text[(dialog, 102)])
+            api.SetItemText(dialog, 103, "99,95")
+            handler(103, 0)
+            self.assertIn("ΔA -5,0 cm", api.text[(dialog, 102)])
+            api.SetItemText(dialog, 35, "99,90")
+            handler(35, 0)
+            self.assertIn("ΔA +30,0 cm", api.text[(dialog, 100)])
+            self.assertIn("ΔA +5,0 cm", api.text[(dialog, 102)])
+            api.SetItemText(dialog, 35, "100,0")
+            handler(35, 0)
+            return handler(1, 0)
+
+        api.on_run = accept
+        ui = load_ui(api)
+        core = importlib.import_module("PD_KanalTool.core")
+        settings = importlib.import_module("PD_KanalTool.settings").validate({})
+        current = core.validate_shaft(
+            shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True)
+        choice = ui.shaft_dialog(current, settings, (
+            {"pipe_id": "p1", "tag": "Z1", "pipe_name": "H-RW.002",
+             "invert_m": 100.20},
+            {"pipe_id": "p2", "tag": "Z2", "pipe_name": "H-RW.003",
+             "invert_m": 100.10},
+        ), (100.0,))
+        self.assertEqual(100.20, choice["inlet_inverts_m"]["p1"])
+        self.assertEqual(99.95, choice["inlet_inverts_m"]["p2"])
+        self.assertFalse(choice["inlet_changed_by_pipe"]["p1"])
+        self.assertTrue(choice["inlet_changed_by_pipe"]["p2"])
+        self.assertEqual(99.95, choice["shaft"]["ks_m"])
+
+    def test_shaft_edit_changes_only_the_selected_inlet_pipe(self):
+        api = DialogAPI()
+        load_ui(api)
+        live = importlib.import_module("PD_KanalTool.live")
+        core = importlib.import_module("PD_KanalTool.core")
+        preferences = importlib.import_module("PD_KanalTool.settings").validate({})
+        current = core.validate_shaft(
+            shaft("s3", "RW.003", 20.0, 100.0), allow_hidden=True)
+        pipes = (
+            ("P1", core.validate_pipe(pipe("p1", "s1", "s3", 100.4, 100.2))),
+            ("P2", core.validate_pipe(pipe("p2", "s2", "s3", 100.3, 100.1))),
+            ("P3", core.validate_pipe(pipe("p3", "s3", "s4", 100.0, 99.9))),
+        )
+
+        class Store(object):
+            @staticmethod
+            def data_of(_handle):
+                return {"schema": core.SCHEMA, "role": "sewer_shaft", "shaft": current}
+
+        choice = {
+            "shaft": core.validate_shaft(dict(current, ks_m=99.95), allow_hidden=True),
+            "inlet_invert_m": 99.95,
+            "inlet_inverts_m": {"p1": 100.2, "p2": 99.95},
+            "inlet_changed": True,
+            "outlet_invert_m": 100.0,
+            "outlet_changed": False,
+        }
+        commits = []
+        with mock.patch.object(live, "_live", return_value=Store()), mock.patch.object(
+                live, "read_shaft", return_value=dict(current)), mock.patch.object(
+                live, "_connected_pipes", return_value=pipes), mock.patch.object(
+                live, "_shaft_inlet_dialog_rows", return_value=(
+                    {"pipe_id": "p1", "tag": "Z1", "invert_m": 100.2},
+                    {"pipe_id": "p2", "tag": "Z2", "invert_m": 100.1},
+                )), mock.patch.object(
+                live.sewer_ui, "shaft_dialog", return_value=choice), mock.patch.object(
+                live, "_unique_shaft_name", return_value=None), mock.patch.object(
+                live, "_confirmed_pipe_directions", side_effect=lambda values: values), mock.patch.object(
+                live, "_commit_network_updates",
+                side_effect=lambda pipe_updates, shaft_updates, current_preferences, undo: commits.append(
+                    (pipe_updates, shaft_updates, current_preferences, undo))):
+            self.assertTrue(live.edit("S3", preferences))
+        self.assertEqual({"P2"}, set(commits[0][0]))
+        self.assertEqual(100.2, commits[0][0].get("P1", pipes[0][1])["end_invert_m"])
+        self.assertEqual(99.95, commits[0][0]["P2"]["end_invert_m"])
 
     def test_shaft_dialog_preserves_note_and_uses_compact_text_fields(self):
         api = DialogAPI()
@@ -272,12 +422,12 @@ class KanalDialogTests(unittest.TestCase):
         self.assertEqual(24, api.edit_widths[(dialog, 33)])
         self.assertEqual(24, api.edit_widths[(dialog, 43)])
 
-    def test_shaft_dialog_fits_inside_768_pixel_screen(self):
+    def test_shaft_dialog_with_many_inlets_fits_small_screen(self):
         api = DialogAPI()
         api.on_run = lambda _dialog, handler: handler(1, 0)
         sizes = {}
         positions = {}
-        api.GetScreen = lambda: (0, 0, 1366, 768)
+        api.GetScreen = lambda: (0, 0, 1024, 600)
         api.SetLayoutDialogSize = lambda dialog, width, height: sizes.update(
             {dialog: (int(width), int(height))})
         api.GetLayoutDialogSize = lambda dialog: sizes.get(dialog, (900, 900))
@@ -290,22 +440,33 @@ class KanalDialogTests(unittest.TestCase):
         self.assertIsNotNone(ui.shaft_dialog(
             current,
             importlib.import_module("PD_KanalTool.settings").validate({}),
-            (100.0,), (100.0,)))
+            tuple(
+                {"pipe_id": "p%d" % index, "tag": "Z%d" % index,
+                 "pipe_name": "H-RW.%03d" % (index + 1),
+                 "invert_m": 100.0 - index / 100.0}
+                for index in range(1, 21)),
+            (99.7,)))
         dialog = api.next_dialog
         width, height = sizes[dialog]
         x, y = positions[dialog]
-        self.assertLessEqual(width, 1342)
-        self.assertLessEqual(height, 720)
+        self.assertEqual([51, 52, 53, 54], api.tab_panes[(dialog, 50)])
+        self.assertEqual(
+            20, sum((dialog, item) in api.edit_widths
+                    for item in range(101, 140, 2)))
+        self.assertTrue(all(item not in api.controls[dialog] for item in (46, 47, 48, 49)))
+        self.assertIn((dialog, 133, 34), api.below_items)
+        self.assertLessEqual(width, 1000)
+        self.assertLessEqual(height, 552)
         self.assertGreaterEqual(x, 12)
         self.assertGreaterEqual(y, 12)
-        self.assertLessEqual(y + height, 756)
+        self.assertLessEqual(y + height, 588)
 
-    def test_preferences_use_three_compact_tabs_and_return_update_scope(self):
+    def test_preferences_use_compact_tabs_and_return_update_scope(self):
         api = DialogAPI()
 
         def accept(dialog, handler):
-            self.assertEqual([101, 102, 104, 103], api.tab_panes[(dialog, 100)])
-            self.assertEqual({101, 102, 103, 104}, {
+            self.assertEqual([101, 105, 102, 104, 103], api.tab_panes[(dialog, 100)])
+            self.assertEqual({101, 102, 103, 104, 105}, {
                 group for current_dialog, group in api.group_first
                 if current_dialog == dialog})
             # Apply the saved settings to the connected system of the selection.
@@ -321,6 +482,83 @@ class KanalDialogTests(unittest.TestCase):
         self.assertEqual("bold", updated["shaft_name_text_style"])
         self.assertTrue(updated["pipe_name_visible"])
         self.assertEqual(9.0, updated["pipe_name_point_size"])
+        self.assertEqual(9.0, updated["connection_point_size"])
+        self.assertTrue(updated["shaft_connection_labels_visible"])
+        self.assertEqual([0, 26000, 65535], updated["shaft_pen_colors"]["RW"])
+        self.assertEqual([0, 26000, 65535], updated["shaft_fill_colors"]["RW"])
+        self.assertEqual(50.0, updated["shaft_fill_transparency_percent"]["RW"])
+
+    def test_preferences_can_hide_independent_shaft_connection_labels(self):
+        api = DialogAPI()
+
+        def accept(dialog, handler):
+            api.boolean[(dialog, 74)] = False
+            return handler(1, 0)
+
+        api.on_run = accept
+        ui = load_ui(api)
+        preferences = importlib.import_module("PD_KanalTool.settings").validate({})
+        updated, _scope = ui.preferences_dialog(preferences)
+        self.assertFalse(updated["shaft_connection_labels_visible"])
+        live = importlib.import_module("PD_KanalTool.live")
+        self.assertIsNone(live._connection_label_context(
+            None, {"role": "sewer_shaft", "preferences": updated}, "P1:end"))
+
+    def test_all_tool_height_fields_show_exactly_two_decimals(self):
+        api = DialogAPI()
+        sewer_ui = load_ui(api)
+        sewer_settings = importlib.import_module("PD_KanalTool.settings").validate(
+            {"height_decimals": 6})
+        self.assertEqual(2, sewer_settings["height_decimals"])
+        sewer_ui.shaft_dialog(
+            shaft("s1", "RW.001", 0.0, 99.734), sewer_settings,
+            ({"pipe_id": "p1", "tag": "Z1", "pipe_name": "H-RW.001",
+              "invert_m": 99.876},), (99.734,))
+        dialog = api.next_dialog
+        self.assertEqual("101,23", api.text[(dialog, 16)])
+        self.assertEqual("99,88", api.text[(dialog, 101)])
+        self.assertEqual("99,73", api.text[(dialog, 35)])
+
+        api = DialogAPI()
+        utility_ui = load_ui(api, "PD_LeitungsTool")
+        utility_settings = importlib.import_module("PD_LeitungsTool.settings").validate(
+            {"start_height_m": 100.126})
+        utility_ui.route_dialog(utility_settings)
+        self.assertEqual("100,13", api.text[(api.next_dialog, 43)])
+
+        api = DialogAPI()
+        slope_ui = load_ui(api, "PD_GefaelleTool")
+        slope_settings = importlib.import_module("PD_GefaelleTool.settings").validate(
+            {"height_decimals": 6})
+        self.assertEqual(2, slope_settings["height_decimals"])
+        slope_ui.single_point_dialog(1, "Standard", default_height=98.766)
+        self.assertEqual("98,77", api.text[(api.next_dialog, 12)])
+        labels = importlib.import_module("PD_GefaelleTool.label_format")
+        self.assertEqual("H=98,77m", labels.annotation(
+            "height", 98.766, {"height_decimals": 6}))
+
+    def test_shaft_dialog_can_override_contour_fill_and_transparency(self):
+        api = DialogAPI()
+
+        def accept(dialog, handler):
+            api.boolean[(dialog, 21)] = True
+            api.colors[(dialog, 22)] = (100, 200, 300)
+            api.boolean[(dialog, 55)] = True
+            api.colors[(dialog, 56)] = (400, 500, 600)
+            api.text[(dialog, 58)] = "35"
+            return handler(1, 0)
+
+        api.on_run = accept
+        ui = load_ui(api)
+        settings = importlib.import_module("PD_KanalTool.settings").validate({})
+        current = importlib.import_module("PD_KanalTool.core").validate_shaft(
+            shaft("s1", "RW.001", 0.0, 100.0), allow_hidden=True)
+        choice = ui.shaft_dialog(current, settings, (), ())
+        self.assertEqual([100, 200, 300], choice["shaft"]["pen_color_override"])
+        self.assertEqual([100, 200, 300], choice["shaft"]["color_override"])
+        self.assertEqual([400, 500, 600], choice["shaft"]["fill_color_override"])
+        self.assertEqual(
+            35.0, choice["shaft"]["fill_transparency_percent_override"])
 
     def test_preferences_apply_single_line_to_existing_drawing_by_default(self):
         api = DialogAPI()
@@ -876,7 +1114,11 @@ class KanalDialogTests(unittest.TestCase):
         live._prepare_network_updates = lambda pipe_updates, shaft_updates: (
             pipe_updates, shaft_updates)
         resets = []
-        api.ResetObject = lambda handle: resets.append(handle)
+        def reset(handle):
+            resets.append(handle)
+            store[handle]["render_status"] = "ok"
+            store[handle]["render_error"] = ""
+        api.ResetObject = reset
         api.ReDrawAll = lambda: None
         api.NameUndoEvent = lambda _name: None
         changed = dict(pipes["p1"], start_invert_m=100.1)
@@ -954,7 +1196,7 @@ class KanalDialogTests(unittest.TestCase):
 
         def accept(dialog, handler):
             choices = api.choices[(dialog, 13)]
-            self.assertEqual(7, len(choices))
+            self.assertEqual(8, len(choices))
             self.assertEqual(len(choices), len(set(choices.values())))
             self.assertFalse(any("schacht" in title.lower() and "verbinden" in title.lower()
                                  for title in choices.values()))
@@ -963,7 +1205,7 @@ class KanalDialogTests(unittest.TestCase):
             handler(12255, 0)
             calls = [row for row in api.choice_calls
                      if row[0] == dialog and row[1] == 13]
-            self.assertEqual(7, len(calls))
+            self.assertEqual(8, len(calls))
             api.choice_selection[(dialog, 13)] = 0
             return handler(1, 0)
 

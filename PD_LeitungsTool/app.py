@@ -2,6 +2,8 @@
 """Interactive workflow for the independent utility-route module."""
 from __future__ import absolute_import
 
+import vs
+
 from PD_KanalTool import vw_adapter as adapter
 
 from . import core
@@ -43,6 +45,10 @@ def _options(preferences):
         "label_interval_m": preferences["label_interval_m"],
         "label_frame": preferences["label_frame"],
         "label_fill": preferences["label_fill"],
+        "label_bold": preferences["label_bold"],
+        "label_underline": preferences["label_underline"],
+        "label_rotation_deg": preferences["label_rotation_deg"],
+        "label_layout": preferences["label_layout"],
         "font_name": preferences["font_name"],
         "font_size_pt": preferences["font_size_pt"],
         "draw_3d": preferences["draw_3d"],
@@ -53,7 +59,7 @@ def _options(preferences):
     }
 
 
-def _create(preferences, paths=None):
+def _create(preferences, paths=None, source_handles=None):
     paths = tuple(paths or ())
     values = ui.route_dialog(preferences, None, len(paths))
     if values is None:
@@ -67,6 +73,10 @@ def _create(preferences, paths=None):
 
     def complete(point_paths):
         handles = live.create(point_paths, values, preferences)
+        for source in tuple(source_handles or ()):
+            vs.DelObject(source)
+        if source_handles:
+            vs.ReDrawAll()
         adapter.alert(
             "%d Leitungstrasse(n) erstellt. Doppelklick öffnet die Bearbeitung; "
             "Höhenketten bleiben je Einzelleitung getrennt." % len(handles))
@@ -92,6 +102,10 @@ def _editable_route(original, values):
     else:
         result["route_heights_m"] = original["route_heights_m"]
         result["heights_m"] = original["heights_m"]
+        # Without the explicit rebuild switch the stored height chain remains
+        # authoritative; do not persist contradictory start/slope fields.
+        result["start_height_m"] = original["start_height_m"]
+        result["slope_percent"] = original["slope_percent"]
     result = core.validate_route(result)
     terrain_geometry_keys = (
         "spacing_m", "axis_reference", "round_corners", "fillet_radius_m",
@@ -135,7 +149,11 @@ def run(action=None):
             quantity_reporting.begin_changes()
             quantity_batch = True
         if action == "sources":
-            _create(preferences, sources)
+            source_handles = tuple(
+                handle for handle in adapter.selected_handles()
+                if adapter.object_type(handle) in (
+                    adapter.TYPE_LINE, adapter.TYPE_POLYGON, adapter.TYPE_POLYLINE))
+            _create(preferences, sources, source_handles)
         elif action == "draw":
             _create(preferences)
         elif action == "edit":
@@ -175,7 +193,7 @@ def run(action=None):
             if report["cover_samples"]:
                 text += (
                     " DGM-Prüfung: %d Stützpunkte (Abstand höchstens 1,00 m), "
-                    "Überdeckung %.3f bis %.3f m, %d Unterschreitung(en)." %
+                    "Überdeckung %.2f bis %.2f m, %d Unterschreitung(en)." %
                     (report["cover_samples"], report["minimum_cover_m"],
                      report["maximum_cover_m"], report["cover_shortfalls"]))
             adapter.alert(text)

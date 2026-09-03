@@ -60,7 +60,7 @@ def cover_at_surface(shaft, surface_elevation_m):
     surface_m = _finite_number(surface_elevation_m, "Geländehöhe")
     if surface_m + 1e-9 < invert_m:
         raise TerrainRuleError(
-            "Die Geländehöhe %.3f m liegt unter der Schachtsohle %.3f m; "
+            "Die Geländehöhe %.2f m liegt unter der Schachtsohle %.2f m; "
             "Schachtsohle und Rohre wurden nicht verändert." % (surface_m, invert_m))
     result = copy.deepcopy(shaft)
     result["kd_m"] = surface_m

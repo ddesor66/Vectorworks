@@ -23,6 +23,8 @@ LIGHT_GRAY = (54000, 54000, 54000)
 LAYER_REPAGINATE = 156
 LAYER_SHEET_WIDTH = 165
 LAYER_SHEET_HEIGHT = 166
+LAYER_PAGE_WIDTH = 167
+LAYER_PAGE_HEIGHT = 168
 
 
 def _safe_name(value, fallback="Schacht"):
@@ -178,13 +180,26 @@ def _logo(path, factor):
     vs.SetClass(handle, SHEET_CLASS)
 
 
-def _cover_position(shaft, connections, radius_mm, cover_radius_mm):
+def _cover_position(shaft, connections, radius_mm, cover_radius_mm,
+                    special_scale=None):
     if shaft.get("cover_placement") == "center":
         return 0.0, 0.0
     # core expects mathematical directions: 0° is +X, counter-clockwise.
     angles = [math.degrees(math.atan2(row["direction"][1], row["direction"][0]))
               for row in connections]
     direction = math.radians(core.largest_angular_gap_bisector(angles))
+    if (shaft.get("structure_type") == "special" and
+            shaft.get("special_outline_m") and special_scale is not None):
+        outline = shaft["special_outline_m"]
+        xs, ys = [row[0] for row in outline], [row[1] for row in outline]
+        center_x = (min(xs) + max(xs)) * 0.5
+        center_y = (min(ys) + max(ys)) * 0.5
+        boundary_m = core.ray_polygon_distance(
+            outline, (math.cos(direction), math.sin(direction)))
+        cover_radius_m = shaft.get("cover_diameter_m", 0.625) * 0.5
+        distance_m = max(0.0, boundary_m - cover_radius_m)
+        return ((-center_x + math.cos(direction) * distance_m) * special_scale,
+                (center_y - math.sin(direction) * distance_m) * special_scale)
     offset = max(0.0, radius_mm - cover_radius_mm)
     return math.cos(direction) * offset, -math.sin(direction) * offset
 
@@ -198,11 +213,13 @@ def _draw_plan(shaft, connections, config, preferences, factor):
     _text(reference, 104.0, top + 3.0, factor, size=7.0, center=False)
     cx, cy = 85.5, 84.0
     radius = 17.0
+    special_scale = None
     if shaft["structure_type"] == "special" and shaft.get("special_outline_m"):
         values = shaft["special_outline_m"]
         xs, ys = [row[0] for row in values], [row[1] for row in values]
         width, height = max(xs) - min(xs), max(ys) - min(ys)
         scale = min(34.0 / max(width, 0.001), 34.0 / max(height, 0.001))
+        special_scale = scale
         outline = [(cx + (x - (min(xs) + max(xs)) * 0.5) * scale,
                     cy - (y - (min(ys) + max(ys)) * 0.5) * scale) for x, y in values]
         _polyline(outline, factor, closed=True, fill=False, weight=13)
@@ -215,9 +232,12 @@ def _draw_plan(shaft, connections, config, preferences, factor):
             _oval(cx, cy, inner_radius, inner_radius, factor, fill=False, weight=7)
     body_diameter = (core.shaft_outer_diameter_m(shaft)
                      if shaft["structure_type"] == "round" else shaft.get("diameter_m", 1.0))
-    cover_radius = max(3.0, radius * shaft.get("cover_diameter_m", 0.625) /
-                       max(body_diameter, 0.001))
-    ox, oy = _cover_position(shaft, connections, radius, min(radius, cover_radius))
+    cover_radius = (max(3.0, shaft.get("cover_diameter_m", 0.625) * special_scale * 0.5)
+                    if special_scale is not None else
+                    max(3.0, radius * shaft.get("cover_diameter_m", 0.625) /
+                        max(body_diameter, 0.001)))
+    ox, oy = _cover_position(
+        shaft, connections, radius, min(radius, cover_radius), special_scale)
     _oval(cx + ox, cy + oy, min(radius, cover_radius), min(radius, cover_radius),
           factor, fill=False, weight=7)
     # Clock ticks and cardinal labels make the angular reference explicit.
@@ -284,9 +304,9 @@ def _draw_section(shaft, connections, config, preferences, factor):
     layout = {row["connection_id"]: row
               for row in shaft_sheet.section_label_layout(
                   connections, top_mm=shaft_top + 8.0, bottom_mm=shaft_bottom - 5.0)}
-    for index, row in enumerate(connections):
+    for row in connections:
         actual_y = shaft_top + (high - row["invert_m"]) / span * (shaft_bottom - shaft_top)
-        side = -1.0 if index % 2 == 0 else 1.0
+        side = -1.0 if layout[row["connection_id"]]["side"] == "left" else 1.0
         edge = shaft_left if side < 0 else shaft_right
         outer = edge + side * 14.0
         _line((edge, actual_y), (outer, actual_y), factor, weight=10)
@@ -299,7 +319,7 @@ def _draw_section(shaft, connections, config, preferences, factor):
             row["dn_mm"])
         _text(text, label_x, baseline - 1.5, factor, size=6.8)
     _text("Tiefe %s m" % core.format_number(
-        shaft["kd_m"] - shaft["ks_m"], preferences["length_decimals"]),
+        shaft["kd_m"] - shaft["ks_m"], 2),
         left + 4.0, bottom - 7.0, factor, size=7.0, bold=True)
     construction = core.shaft_construction_material_label(shaft["construction_material"])
     if shaft["construction_material"] == "concrete":
@@ -384,10 +404,11 @@ def _set_sheet_page_size(layer, width, height, units_to_meters=None):
     ``SetDrawingRect`` alone leaves the printer-page variables unchanged in
     Vectorworks 2026 on Windows.  ``TBB_GetPageArea`` then reports the previous
     page size and the transactional page creator deletes the preview again.
-    Selectors 165/166 are stored in current document units, while
-    ``TBB_GetPageArea`` reports inches.  Mixing these units left A4 in portrait
-    orientation.  Apply the physical sheet dimensions in document units and
-    verify the orientation after every native repagination.
+    The native sheet/page selectors 165-168 and ``TBB_GetPageArea`` use physical
+    inches, independent of the document's drawing unit.  Converting these four
+    values to document units made an A4 page hundreds of inches wide in metric
+    project files.  Apply all physical dimensions in inches and use the
+    document conversion only when validating the drawing rectangle.
     """
     width = float(width)
     height = float(height)
@@ -395,50 +416,56 @@ def _set_sheet_page_size(layer, width, height, units_to_meters=None):
               float(units_to_meters))
     if factor <= 0.0 or not math.isfinite(factor):
         raise core.SewerError("Dokumenteinheiten für das Schachtblatt sind ungültig.")
-    width_units = width * 0.0254 / factor
-    height_units = height * 0.0254 / factor
-    # Repaginate the sheet first and make SetDrawingRect the final authority.
+    # SetDrawingRect works on the active layer.  Set the complete native sheet
+    # and paper dimensions afterwards, then repaginate once.  This order is
+    # also used by the production PDF viewport exporter in this repository.
+    vs.SetDrawingRect(width, height)
     # In VW 2026/Windows TBB_GetPageArea can report the printer medium in
     # portrait order even though the active sheet drawing rectangle was set
     # to the requested landscape order.  Retrying with swapped selectors left
     # the layer in portrait and then deleted the otherwise valid preview.
-    vs.SetObjectVariableReal(layer, LAYER_SHEET_WIDTH, width_units)
-    vs.SetObjectVariableReal(layer, LAYER_SHEET_HEIGHT, height_units)
+    vs.SetObjectVariableReal(layer, LAYER_SHEET_WIDTH, width)
+    vs.SetObjectVariableReal(layer, LAYER_SHEET_HEIGHT, height)
+    vs.SetObjectVariableReal(layer, LAYER_PAGE_WIDTH, width)
+    vs.SetObjectVariableReal(layer, LAYER_PAGE_HEIGHT, height)
     vs.SetObjectVariableBoolean(layer, LAYER_REPAGINATE, True)
-    vs.SetDrawingRect(width, height)
     actual = vs.TBB_GetPageArea(layer)
     if not isinstance(actual, (tuple, list)) or len(actual) < 2:
         raise core.SewerError("Schachtblatt-Seitengröße konnte nicht gelesen werden.")
     actual_width, actual_height = float(actual[0]), float(actual[1])
     exact_medium = (abs(actual_width - width) <= 0.01 and
                     abs(actual_height - height) <= 0.01)
+    if exact_medium:
+        return width, height
     same_a4_medium = (abs(actual_width - height) <= 0.01 and
                       abs(actual_height - width) <= 0.01)
-    drawing_rect = vs.GetDrawingSizeRectN(layer)
-    try:
-        top_left, bottom_right = drawing_rect
-        rect_width = abs(float(bottom_right[0]) - float(top_left[0]))
-        rect_height = abs(float(bottom_right[1]) - float(top_left[1]))
-        rect_width_inches = rect_width * factor / 0.0254
-        rect_height_inches = rect_height * factor / 0.0254
-    except (TypeError, ValueError, IndexError):
+    if same_a4_medium:
+        drawing_rect = vs.GetDrawingSizeRectN(layer)
+        try:
+            top_left, bottom_right = drawing_rect
+            rect_width = abs(float(bottom_right[0]) - float(top_left[0]))
+            rect_height = abs(float(bottom_right[1]) - float(top_left[1]))
+            rect_width_inches = rect_width * factor / 0.0254
+            rect_height_inches = rect_height * factor / 0.0254
+        except (TypeError, ValueError, IndexError):
+            raise core.SewerError(
+                "Zeichenrahmen des Schachtblatts konnte nicht gelesen werden.")
+        landscape_rect = (math.isfinite(rect_width_inches) and
+                          math.isfinite(rect_height_inches) and
+                          rect_width_inches > rect_height_inches > 0.0)
+        if landscape_rect:
+            # Some Windows printer drivers report the same physical A4 medium
+            # in portrait order. GetDrawingSizeRectN can be smaller than the
+            # physical page because of printer margins; its landscape
+            # orientation is the independent proof required for that report.
+            return width, height
         raise core.SewerError(
-            "Zeichenrahmen des Schachtblatts konnte nicht gelesen werden.")
-    landscape_rect = (math.isfinite(rect_width_inches) and
-                      math.isfinite(rect_height_inches) and
-                      abs(rect_width_inches - width) <= 0.01 and
-                      abs(rect_height_inches - height) <= 0.01)
-    if (exact_medium or same_a4_medium) and landscape_rect:
-        # Some Windows printer drivers report the same physical A4 medium in
-        # portrait order. GetDrawingSizeRectN independently proves that the
-        # Vectorworks sheet drawing rectangle used by the renderer is A4 wide.
-        return width, height
+            "Vectorworks meldet das A4-Druckmedium in Hochformat und den "
+            "Zeichenrahmen ebenfalls nicht im Querformat.")
     raise core.SewerError(
-        "Vectorworks hat für das Schachtblatt %.4f × %.4f Zoll und einen "
-        "Zeichenrahmen %.4f × %.4f Zoll statt DIN A4 quer "
-        "(%.4f × %.4f Zoll) eingestellt." %
-        (actual_width, actual_height, rect_width_inches, rect_height_inches,
-         width, height))
+        "Vectorworks hat für das Schachtblatt %.4f × %.4f Zoll statt "
+        "DIN A4 quer (%.4f × %.4f Zoll) eingestellt." %
+        (actual_width, actual_height, width, height))
 
 
 def _create_sheet_layer(name, shaft, connections, config, preferences):
@@ -483,25 +510,48 @@ def prepare_pages(shaft_handles, config, preferences, read_shaft, all_shafts, al
     previous = vs.ActLayer()
     previous_name = str(vs.GetLName(previous) or "") if previous else ""
     created = []
+    backups = []
+    installed = []
     try:
         for shaft, connections in pages:
             temp_name = "%sTMP-%s" % (SHEET_PREFIX, uuid.uuid4().hex[:10])
             layer = _create_sheet_layer(
                 temp_name, shaft, connections, config, preferences)
             created.append((layer, temp_name, SHEET_PREFIX + _safe_name(shaft["name"])))
+        # Preserve every previous valid sheet under a collision-free backup
+        # name until all replacements have been installed successfully.
+        for _layer, _temp_name, final_name in created:
+            old = vs.GetLayerByName(final_name)
+            if old:
+                backup_name = "%sBAK-%s" % (SHEET_PREFIX, uuid.uuid4().hex[:10])
+                vs.SetName(old, backup_name)
+                if str(vs.GetLName(old) or "") != backup_name:
+                    raise core.SewerError(
+                        "Vorhandenes Schachtblatt konnte nicht transaktional gesichert werden.")
+                backups.append((old, backup_name, final_name))
         final_names = []
         for layer, _temp_name, final_name in created:
-            old = vs.GetLayerByName(final_name)
-            if old and old != layer:
-                vs.DelObject(old)
             vs.SetName(layer, final_name)
             if str(vs.GetLName(layer) or "") != final_name:
                 raise core.SewerError("Schachtblatt-Layoutebene konnte nicht benannt werden.")
+            installed.append((layer, _temp_name, final_name))
             final_names.append(final_name)
         vs.Layer(final_names[0])
         vs.ReDrawAll()
+        for old, _backup_name, _final_name in backups:
+            vs.DelObject(old)
         return tuple(final_names)
     except Exception:
+        for layer, temp_name, _final_name in reversed(installed):
+            try:
+                vs.SetName(layer, temp_name)
+            except Exception:
+                pass
+        for old, _backup_name, final_name in reversed(backups):
+            try:
+                vs.SetName(old, final_name)
+            except Exception:
+                pass
         for layer, _temp_name, _final_name in created:
             try:
                 vs.DelObject(layer)
@@ -520,15 +570,22 @@ def export_pdf(layer_names, document_name):
         return False
     opened = False
     try:
-        if not vs.OpenPDFDocument(_safe_name(document_name, "PD_Schachtblaetter")):
+        # AcquireExportPDFSettingsAndLocation(False) has already collected the
+        # complete target filename.  An empty document name tells the batch
+        # exporter to use that chosen common file.
+        if not vs.OpenPDFDocument(""):
             raise core.SewerError("Vectorworks konnte die gemeinsame PDF-Datei nicht öffnen.")
         opened = True
         for name in layer_names:
             if not vs.GetLayerByName(name):
                 raise core.SewerError("Schachtblatt-Layoutebene fehlt: %s" % name)
+            # Vectorworks' batch-PDF sequence requires the named sheet to be
+            # active even when the same layer name is supplied as the page key.
+            vs.Layer(name)
             vs.ExportPDFPages(name)
         vs.ClosePDFDocument()
         opened = False
+        vs.Layer(layer_names[0])
         return True
     finally:
         if opened:

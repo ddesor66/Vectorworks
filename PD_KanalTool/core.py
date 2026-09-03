@@ -20,6 +20,8 @@ DEFAULT_CONCRETE_WALL_THICKNESS_M = 0.15
 SHAFT_PREFIX = "PD-KAN-S-"
 PIPE_PREFIX = "PD-KAN-R-"
 LABEL_PREFIX = "PD-KAN-T-"
+RIGOLE_PREFIX = "PD-KAN-RIG-"
+RIGOLE_FILL_FACTOR = 0.95
 
 
 class SewerError(ValueError):
@@ -78,6 +80,160 @@ def point(value):
     if not isinstance(value, (tuple, list)) or len(value) != 2:
         raise SewerError("Ungültiger Kanalpunkt.")
     return number(value[0], "X-Koordinate"), number(value[1], "Y-Koordinate")
+
+
+def rgb_color(value, label):
+    """Return one persistent Vectorworks RGB color (three 16-bit channels)."""
+    if not isinstance(value, (tuple, list)) or len(value) != 3:
+        raise SewerError("%s ist keine gültige Farbe." % label)
+    result = []
+    for component in value:
+        if type(component) is not int or not 0 <= component <= 65535:
+            raise SewerError("%s ist keine gültige Farbe." % label)
+        result.append(component)
+    return result
+
+
+def _rigole_local_to_world(rigole, local_xy):
+    angle = math.radians(rigole["rotation_deg"])
+    cosine, sine = math.cos(angle), math.sin(angle)
+    x, y = point(local_xy)
+    return (rigole["x_m"] + x * cosine - y * sine,
+            rigole["y_m"] + x * sine + y * cosine)
+
+
+def _rigole_world_to_local(rigole, world_xy):
+    x, y = point(world_xy)
+    dx, dy = x - rigole["x_m"], y - rigole["y_m"]
+    angle = math.radians(-rigole["rotation_deg"])
+    cosine, sine = math.cos(angle), math.sin(angle)
+    return dx * cosine - dy * sine, dx * sine + dy * cosine
+
+
+def rigole_corners(rigole):
+    """Return the four plan corners of a validated rectangular rigole."""
+    value = validate_rigole(rigole)
+    half_length = value["length_m"] * 0.5
+    half_width = value["width_m"] * 0.5
+    return tuple(_rigole_local_to_world(value, local) for local in (
+        (-half_length, -half_width), (half_length, -half_width),
+        (half_length, half_width), (-half_length, half_width)))
+
+
+def rigole_connection_xy(rigole, side, fraction):
+    """Resolve a stable side/fraction attachment to a world coordinate."""
+    value = validate_rigole(rigole)
+    side = str(side or "")
+    ratio = number(fraction, "Rigolen-Anschlusslage")
+    if side not in ("left", "right", "bottom", "top") or not -1.0 <= ratio <= 1.0:
+        raise SewerError("Ungültige Anschlusslage an der Rigole.")
+    half_length = value["length_m"] * 0.5
+    half_width = value["width_m"] * 0.5
+    local = {
+        "left": (-half_length, ratio * half_width),
+        "right": (half_length, ratio * half_width),
+        "bottom": (ratio * half_length, -half_width),
+        "top": (ratio * half_length, half_width),
+    }[side]
+    return _rigole_local_to_world(value, local)
+
+
+def project_on_rigole(rigole, world_xy, tolerance_m=None):
+    """Project a graphical click to the nearest side of the rigole.
+
+    The returned side/fraction pair remains stable when dimensions or the
+    plan rotation are edited later.
+    """
+    value = validate_rigole(rigole)
+    local_x, local_y = _rigole_world_to_local(value, world_xy)
+    half_length = value["length_m"] * 0.5
+    half_width = value["width_m"] * 0.5
+    tolerance = (max(0.25, min(value["length_m"], value["width_m"]) * 0.10)
+                 if tolerance_m is None else abs(number(tolerance_m, "Fangtoleranz")))
+    outside_x = max(0.0, abs(local_x) - half_length)
+    outside_y = max(0.0, abs(local_y) - half_width)
+    if math.hypot(outside_x, outside_y) > tolerance:
+        raise SewerError("Der Anschlusspunkt muss auf oder innerhalb der gewählten Rigole liegen.")
+    clamped_x = max(-half_length, min(half_length, local_x))
+    clamped_y = max(-half_width, min(half_width, local_y))
+    candidates = (
+        (abs(clamped_x + half_length), "left",
+         0.0 if half_width <= 1e-12 else clamped_y / half_width),
+        (abs(half_length - clamped_x), "right",
+         0.0 if half_width <= 1e-12 else clamped_y / half_width),
+        (abs(clamped_y + half_width), "bottom",
+         0.0 if half_length <= 1e-12 else clamped_x / half_length),
+        (abs(half_width - clamped_y), "top",
+         0.0 if half_length <= 1e-12 else clamped_x / half_length),
+    )
+    _distance, side, fraction = min(candidates, key=lambda row: (row[0], row[1]))
+    x_m, y_m = rigole_connection_xy(value, side, fraction)
+    return {"x_m": x_m, "y_m": y_m, "side": side,
+            "fraction": max(-1.0, min(1.0, fraction))}
+
+
+def validate_rigole(value):
+    """Normalize one managed rectangular infiltration/storage structure."""
+    if not isinstance(value, dict) or value.get("schema") != SCHEMA:
+        raise SewerError("Unbekannte Rigolendaten.")
+    result = copy.deepcopy(value)
+    result["id"] = _identity(result.get("id"), "Rigolenidentität")
+    result["name"] = str(result.get("name") or "").strip()
+    if (not result["name"] or len(result["name"]) > 64 or
+            any(character in result["name"] for character in "\r\n\t")):
+        raise SewerError("Rigolenname muss aus 1 bis 64 druckbaren Zeichen bestehen.")
+    for key, label in (("x_m", "Rigolen-X"), ("y_m", "Rigolen-Y"),
+                       ("length_m", "Rigolenlänge"), ("width_m", "Rigolenbreite"),
+                       ("height_m", "Rigolenhöhe"), ("bottom_m", "Unterkante Rigole"),
+                       ("terrain_top_m", "Oberkante Gelände")):
+        result[key] = number(result.get(key), label)
+    if not 0.10 <= result["length_m"] <= 1000.0:
+        raise SewerError("Die Rigolenlänge muss zwischen 0,10 m und 1000,00 m liegen.")
+    if not 0.10 <= result["width_m"] <= 1000.0:
+        raise SewerError("Die Rigolenbreite muss zwischen 0,10 m und 1000,00 m liegen.")
+    if not 0.10 <= result["height_m"] <= 100.0:
+        raise SewerError("Die Rigolenhöhe muss zwischen 0,10 m und 100,00 m liegen.")
+    result["top_m"] = result["bottom_m"] + result["height_m"]
+    if result["terrain_top_m"] + 1e-9 < result["top_m"]:
+        raise SewerError("Die Oberkante Gelände darf nicht unter der Oberkante der Rigole liegen.")
+    result["rotation_deg"] = number(
+        result.get("rotation_deg", 0.0), "Rigolendrehung") % 360.0
+    result["slope_angle_deg"] = number(
+        result.get("slope_angle_deg", 60.0), "Böschungswinkel")
+    if result["slope_angle_deg"] not in (45.0, 60.0):
+        raise SewerError("Der Böschungswinkel der Rigolenbaugrube muss 45° oder 60° betragen.")
+    result["fill_color"] = rgb_color(
+        result.get("fill_color", [36000, 52000, 65535]), "Rigolen-Füllfarbe")
+    result["pen_color"] = rgb_color(
+        result.get("pen_color", [0, 20000, 50000]), "Rigolen-Umrahmungsfarbe")
+    result["transparency_percent"] = number(
+        result.get("transparency_percent", 50.0), "Rigolen-Transparenz")
+    if not 0.0 <= result["transparency_percent"] <= 100.0:
+        raise SewerError("Die Rigolen-Transparenz muss zwischen 0 % und 100 % liegen.")
+    result["note"] = str(result.get("note") or "").replace(
+        "\r\n", "\n").replace("\r", "\n").strip()
+    if len(result["note"]) > 2000 or "\t" in result["note"]:
+        raise SewerError("Der freie Rigolentext ist ungültig oder zu lang.")
+    connections = []
+    for raw in result.get("connections", ()):
+        if not isinstance(raw, dict):
+            raise SewerError("Ungültige Rigolen-Anschlussdaten.")
+        node_id = _identity(raw.get("node_id"), "Rigolen-Anschlussknoten")
+        side = str(raw.get("side") or "")
+        fraction = number(raw.get("fraction"), "Rigolen-Anschlusslage")
+        if side not in ("left", "right", "bottom", "top") or not -1.0 <= fraction <= 1.0:
+            raise SewerError("Ungültige Anschlusslage an der Rigole.")
+        invert = number(raw.get("invert_m"), "Rigolen-Anschlusshöhe")
+        if not result["bottom_m"] - 1e-9 <= invert <= result["top_m"] + 1e-9:
+            raise SewerError("Die Rigolen-Anschlusshöhe muss innerhalb der Bauwerkshöhe liegen.")
+        connections.append({"node_id": node_id, "side": side,
+                            "fraction": fraction, "invert_m": invert})
+    if len({row["node_id"] for row in connections}) != len(connections):
+        raise SewerError("Ein Rigolen-Anschlussknoten ist doppelt vorhanden.")
+    result["connections"] = connections
+    result["gross_volume_m3"] = result["length_m"] * result["width_m"] * result["height_m"]
+    result["storage_volume_m3"] = result["gross_volume_m3"] * RIGOLE_FILL_FACTOR
+    return result
 
 
 def path(points):
@@ -224,7 +380,49 @@ def special_outline(points):
     polygon_area(values)
     if len(set(values)) != len(values):
         raise SewerError("Die Kontur des Sonderschachts enthält doppelte Eckpunkte.")
+    edges = tuple(zip(values, values[1:] + values[:1]))
+
+    def orientation(first, second, third):
+        return ((second[0] - first[0]) * (third[1] - first[1]) -
+                (second[1] - first[1]) * (third[0] - first[0]))
+
+    def intersects(first, second):
+        a, b = first
+        c, d = second
+        o1, o2 = orientation(a, b, c), orientation(a, b, d)
+        o3, o4 = orientation(c, d, a), orientation(c, d, b)
+
+        def on_segment(first_point, second_point, point_value):
+            return (min(first_point[0], second_point[0]) - 1e-9 <= point_value[0] <=
+                    max(first_point[0], second_point[0]) + 1e-9 and
+                    min(first_point[1], second_point[1]) - 1e-9 <= point_value[1] <=
+                    max(first_point[1], second_point[1]) + 1e-9)
+
+        strict = ((o1 > 1e-9 and o2 < -1e-9 or o1 < -1e-9 and o2 > 1e-9) and
+                  (o3 > 1e-9 and o4 < -1e-9 or o3 < -1e-9 and o4 > 1e-9))
+        touching = ((abs(o1) <= 1e-9 and on_segment(a, b, c)) or
+                    (abs(o2) <= 1e-9 and on_segment(a, b, d)) or
+                    (abs(o3) <= 1e-9 and on_segment(c, d, a)) or
+                    (abs(o4) <= 1e-9 and on_segment(c, d, b)))
+        return strict or touching
+
+    for first_index, first in enumerate(edges):
+        for second_index, second in enumerate(edges[first_index + 1:], first_index + 1):
+            adjacent = (second_index == first_index + 1 or
+                        first_index == 0 and second_index == len(edges) - 1)
+            if not adjacent and intersects(first, second):
+                raise SewerError(
+                    "Die Kontur des Sonderschachts darf sich nicht selbst überschneiden.")
     return values
+
+
+def pipe_axis_offset_m(pipe):
+    """Axis height above the true inner invert of a validated pipe."""
+    value = validate_pipe(pipe)
+    outside_radius = value["outside_diameter_mm"] / 2000.0
+    if value.get("hollow_3d", True):
+        return outside_radius - value["wall_thickness_mm"] / 1000.0
+    return outside_radius
 
 
 def ray_polygon_distance(points, direction):
@@ -748,6 +946,28 @@ def validate_shaft(value, allow_hidden=False):
         drops.append({"pipe_id": _identity(value.get("pipe_id"), "Haltung am Absturz"),
                       "upper_invert_m": upper, "lower_invert_m": lower})
     result["drops"] = drops
+    # ``color_override`` is the legacy shaft contour override.  Keep reading
+    # and writing it so existing drawings retain their appearance while new
+    # objects can independently override contour, fill and fill transparency.
+    pen_override = result.get("pen_color_override", result.get("color_override"))
+    result["pen_color_override"] = (
+        list(rgb_color(pen_override, "individuelle Schacht-Linienfarbe"))
+        if pen_override is not None else None)
+    result["color_override"] = copy.deepcopy(result["pen_color_override"])
+    fill_override = result.get("fill_color_override")
+    result["fill_color_override"] = (
+        list(rgb_color(fill_override, "individuelle Schacht-Füllfarbe"))
+        if fill_override is not None else None)
+    transparency_override = result.get("fill_transparency_percent_override")
+    if transparency_override is None:
+        result["fill_transparency_percent_override"] = None
+    else:
+        transparency_override = number(
+            transparency_override, "individuelle Schacht-Fülltransparenz")
+        if not 0.0 <= transparency_override <= 100.0:
+            raise SewerError(
+                "Individuelle Schacht-Fülltransparenz muss zwischen 0 und 100 % liegen.")
+        result["fill_transparency_percent_override"] = transparency_override
     if result["kd_m"] < result["ks_m"]:
         raise SewerError("Deckelhöhe KD muss über oder auf der Sohlhöhe KS liegen.")
     return result
@@ -834,9 +1054,17 @@ def validate_network(pipes, shafts):
     if len(names) != len(set(names)):
         raise SewerError("Schachtbezeichnungen sind doppelt vorhanden.")
     known = set(shaft_ids)
+    pipe_ids = [value["id"] for value in pipes]
+    if len(pipe_ids) != len(set(pipe_ids)):
+        raise SewerError("Rohridentitäten sind doppelt vorhanden.")
+    shafts_by_id = {value["id"]: value for value in shafts}
     for pipe in pipes:
         if pipe["start_id"] not in known or pipe["end_id"] not in known:
             raise SewerError("Eine Kanalstrecke besitzt ein nicht verbundenes Ende.")
+        if (shafts_by_id[pipe["start_id"]]["kind"] != pipe["kind"] or
+                shafts_by_id[pipe["end_id"]]["kind"] != pipe["kind"]):
+            raise SewerError(
+                "Kanalart einer Haltung und ihrer beiden Anschlussknoten muss übereinstimmen.")
     return pipes, shafts
 
 
@@ -970,8 +1198,38 @@ def pipe_label(pipe, preferences):
     second = "DN %d %s" % (pipe["dn_mm"], pipe["material"])
     technical = first + ("\n" if pipe["label_layout"] == "two_line" else " | ") + second
     if preferences.get("pipe_name_visible", True) and pipe["name"]:
-        return pipe["name"] + " | " + technical
+        # The holding name is an optional heading.  It must never consume the
+        # technical one-/two-line layout selected for slope, length and pipe
+        # data, and therefore always occupies its own first line.
+        return pipe["name"] + "\n" + technical
     return technical
+
+
+def rigole_label(rigole, preferences):
+    """Build the framed plan label from the single persistent data source."""
+    value = validate_rigole(rigole)
+    length_decimals = int(preferences.get("length_decimals", 2))
+    height_decimals = 2
+    lines = [value["name"]]
+    if value.get("note"):
+        lines.extend(value["note"].splitlines())
+    lines.extend((
+        "L × B × H = %s × %s × %s m" % (
+            format_number(value["length_m"], length_decimals),
+            format_number(value["width_m"], length_decimals),
+            format_number(value["height_m"], height_decimals)),
+        "UK Rigole = %s m | OK Gelände = %s m" % (
+            format_number(value["bottom_m"], height_decimals),
+            format_number(value["terrain_top_m"], height_decimals)),
+        "Rigolenvolumen = %s m³" % format_number(
+            value["gross_volume_m3"], 2),
+        "Rückhaltevolumen (95 %% FV) = %s m³" % format_number(
+            value["storage_volume_m3"], 2),
+    ))
+    for index, connection in enumerate(value.get("connections", ()), 1):
+        lines.append("Anschluss %d | KS = %s m" % (
+            index, format_number(connection["invert_m"], height_decimals)))
+    return "\n".join(lines)
 
 
 def connection_plan_name(role, tag, role_count):
@@ -988,7 +1246,7 @@ def shaft_label(shaft, endpoint_rows, preferences):
     if not shaft["visible"]:
         return ""
     def height(value):
-        return format_number(value, preferences["height_decimals"])
+        return format_number(value, 2)
     def station_text(reference):
         if not reference or not reference.get("station_enabled") or reference.get(
                 "station_m") is None:
@@ -1038,22 +1296,14 @@ def shaft_label(shaft, endpoint_rows, preferences):
     if shaft["structure_type"] == "house":
         return "%s\nAnschlusshöhe = %s m" % (shaft["name"], height(shaft["ks_m"]))
     if shaft["diameter_m"] == 0.0:
-        if detailed:
-            if len(rows) == 1:
-                lines = ["KS = %s m" % height(rows[0]["height"])]
-            else:
-                lines = [
-                "%s %s | KS = %s m" %
-                (row["tag"], row["role_label"], height(row["height"]))
-                for row in rows]
-        else:
-            values = incoming + [value for value in outgoing if value not in incoming]
-            lines = ["KS = %s m" % height(min(values) if values else shaft["ks_m"])]
+        values = ([row["height"] for row in rows] if detailed else
+                  incoming + [value for value in outgoing if value not in incoming])
+        lines = ["KS = %s m" % height(min(values) if values else shaft["ks_m"])]
         station = station_text(shaft.get("connection_station"))
         if station:
             lines.append(station)
         return "\n".join(lines)
-    depth = format_number(shaft["kd_m"] - shaft["ks_m"], preferences["length_decimals"])
+    depth = format_number(shaft["kd_m"] - shaft["ks_m"], 2)
     lines = [shaft["name"]]
     if shaft.get("note"):
         # The freely editable supplementary designation belongs immediately
@@ -1072,12 +1322,19 @@ def shaft_label(shaft, endpoint_rows, preferences):
         # differ. Tags such as Z1/A1 are reserved for multiple connections of
         # the same role; the pipe material does not belong in this plan label.
         shown_heights = {
-            round(row["height"], preferences["height_decimals"]) for row in rows}
+            round(row["height"], 2) for row in rows}
         if len(shown_heights) > 1:
             counts = {
                 role: sum(1 for row in rows if row["role"] == role)
                 for role in ("in", "out")}
-            for row in rows:
+            # The plan information field has a fixed technical reading order:
+            # every inlet first, followed by every outlet.  The derived rows
+            # are angle-sorted for the graphical clock and may therefore be
+            # interleaved; that geometric order must not leak into the text.
+            ordered_rows = tuple(
+                row for role in ("in", "out")
+                for row in rows if row["role"] == role)
+            for row in ordered_rows:
                 lines.append("%s | KS = %s m" %
                              (connection_plan_name(
                                  row["role"], row["tag"], counts[row["role"]]),
@@ -1089,7 +1346,7 @@ def shaft_label(shaft, endpoint_rows, preferences):
             lines.append("KS = %s m" % height(common))
     else:
         shown_heights = {
-            round(value, preferences["height_decimals"])
+            round(value, 2)
             for value in incoming + outgoing}
         if len(shown_heights) > 1:
             if incoming:

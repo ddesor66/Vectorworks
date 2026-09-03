@@ -118,7 +118,9 @@ def read_route(handle, data=None, persist_move=True):
     if str(vs.GetName(handle) or "") != _route_name(route["id"]):
         raise core.UtilityError("Leitungstrassenidentität wurde geändert oder kopiert.")
     factor = adapter.units_to_meters()
-    location = vs.GetSymLoc(handle)
+    fallback_origin = data.get("origin_m", route["points_m"][0])
+    location = adapter.symbol_location_2d(
+        handle, (fallback_origin[0] / factor, fallback_origin[1] / factor))
     current_origin = float(location[0]) * factor, float(location[1]) * factor
     stored_origin = tuple(data.get("origin_m", current_origin))
     current_rotation = float(vs.GetSymRot(handle) or 0.0)
@@ -313,22 +315,31 @@ def _draw_band_path(points, width, class_value, color):
 
 
 def _text(value, xy, angle, route, preferences, factor, frame=False, fill=False):
+    text = str(value)
+    if route.get("label_layout") == "two_line" and "|" in text:
+        text = text.replace("|", "\n", 1)
     vs.TextOrigin(xy)
-    vs.CreateText(str(value))
+    vs.CreateText(text)
     handle = vs.LNewObj()
     if not handle:
         raise core.UtilityError("Leitungsbeschriftung konnte nicht erzeugt werden.")
-    text = str(value)
     vs.SetTextStyleRef(handle, 0)
     font_id = int(vs.GetFontID(route["font_name"]) or 0)
-    if font_id:
-        vs.SetTextFont(handle, 0, len(text), font_id)
+    if not font_id:
+        raise core.UtilityError(
+            "Die gewählte Schriftart ist in Vectorworks nicht verfügbar: %s" %
+            route["font_name"])
+    vs.SetTextFont(handle, 0, len(text), font_id)
     vs.SetTextSize(handle, 0, len(text), route["font_size_pt"])
+    style = (1 if route.get("label_bold") else 0) | (
+        4 if route.get("label_underline") else 0)
+    vs.SetTextStyle(handle, 0, len(text), style)
     vs.SetTextJust(handle, 2)
     vs.SetTextVertAlignN(handle, 3)
     vs.SetClass(handle, preferences["text_class"])
     vs.SetPenFore(handle, _rgb(route["text_color"]))
     vs.SetFPat(handle, 0)
+    vs.SetOpacityN(handle, 100, 100)
     if not (frame or fill):
         vs.HRotate(handle, xy, angle)
         return handle
@@ -352,12 +363,28 @@ def _text(value, xy, angle, route, preferences, factor, frame=False, fill=False)
     return handle
 
 
-def _draw_fittings(route, local_points, preferences, factor, rotation_deg=0.0):
+def _point_at_station(points, station_values, target):
+    for index in range(len(station_values) - 1):
+        if target <= station_values[index + 1] + 1e-9:
+            length = station_values[index + 1] - station_values[index]
+            ratio = 0.0 if length <= 1e-12 else (
+                target - station_values[index]) / length
+            first, second = points[index], points[index + 1]
+            return (first[0] + (second[0] - first[0]) * ratio,
+                    first[1] + (second[1] - first[1]) * ratio)
+    return points[-1]
+
+
+def _draw_fittings(route, origin, preferences, factor, rotation_deg=0.0):
     if not route["show_fittings"]:
         return
     color = _rgb(route["line_color"])
-    radius = 0.08 / factor
-    for _station, angle, point in core.bend_rows(local_points):
+    radius = max(0.08, max(route["outside_diameters_mm"]) / 2000.0) / factor
+    effective, station_values = core.rounded_path(
+        route["points_m"], route["fillet_radius_m"], route["round_corners"])
+    for station, angle, _corner in core.bend_rows(route["points_m"]):
+        point_m = _point_at_station(effective, station_values, station)
+        point = _to_local(point_m, origin, rotation_deg, factor)
         vs.Oval(((point[0] - radius), (point[1] + radius)),
                 ((point[0] + radius), (point[1] - radius)))
         marker = vs.LNewObj()
@@ -367,6 +394,56 @@ def _draw_fittings(route, local_points, preferences, factor, rotation_deg=0.0):
         if route["label_bend_angles"]:
             _text("%.1f°" % angle, (point[0] + radius * 1.4, point[1] + radius * 1.4),
                   -rotation_deg, route, preferences, factor)
+
+
+def _tube_path_faces(points, radius, segments=24):
+    """Build one watertight tube along a polyline using transported frames."""
+    values = tuple(tuple(float(component) for component in point) for point in points)
+    if len(values) < 2 or radius <= 0.0:
+        raise core.UtilityError("Ungültige 3D-Leitungsgeometrie.")
+
+    def unit(vector):
+        length = math.sqrt(sum(component * component for component in vector))
+        if length <= 1e-12:
+            raise core.UtilityError("3D-Leitung enthält einen Abschnitt ohne Länge.")
+        return tuple(component / length for component in vector)
+
+    def cross(first, second):
+        return (first[1] * second[2] - first[2] * second[1],
+                first[2] * second[0] - first[0] * second[2],
+                first[0] * second[1] - first[1] * second[0])
+
+    segment_tangents = [unit(tuple(second[i] - first[i] for i in range(3)))
+                        for first, second in zip(values, values[1:])]
+    tangents = [segment_tangents[0]]
+    for before, after in zip(segment_tangents, segment_tangents[1:]):
+        combined = tuple(before[i] + after[i] for i in range(3))
+        tangents.append(unit(combined))
+    tangents.append(segment_tangents[-1])
+    reference = (0.0, 0.0, 1.0) if abs(tangents[0][2]) < 0.9 else (0.0, 1.0, 0.0)
+    first_axis = unit(cross(tangents[0], reference))
+    rings = []
+    for center, tangent in zip(values, tangents):
+        projection = tuple(first_axis[i] - tangent[i] * sum(
+            first_axis[j] * tangent[j] for j in range(3)) for i in range(3))
+        try:
+            first_axis = unit(projection)
+        except core.UtilityError:
+            first_axis = unit(cross(tangent, reference))
+        second_axis = unit(cross(tangent, first_axis))
+        rings.append(native_graphics._ring(
+            center, radius, first_axis, second_axis, segments))
+    faces = [tuple(reversed(rings[0])), rings[-1]]
+    for lower, upper in zip(rings, rings[1:]):
+        for index in range(segments):
+            following = (index + 1) % segments
+            faces.append((lower[index], lower[following], upper[following], upper[index]))
+    return tuple(faces)
+
+
+def _draw_pipe_path_3d(points, radius, class_value, color):
+    return native_graphics._mesh(
+        _tube_path_faces(points, radius), class_value, color)
 
 
 def _to_local(point_m, origin_document, rotation_deg, factor):
@@ -398,10 +475,10 @@ def draw(handle, data):
     preferences = settings.validate(data.get("preferences"))
     ensure_classes(route, preferences)
     factor = adapter.units_to_meters()
-    origin = vs.GetSymLoc(handle)
+    origin_m = data.get("origin_m", route["points_m"][0])
+    origin = adapter.symbol_location_2d(
+        handle, (origin_m[0] / factor, origin_m[1] / factor))
     rotation = float(vs.GetSymRot(handle) or 0.0)
-    local_raw = tuple(_to_local(point, origin, rotation, factor)
-                      for point in route["points_m"])
     route_paths = core.render_route_paths(route)
     color = _rgb(route["line_color"])
     control_stations = core.stations(route["points_m"])
@@ -429,29 +506,27 @@ def draw(handle, data):
             radius = route.get("outside_diameters_mm", route["dns_mm"])[index] / 2000.0 / factor
             class_3d = core.line_class_name(
                 preferences["class_prefix"], route["utility_type"], dn, "_3D")
-            for first, second, station_a, station_b in zip(
-                    dense, dense[1:], dense_stations, dense_stations[1:]):
-                z_first = core.height_at(height_stations, heights, station_a)
-                z_second = core.height_at(height_stations, heights, station_b)
-                native_graphics._draw_pipe_3d(
-                    (first[0], first[1], (z_first - layer_z) / factor),
-                    (second[0], second[1], (z_second - layer_z) / factor),
-                    radius, class_3d, color)
+            path_3d = []
+            for point, station in zip(dense, dense_stations):
+                z_value = core.height_at(height_stations, heights, station)
+                path_3d.append((point[0], point[1], (z_value - layer_z) / factor))
+            _draw_pipe_path_3d(path_3d, radius, class_3d, color)
         if route["show_heights"]:
             control_path_m = core.control_route_paths(route)[index]
             for point_m, height in zip(control_path_m, route["route_heights_m"][index]):
                 xy = _to_local(point_m, origin, rotation, factor)
-                _text("L%d  %.3f m" % (index + 1, height), xy, -rotation,
+                _text("L%d  %.2f m" % (index + 1, height), xy, -rotation,
                       route, preferences, factor)
     if route["regular_label"]:
         reference_m, _stations = core.rounded_path(
             route["points_m"], route["fillet_radius_m"], route["round_corners"])
         for _station, xy_m, angle in core.sample_path(reference_m, route["label_interval_m"]):
             xy = _to_local(xy_m, origin, rotation, factor)
-            _text(route["label_text"], xy, angle - rotation,
+            _text(route["label_text"], xy,
+                  angle - rotation + route.get("label_rotation_deg", 0.0),
                   route, preferences, factor,
                   route["label_frame"], route["label_fill"])
-    _draw_fittings(route, local_raw, preferences, factor, rotation)
+    _draw_fittings(route, origin, preferences, factor, rotation)
     vs.ResetOrientation3D()
     rendered = dict(data, route=route, preferences=preferences,
                     origin_m=(origin[0] * factor, origin[1] * factor),
@@ -463,6 +538,11 @@ def validate_document():
     rows = []
     for handle, data in _objects().objects():
         rows.append(read_route(handle, data))
+    data_errors = tuple(_objects().object_errors())
+    if data_errors:
+        raise core.UtilityError(
+            "Beschädigte Leitungstrassen wurden gefunden:\n" +
+            "\n".join("• " + value for value in data_errors))
     length_2d = 0.0
     length_3d = 0.0
     covers = []

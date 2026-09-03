@@ -339,20 +339,27 @@ def validate_chain(chain):
     required = ("chain_id", "level", "layer_name", "points")
     if not all(key in chain for key in required):
         raise SlopeError("Unvollständige Gefälledaten.")
-    xy = [(point["x_m"], point["y_m"]) for point in chain["points"]]
+    points = chain.get("points")
+    if (not isinstance(points, (tuple, list)) or len(points) < 2 or
+            any(not isinstance(point, dict) for point in points)):
+        raise SlopeError("Die Gefälledaten enthalten keine vollständige Punktfolge.")
+    point_fields = ("number", "x_m", "y_m", "height_m")
+    if any(any(key not in point for key in point_fields) for point in points):
+        raise SlopeError("Ein Höhenpunkt besitzt unvollständige gespeicherte Daten.")
+    xy = [(point["x_m"], point["y_m"]) for point in points]
     normalize_xy(xy)
     if not isinstance(chain["chain_id"], str) or not chain["chain_id"].strip():
         raise SlopeError("Die Gefällegruppe besitzt keine gültige Identität.")
-    numbers = [point["number"] for point in chain["points"]]
+    numbers = [point["number"] for point in points]
     if any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in numbers):
         raise SlopeError("Punktnummern müssen positive ganze Zahlen sein.")
     if len(set(numbers)) != len(numbers):
         raise SlopeError("Punktnummern innerhalb einer Kette sind nicht eindeutig.")
-    for point in chain["points"]:
+    for point in points:
         _number(point["height_m"], "Punkthöhe")
         if "point_id" in point and (not isinstance(point["point_id"], str) or not point["point_id"].strip()):
             raise SlopeError("Ungültige Identität eines Höhenpunkts.")
-    identities = [point["point_id"] for point in chain["points"] if "point_id" in point]
+    identities = [point["point_id"] for point in points if "point_id" in point]
     if len(identities) != len(set(identities)):
         raise SlopeError("Ein Höhenpunkt wird in derselben Kette mehrfach verwendet.")
     segment_rows(chain)

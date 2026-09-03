@@ -6,6 +6,8 @@ import os
 
 import vs
 
+from PD_KanalTool import settings as canal_settings
+
 from . import reporting, ui
 
 
@@ -21,26 +23,44 @@ def _save_path(default_name):
 
 def run(action=None):
     try:
-        report = reporting.collect_live()
+        report_mode = "all"
+        preferences = canal_settings.load()
+        report = reporting.collect_live(preferences)
         if action is None:
-            action = ui.action_dialog(
+            selection = ui.action_dialog(
                 bool(vs.GetObject(reporting.WORKSHEET_NAME) or
                      vs.GetObject(reporting.SUMMARY_WORKSHEET_NAME)),
-                len(report["warnings"]))
+                len(report["warnings"]), preferences)
+            if selection is None:
+                return
+            changes = dict(preferences)
+            changes.update({
+                "earthwork_include_pavement": selection["include_pavement"],
+                "earthwork_pavement_thickness_m":
+                    selection["pavement_thickness_m"],
+            })
+            preferences = canal_settings.save(changes)
+            report = reporting.collect_live(preferences)
+            action = selection["action"]
+            report_mode = selection["report_mode"]
         if action is None:
             return
         if action in ("worksheet", "both"):
-            reporting.update_worksheet(report, show=True)
+            reporting.update_worksheet(
+                report, show=True, report_mode=report_mode)
         path = ""
         if action in ("xlsx", "both"):
             path = _save_path(reporting.default_xlsx_name())
             if path:
-                reporting.export_xlsx(path, report)
+                path = reporting.export_xlsx(
+                    path, report, report_mode=report_mode)
         if action == "worksheet":
             vs.AlrtDialog(
-                "Detail-Arbeitsblatt und separates Summen-Arbeitsblatt wurden vollständig aktualisiert.")
+                ("Einzelmassen-Arbeitsblatt mit Summenzeilen wurde vollständig aktualisiert."
+                 if report_mode == "details" else
+                 "Summen-Arbeitsblatt wurde vollständig aktualisiert."))
         elif path:
-            prefix = ("Mengen-Arbeitsblätter und Excel-Ausgabe wurden aktualisiert:\n"
+            prefix = ("Gewähltes Mengen-Arbeitsblatt und Excel-Ausgabe wurden aktualisiert:\n"
                       if action == "both" else "Excel-Ausgabe wurde erstellt:\n")
             vs.AlrtDialog(prefix + path)
     except Exception as error:

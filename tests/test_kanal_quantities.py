@@ -11,7 +11,9 @@ from unittest import mock
 
 sys.modules.setdefault("vs", types.ModuleType("vs"))
 
-from PD_KanalLeitungMengen import app, core, reporting
+from PD_KanalLeitungMengen import app, core, reporting, ui
+from PD_KanalTool import object_events as canal_object_events
+from PD_KanalTool import settings as canal_settings
 
 
 def _shaft(identity, name, x_m, ks_m, visible=True, structure_type="round", stub=None):
@@ -71,6 +73,16 @@ class QuantitySummaryTests(unittest.TestCase):
         self.assertAlmostEqual(20.0, rows[("RW", 300, "STB")]["length_2d_m"])
         self.assertEqual(1, rows[("RW", 150, "PP")]["holding_count"])
 
+    def test_equal_display_names_do_not_merge_independent_holdings(self):
+        shafts = (_shaft("s1", "RW.001", 0.0, 100.0),
+                  _shaft("s2", "RW.002", 10.0, 99.0),
+                  _shaft("s3", "RW.003", 20.0, 100.0),
+                  _shaft("s4", "RW.004", 30.0, 99.0))
+        pipes = (_pipe("p1", "H-RW.002", "s1", "s2", 100.0, 99.0, 10.0),
+                 _pipe("p2", "H-RW.002", "s3", "s4", 100.0, 99.0, 10.0))
+        rows = core.analyze(pipes, shafts, ())["pipe_summary"]
+        self.assertEqual(2, rows[0]["holding_count"])
+
     def test_stubs_and_shaft_groups_have_separate_summaries(self):
         result = _report()
         self.assertEqual(1, result["totals"]["stub_count"])
@@ -97,6 +109,29 @@ class QuantitySummaryTests(unittest.TestCase):
         self.assertIn("01 Kanalhaltungen", repr(detail))
         self.assertNotIn("00 Summen", repr(detail))
 
+    def test_user_can_select_summary_or_complete_individual_masses(self):
+        report = _report()
+        summary = reporting.xlsx_sheets(report, "summary")
+        details = reporting.xlsx_sheets(report, "details")
+        complete = reporting.xlsx_sheets(report, "all")
+        self.assertEqual(["00_Summen"], [row["name"] for row in summary])
+        self.assertNotIn("00_Summen", [row["name"] for row in details])
+        self.assertIn("01_Kanalhaltungen", [row["name"] for row in details])
+        self.assertIn("06_Stutzen", [row["name"] for row in details])
+        self.assertIn("08_Einzelmassen_Summen", [row["name"] for row in details])
+        self.assertEqual(1 + len(details), len(complete))
+
+    def test_individual_mass_tables_contain_item_and_overall_totals(self):
+        sheets = {row["name"]: row for row in reporting.detail_sheets(_report())}
+        for name in ("01_Kanalhaltungen", "02_Schaechte", "03_Rigolen",
+                     "04_Leitungen", "05_Erdmassen", "06_Stutzen"):
+            self.assertIn("SUMME", repr(sheets[name]["rows"]))
+        overall = repr(sheets["08_Einzelmassen_Summen"]["rows"])
+        self.assertIn("Aushub gesamt", overall)
+        self.assertIn("Oberbau gesamt", overall)
+        self.assertIn("Wiederverfüllung gesamt", overall)
+        self.assertIn("Verbau gesamt", overall)
+
 
 class ExcelExportTests(unittest.TestCase):
     def test_excel_export_is_a_parseable_ooxml_workbook(self):
@@ -107,7 +142,7 @@ class ExcelExportTests(unittest.TestCase):
                 self.assertIsNone(archive.testzip())
                 names = set(archive.namelist())
                 self.assertIn("xl/workbook.xml", names)
-                self.assertEqual(6, len([
+                self.assertEqual(9, len([
                     name for name in names if name.startswith("xl/worksheets/sheet")]))
                 for name in names:
                     if name.endswith(".xml"):
@@ -120,6 +155,86 @@ class ExcelExportTests(unittest.TestCase):
         )
         with mock.patch.object(app, "vs", fake_vs):
             self.assertEqual(r"C:\Temp\Kanal-Mengen.xlsx", app._save_path("Vorgabe.xlsx"))
+
+    def test_locked_existing_excel_target_gets_a_new_sibling_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = os.path.join(directory, "mengen.xlsx")
+            with open(target, "wb") as stream:
+                stream.write(b"already open")
+            calls = []
+
+            def writer(path, _sheets, creator=None):
+                calls.append((path, creator))
+                if len(calls) == 1:
+                    raise PermissionError(13, "Zugriff verweigert", path)
+                return path
+
+            with mock.patch.object(reporting, "write_xlsx", side_effect=writer):
+                result = reporting.export_xlsx(target, _report(), "details")
+            self.assertEqual(target, calls[0][0])
+            self.assertNotEqual(target, result)
+            self.assertIn("mengen_neu_", os.path.basename(result))
+            self.assertEqual(result, calls[1][0])
+
+    def test_quantity_dialog_returns_saved_pavement_choice(self):
+        class DialogAPI(object):
+            def __init__(self):
+                self.boolean = {}
+                self.enabled = {}
+                self.choices = []
+
+            def __getattr__(self, name):
+                if name.startswith(("Create", "SetFirst", "SetBelow", "SetRight")):
+                    return lambda *args: 1
+                raise AttributeError(name)
+
+            def SetBooleanItem(self, _dialog, item, value):
+                self.boolean[item] = bool(value)
+
+            def GetBooleanItem(self, _dialog, item):
+                return self.boolean.get(item, False)
+
+            def EnableItem(self, _dialog, item, value):
+                self.enabled[item] = bool(value)
+
+            def AddChoice(self, _dialog, item, label, index):
+                self.choices.append((item, label, index))
+
+            def SelectChoice(self, *_args):
+                return None
+
+            def GetSelectedChoiceIndex(self, *_args):
+                return 0
+
+            def GetEditReal(self, *_args):
+                return True, 0.20
+
+            def VerifyLayout(self, _dialog):
+                return True
+
+            def RunLayoutDialog(self, _dialog, handler):
+                handler(ui.INIT, 0)
+                return 1 if handler(1, 0) == 1 else 0
+
+        api = DialogAPI()
+        with mock.patch.object(ui, "vs", api):
+            result = ui.action_dialog(
+                False, 0, {"earthwork_include_pavement": True,
+                           "earthwork_pavement_thickness_m": 0.20})
+        self.assertEqual("worksheet", result["action"])
+        self.assertEqual("summary", result["report_mode"])
+        self.assertTrue(result["include_pavement"])
+        self.assertEqual(0.20, result["pavement_thickness_m"])
+        self.assertIn((20, "Alle Einzelmassen mit Summenzeilen", 1), api.choices)
+        self.assertTrue(api.enabled[18])
+
+    def test_legacy_centimetre_setting_is_migrated_to_metres(self):
+        migrated = canal_settings.validate({
+            "earthwork_include_pavement": True,
+            "earthwork_pavement_thickness_cm": 20.0,
+        })
+        self.assertAlmostEqual(0.20, migrated["earthwork_pavement_thickness_m"])
+        self.assertNotIn("earthwork_pavement_thickness_cm", migrated)
 
 
 class RefreshBatchTests(unittest.TestCase):
@@ -139,6 +254,141 @@ class RefreshBatchTests(unittest.TestCase):
             self.assertFalse(reporting.refresh_existing())
             self.assertTrue(reporting.end_changes(refresh=True))
         self.assertEqual([False], calls)
+
+    def test_delete_observer_is_attached_to_canal_and_utility_objects_once(self):
+        associations = []
+        api = types.SimpleNamespace(
+            AddAssociation=lambda owner, kind, target: (
+                associations.append((owner, kind, target)) or True),
+            RemoveAssociation=lambda _owner, _kind, _target: False,
+            CreateCustomObjectN=lambda *_args: object(),
+            GetObject=lambda _name: None)
+        with mock.patch.object(reporting, "vs", api), mock.patch.object(
+                reporting.canal_objects, "objects", return_value=(
+                    ("PIPE", {"role": "sewer_pipe"}),
+                    ("LABEL", {"role": "sewer_label"}))), mock.patch.object(
+                reporting.utility_objects, "objects", return_value=(
+                    ("ROUTE", {"role": "utility_route"}),)), mock.patch.object(
+                reporting, "_delete_observer", return_value="OBSERVER"):
+            self.assertEqual("OBSERVER", reporting.synchronize_delete_observer())
+        self.assertEqual(
+            [("PIPE", 5, "OBSERVER"), ("ROUTE", 5, "OBSERVER")],
+            associations)
+
+    def test_delete_observer_reset_forces_quantity_rebuild(self):
+        api = types.SimpleNamespace(
+            vsoGetEventInfo=lambda: (3, 0),
+            GetCustomObjectInfo=lambda: (True, "PD KAN Objekt", "OBSERVER", None, None))
+        with mock.patch.object(canal_object_events, "vs", api), mock.patch.object(
+                canal_object_events.live, "reset", return_value=None), mock.patch.object(
+                canal_object_events.live_objects, "data_of", return_value={
+                    "schema": 2,
+                    "role": canal_object_events.live_objects.QUANTITY_OBSERVER_ROLE,
+                }), mock.patch.object(reporting, "refresh_existing", return_value=True) as refresh:
+            canal_object_events.run()
+        refresh.assert_called_once_with(force=True)
+
+    def test_live_report_drops_a_normally_deleted_holding(self):
+        shafts = (
+            ("S1", _shaft("s1", "RW.001", 0.0, 100.0)),
+            ("S2", _shaft("s2", "RW.002", 10.0, 99.9)),
+        )
+        inventory = [("P1", _pipe(
+            "p1", "H-RW.002", "s1", "s2", 100.0, 99.9, 10.0))]
+        api = types.SimpleNamespace(
+            GetFName=lambda: "Löschtest.vwx", GetFPathName=lambda: "")
+        preferences = {
+            "earthwork_include_pavement": False,
+            "earthwork_pavement_thickness_m": 0.0,
+        }
+        with mock.patch.object(reporting, "vs", api), mock.patch.object(
+                reporting.canal_live, "shaft_records", return_value=shafts), mock.patch.object(
+                reporting.canal_live, "pipe_records", side_effect=lambda: tuple(inventory)), mock.patch.object(
+                reporting.canal_live, "rigole_records", return_value=()), mock.patch.object(
+                reporting.utility_objects, "objects", return_value=()), mock.patch.object(
+                reporting.utility_objects, "object_errors", return_value=()):
+            before = reporting.collect_live(preferences)
+            inventory[:] = []  # Native Delete removed the PIO from the document.
+            after = reporting.collect_live(preferences)
+        self.assertEqual(1, len(before["canals"]))
+        self.assertEqual(10.0, before["totals"]["canal_length_2d_m"])
+        self.assertEqual(0, len(after["canals"]))
+        self.assertEqual(0.0, after["totals"]["canal_length_2d_m"])
+
+
+class WorksheetTransactionTests(unittest.TestCase):
+    class Resource(object):
+        def __init__(self, name):
+            self.name = name
+            self.deleted = False
+
+    def test_detail_selection_creates_and_shows_only_detail_worksheet(self):
+        resources = []
+        shown = []
+
+        def get_object(name):
+            return next((row for row in resources
+                         if not row.deleted and row.name == name), None)
+
+        def create_ws(name, _rows, _columns):
+            row = self.Resource(name)
+            resources.append(row)
+            return row
+
+        api = types.SimpleNamespace(
+            CreateWS=create_ws, GetObject=get_object,
+            SetName=lambda handle, name: setattr(handle, "name", name),
+            GetName=lambda handle: handle.name,
+            DelObject=lambda handle: setattr(handle, "deleted", True),
+            GetWSImage=lambda _handle: None,
+            ShowWS=lambda handle, _show: shown.append(handle.name))
+        rows = ({"kind": "normal", "values": ("x",)},)
+        with mock.patch.object(reporting, "vs", api), mock.patch.object(
+                reporting, "worksheet_rows", return_value=rows), mock.patch.object(
+                reporting, "_populate", return_value=None):
+            result = reporting.update_worksheet(
+                {"prepared": True}, show=True, report_mode="details")
+        self.assertEqual(reporting.WORKSHEET_NAME, result.name)
+        self.assertEqual([reporting.WORKSHEET_NAME], shown)
+        self.assertIsNone(get_object(reporting.SUMMARY_WORKSHEET_NAME))
+
+    def test_second_install_failure_restores_both_old_worksheets(self):
+        old_detail = self.Resource(reporting.WORKSHEET_NAME)
+        old_summary = self.Resource(reporting.SUMMARY_WORKSHEET_NAME)
+        resources = [old_detail, old_summary]
+
+        def get_object(name):
+            return next((row for row in resources
+                         if not row.deleted and row.name == name), None)
+
+        def create_ws(name, _rows, _columns):
+            row = self.Resource(name)
+            resources.append(row)
+            return row
+
+        install_count = {"value": 0}
+
+        def set_name(handle, name):
+            if name in (reporting.WORKSHEET_NAME, reporting.SUMMARY_WORKSHEET_NAME):
+                install_count["value"] += 1
+                if install_count["value"] == 2:
+                    raise RuntimeError("injected second install failure")
+            handle.name = name
+
+        api = types.SimpleNamespace(
+            CreateWS=create_ws, GetObject=get_object, SetName=set_name,
+            GetName=lambda handle: handle.name,
+            DelObject=lambda handle: setattr(handle, "deleted", True),
+            GetWSImage=lambda _handle: None,
+            ShowWS=lambda _handle, _show: None)
+        rows = ({"kind": "normal", "values": ("x",)},)
+        with mock.patch.object(reporting, "vs", api), mock.patch.object(
+                reporting, "worksheet_rows", return_value=rows), mock.patch.object(
+                reporting, "_populate", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "injected"):
+                reporting.update_worksheet({"prepared": True}, show=False)
+        self.assertIs(old_detail, get_object(reporting.WORKSHEET_NAME))
+        self.assertIs(old_summary, get_object(reporting.SUMMARY_WORKSHEET_NAME))
 
 
 if __name__ == "__main__":

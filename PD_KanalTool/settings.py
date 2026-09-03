@@ -18,6 +18,21 @@ DEFAULTS = {
         "SW": [42000, 22000, 5000],
         "MW": [43000, 8000, 52000],
     },
+    "shaft_pen_colors": {
+        "RW": [0, 26000, 65535],
+        "SW": [42000, 22000, 5000],
+        "MW": [43000, 8000, 52000],
+    },
+    "shaft_fill_colors": {
+        "RW": [0, 26000, 65535],
+        "SW": [42000, 22000, 5000],
+        "MW": [43000, 8000, 52000],
+    },
+    "shaft_fill_transparency_percent": {
+        "RW": 50.0,
+        "SW": 50.0,
+        "MW": 50.0,
+    },
     "dns": list(core.DEFAULT_DNS),
     "materials": list(core.DEFAULT_MATERIALS),
     "default_kind": "RW",
@@ -35,6 +50,8 @@ DEFAULTS = {
     "pipe_name_visible": True,
     "pipe_name_point_size": 9.0,
     "shaft_name_point_size": 10.0,
+    "connection_point_size": 9.0,
+    "shaft_connection_labels_visible": True,
     "shaft_name_text_style": "bold",
     "text_offset_mm": 3.0,
     "height_decimals": 2,
@@ -70,6 +87,8 @@ DEFAULTS = {
     "sheet_clock_mode": "plan_north",
     "sheet_north_rotation_deg": 0.0,
     "sheet_include_section": True,
+    "earthwork_include_pavement": False,
+    "earthwork_pavement_thickness_m": 0.0,
 }
 
 
@@ -91,7 +110,22 @@ def _merge(defaults, supplied):
 
 
 def validate(value):
+    supplied = value if isinstance(value, dict) else {}
     result = _merge(DEFAULTS, value)
+    # Version 1.2.2 stored this value in centimetres.  Read it once for
+    # compatibility, but normalize and persist the setting in metres.
+    if ("earthwork_pavement_thickness_m" not in supplied and
+            "earthwork_pavement_thickness_cm" in supplied):
+        result["earthwork_pavement_thickness_m"] = core.number(
+            supplied.get("earthwork_pavement_thickness_cm", 0.0),
+            "Oberbaustärke") / 100.0
+    # Before separate shaft graphics existed, the system color controlled
+    # both pipes and shafts.  Migrate an older customized color table so the
+    # first redraw does not unexpectedly change existing shaft colors.
+    if "shaft_pen_colors" not in supplied:
+        result["shaft_pen_colors"] = copy.deepcopy(result["colors"])
+    if "shaft_fill_colors" not in supplied:
+        result["shaft_fill_colors"] = copy.deepcopy(result["colors"])
     if result.get("schema") != 1:
         raise core.SewerError("Unbekannte Kanaleinstellungen.")
     colors = {}
@@ -102,6 +136,24 @@ def validate(value):
             raise core.SewerError("Ungültige Standardfarbe für %s." % kind)
         colors[kind] = list(color)
     result["colors"] = colors
+    for setting_key, label in (
+            ("shaft_pen_colors", "Schacht-Linienfarbe"),
+            ("shaft_fill_colors", "Schacht-Füllfarbe")):
+        validated = {}
+        for kind in core.KINDS:
+            validated[kind] = list(core.rgb_color(
+                result[setting_key].get(kind), "%s für %s" % (label, kind)))
+        result[setting_key] = validated
+    transparency = {}
+    for kind in core.KINDS:
+        value = core.number(
+            result["shaft_fill_transparency_percent"].get(kind),
+            "Schacht-Fülltransparenz für %s" % kind)
+        if not 0.0 <= value <= 100.0:
+            raise core.SewerError(
+                "Schacht-Fülltransparenz für %s muss zwischen 0 und 100 %% liegen." % kind)
+        transparency[kind] = value
+    result["shaft_fill_transparency_percent"] = transparency
     dns = sorted({core._dn(value) for value in result.get("dns", ())})
     if not dns:
         raise core.SewerError("Mindestens ein Nenndurchmesser ist erforderlich.")
@@ -133,6 +185,7 @@ def validate(value):
             ("point_size", "Schriftgröße", 1.0, 200.0),
             ("pipe_name_point_size", "Schriftgröße des Haltungsnamens", 1.0, 200.0),
             ("shaft_name_point_size", "Schriftgröße des Schachtnamens", 1.0, 200.0),
+            ("connection_point_size", "Schriftgröße der Zu- und Ablaufhöhen", 1.0, 200.0),
             ("text_offset_mm", "Textabstand", 0.0, 100.0)):
         result[key] = core.number(result.get(key), label)
         if not low <= result[key] <= high:
@@ -143,6 +196,8 @@ def validate(value):
         raise core.SewerError("Die Standard-Rohrwandstärke muss zwischen 0,1 und 1000 mm liegen.")
     result["hollow_3d"] = bool(result.get("hollow_3d", True))
     result["pipe_name_visible"] = bool(result.get("pipe_name_visible", True))
+    result["shaft_connection_labels_visible"] = bool(
+        result.get("shaft_connection_labels_visible", True))
     result["shaft_name_text_style"] = str(
         result.get("shaft_name_text_style", "bold"))
     if result["shaft_name_text_style"] not in (
@@ -170,6 +225,9 @@ def validate(value):
     for key in ("height_decimals", "slope_decimals", "length_decimals"):
         if type(result.get(key)) is not int or not 0 <= result[key] <= 6:
             raise core.SewerError("Nachkommastellen müssen zwischen 0 und 6 liegen.")
+    # Elevations are shown consistently throughout all PD tools. Keep the
+    # stored engineering values untouched and normalize only their display.
+    result["height_decimals"] = 2
     if result["label_layout"] not in ("one_line", "two_line"):
         raise core.SewerError("Ungültiges Beschriftungsformat.")
     if result["join_style"] not in ("round", "bevel", "miter"):
@@ -218,6 +276,16 @@ def validate(value):
     result["sheet_north_rotation_deg"] = core.number(
         result.get("sheet_north_rotation_deg", 0.0), "Plannord-Drehung") % 360.0
     result["sheet_include_section"] = bool(result.get("sheet_include_section", True))
+    result["earthwork_include_pavement"] = bool(
+        result.get("earthwork_include_pavement", False))
+    result["earthwork_pavement_thickness_m"] = core.number(
+        result.get("earthwork_pavement_thickness_m", 0.0), "Oberbaustärke")
+    if not 0.0 <= result["earthwork_pavement_thickness_m"] <= 5.0:
+        raise core.SewerError("Die Oberbaustärke muss zwischen 0 m und 5,00 m liegen.")
+    if (result["earthwork_include_pavement"] and
+            result["earthwork_pavement_thickness_m"] <= 0.0):
+        raise core.SewerError(
+            "Bei berücksichtigtem Oberbau muss eine Stärke größer als 0 m angegeben werden.")
     for key in ("class_prefix", "flow_arrow_class", "text_class"):
         result[key] = str(result.get(key) or "").strip()
         if not result[key] or any(char in result[key] for char in "\r\n\t"):

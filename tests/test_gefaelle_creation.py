@@ -167,13 +167,15 @@ class GefaelleCreationTests(unittest.TestCase):
         payloads = {}
         resets = []
         labelled = []
+        associations = []
 
         api.ActLayer = lambda: "SOURCE-LAYER"
         api.GetLName = lambda layer: layer
         api.Layer = lambda _name: None
         api.GetName = lambda handle: names.get(handle, "")
         api.GetObject = lambda name: handles.get(name)
-        api.AddAssociation = lambda *_args: True
+        api.AddAssociation = lambda owner, kind, target: (
+            associations.append((owner, kind, target)) or True)
         api.HMoveForward = lambda *_args: None
         api.ResetObject = lambda handle: resets.append(handle)
         api.DSelectAll = lambda: None
@@ -231,6 +233,10 @@ class GefaelleCreationTests(unittest.TestCase):
                              for handle, _role in labelled))
         self.assertIn("STAKE-1", resets)
         self.assertIn("STAKE-2", resets)
+        self.assertIn(("PD-1", 4, "PD-3"), associations)
+        self.assertIn(("PD-3", 5, "PD-1"), associations)
+        self.assertIn(("PD-2", 4, "PD-3"), associations)
+        self.assertIn(("PD-3", 5, "PD-2"), associations)
 
 
 if __name__ == "__main__":

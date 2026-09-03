@@ -16,6 +16,61 @@ from . import vw_adapter as adapter
 
 
 PLUGIN = live_model.PLUGIN
+DELETE_WITH_OWNER = 4
+RESET_ON_OWNER_DELETE = 5
+
+
+def _remove_association(owner, kind, target):
+    removed = 0
+    if not hasattr(vs, "RemoveAssociation"):
+        return removed
+    for _index in range(32):
+        if not owner or not target or not vs.RemoveAssociation(owner, kind, target):
+            break
+        removed += 1
+    return removed
+
+
+def _sync_chain_associations(chain_handle, old_names, new_names):
+    """Make point/chain deletion atomic while preserving surviving points."""
+    old_names = tuple(dict.fromkeys(str(name) for name in old_names if name))
+    new_names = tuple(dict.fromkeys(str(name) for name in new_names if name))
+    handles = {name: vs.GetObject(name) for name in set(old_names + new_names)}
+    missing = [name for name in new_names if not handles.get(name)]
+    if missing:
+        raise core.SlopeError(
+            "Gefällepunkt für die Löschverknüpfung fehlt: %s" % ", ".join(missing))
+    removed = []
+    for point_handle in handles.values():
+        if not point_handle:
+            continue
+        # Remove legacy point->chain reset links and duplicates of the new
+        # two-direction graph.
+        for owner, kind, target in (
+                (point_handle, RESET_ON_OWNER_DELETE, chain_handle),
+                (point_handle, DELETE_WITH_OWNER, chain_handle),
+                (chain_handle, RESET_ON_OWNER_DELETE, point_handle)):
+            for _index in range(_remove_association(owner, kind, target)):
+                removed.append((owner, kind, target))
+    added = []
+    try:
+        for name in new_names:
+            point_handle = handles[name]
+            if not vs.AddAssociation(point_handle, DELETE_WITH_OWNER, chain_handle):
+                raise core.SlopeError(
+                    "Gefälle-Löschverknüpfung konnte nicht angelegt werden.")
+            added.append((point_handle, DELETE_WITH_OWNER, chain_handle))
+            if not vs.AddAssociation(chain_handle, RESET_ON_OWNER_DELETE, point_handle):
+                raise core.SlopeError(
+                    "Gefälle-Aktualisierungsverknüpfung konnte nicht angelegt werden.")
+            added.append((chain_handle, RESET_ON_OWNER_DELETE, point_handle))
+    except Exception:
+        for owner, kind, target in reversed(added):
+            _remove_association(owner, kind, target)
+        for owner, kind, target in removed:
+            vs.AddAssociation(owner, kind, target)
+        raise
+    return tuple(handles[name] for name in new_names)
 
 
 def data_of(handle):
@@ -269,10 +324,7 @@ def create(chain, preferences):
         connector = _new_object((0., 0.), data, live_model.CHAIN_PREFIX+chain["chain_id"], created)
         label_owners.append(connector)
         adapter.write_chain(connector, chain)
-        for name in references:
-            point_handle = vs.GetObject(name)
-            if not vs.AddAssociation(point_handle, 5, connector):
-                raise core.SlopeError("Löschverknüpfung konnte nicht angelegt werden.")
+        for point_handle in _sync_chain_associations(connector, (), references):
             vs.HMoveForward(point_handle, True)
         for handle in label_owners:
             live_labels.ensure(handle, data_of(handle), created)
@@ -307,6 +359,7 @@ def replace(replacements, preferences):
     prepared = [(h, c, _display(c, preferences if preferences is not None else data_of(h)["preferences"]))
                 for h, c in replacements]
     snapshots, created, reset, obsolete_labels = {}, [], [], []
+    association_changes = []
     previous = str(vs.GetLName(vs.ActLayer()))
 
     def remember(handle):
@@ -319,6 +372,7 @@ def replace(replacements, preferences):
         for handle, chain, display in prepared:
             remember(handle)
             data = data_of(handle)
+            old_refs = tuple(data.get("points", ()))
             refs = []
             if not adapter._activate_layer(chain["layer_name"]):
                 raise core.SlopeError("Gefällebene konnte nicht aktiviert werden.")
@@ -353,18 +407,23 @@ def replace(replacements, preferences):
                     _set_point_fields(peer, point)
                     grade_compat.ensure(peer, point_data, point, created)
                     registry[point["number"]] = (peer, point_data, point)
-                    if not vs.AddAssociation(peer, 5, handle):
-                        raise core.SlopeError("Löschverknüpfung konnte nicht angelegt werden.")
                     live_labels.ensure(peer, point_data, created)
                 refs.append(vs.GetName(peer))
             new_chain = dict(chain, point_output=display["output"])
             data.update(display, chain=new_chain, points=refs)
             write_data(handle, data)
             adapter.write_chain(handle, new_chain)
+            association_changes.append((handle, old_refs, tuple(refs)))
+            _sync_chain_associations(handle, old_refs, refs)
             obsolete_labels.extend(live_labels.ensure(handle, data, created))
         for handle in reset+created:
             vs.ResetObject(handle)
     except Exception:
+        for chain_handle, old_refs, new_refs in reversed(association_changes):
+            try:
+                _sync_chain_associations(chain_handle, new_refs, old_refs)
+            except Exception:
+                pass
         for handle in reversed(created):
             vs.DelObject(handle)
         for handle, data, height in snapshots.values():
@@ -418,6 +477,11 @@ def reset():
             live_labels.draw(handle, data)
             return
         if data["role"] == "chain":
+            # Existing drawings used point->chain reset links. Migrate them on
+            # the first normal regeneration so deleting either side cannot
+            # leave a chain with a missing point reference.
+            _sync_chain_associations(handle, data.get("points", ()),
+                                     data.get("points", ()))
             chain = read_chain(handle, data)
             live_render.draw_chain(handle, data, chain)
             live_labels.reset_for(data)

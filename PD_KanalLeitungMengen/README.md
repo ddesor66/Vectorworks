@@ -4,15 +4,23 @@ Das Modul liest ausschließlich die persistenten Fachobjekte des Kanal- und
 Leitungstools. Gezeichnete Hilfsgeometrie, Beschriftungen, Achsen und
 3D-Darstellungen werden nicht nochmals gezählt.
 
+Ein dokumentinterner Löschbeobachter aktualisiert bestehende Detail- und
+Summenblätter auch nach dem normalen Vectorworks-Löschen. Gelöschte Haltungen,
+Schächte, Rigolen und Leitungstrassen werden deshalb nicht weiter mitgeführt.
+
 ## Aufruf
 
 Im Einstieg `PD Kanal- und Leitungstool` steht neben `Kanal` und `Leitung` die
 Auswahl `Massenermittlung`. Derselbe Befehl ist in beiden Fachdialogen
-enthalten. Beim ersten Aufruf entstehen das reine Summen-Arbeitsblatt
-`PD Kanal- und Leitungssummen` und das Detail-Arbeitsblatt
-`PD Kanal- und Leitungsmengen`. Existiert mindestens eines davon, werden beide
-nach erfolgreichen Änderungen der verwalteten Kanal- und Leitungsobjekte sowie
-beim Öffnen oder Export erneut aus den aktuellen Objektdaten aufgebaut.
+enthalten. Vor der Ausgabe wird zwischen der kompakten `Summenliste` und
+`Alle Einzelmassen mit Summenzeilen` gewählt. Die Einzelmassen erscheinen im
+Arbeitsblatt `PD Kanal- und Leitungsmengen`; die Summenliste im Arbeitsblatt
+`PD Kanal- und Leitungssummen`. Automatische Aktualisierungen bauen nur die im
+Dokument bereits vorhandene Ausgabeart neu auf.
+
+Die Oberbaustärke wird vollständig in Metern eingegeben, gespeichert und im
+Bericht ausgegeben. Eine ältere, noch in Zentimetern gespeicherte Einstellung
+wird beim ersten Laden automatisch und wertgleich in Meter umgerechnet.
 
 ## Enthaltene Mengen
 
@@ -27,7 +35,14 @@ beim Öffnen oder Export erneut aus den aktuellen Objektdaten aufgebaut.
 - Rohrgraben-Aushub und Verbaufläche je Haltung und Rechenabschnitt
 - rechteckige Schachtbaugrube mit 50 cm Arbeitsraum und 15 cm Verbau je Seite
 - Excel-Ausgabe mit eigenem Summenblatt, Kanalhaltungen, Schächten, Leitungen,
-  Erdmassen sowie Annahmen und Prüfhinweisen
+  Stutzen, Erdmassen sowie Annahmen und Prüfhinweisen
+- vollständige Einzelzeilen mit einer Summenzeile je Tabelle und einem
+  abschließenden Blatt `Einzelmassen Summen`
+
+Ist eine vorhandene Zieldatei während des Exports in Excel geöffnet, bleibt
+sie unverändert. Die neue Ausgabe wird stattdessen im selben Ordner unter
+einem Namen mit dem Zusatz `_neu_<Zeitstempel>` gespeichert und dieser Pfad
+im Abschlussdialog angezeigt.
 
 Interne Objekt- und Netz-IDs werden nicht ausgegeben. Detailzeilen verwenden
 stattdessen Haltungs-, Schacht- und Trassennamen. Objektänderungen werden als

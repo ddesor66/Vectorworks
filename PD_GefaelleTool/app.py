@@ -179,7 +179,7 @@ def _insert_point(preferences):
             raise core.SlopeError("Die angezeigte Punktnummer ist inzwischen vergeben. Bitte erneut einfügen.")
         vw_adapter.replace_chain_group(handle, changed, None)
         vw_adapter.alert("Höhenpunkt P:%d mit H=%s m eingefügt. Beide Teilverbindungen sind aktualisiert." %
-                         (next_number, ("%.4f" % info["height_m"]).replace(".", ",")))
+                         (next_number, ("%.2f" % info["height_m"]).replace(".", ",")))
 
     vw_adapter.pick_connection_point(complete)
 
@@ -241,7 +241,7 @@ def _edit_chain(preferences):
         vw_adapter.alert("Kette P:%d → P:%d auf %s %% geändert. P:%d bleibt auf H=%s m." %
                          (info["from_number"], info["to_number"],
                           ("%.4f" % info["slope_percent"]).replace(".", ","), info["fixed_number"],
-                          ("%.4f" % info["fixed_height_m"]).replace(".", ",")))
+                          ("%.2f" % info["fixed_height_m"]).replace(".", ",")))
         return
 
 

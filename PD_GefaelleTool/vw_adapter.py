@@ -215,6 +215,10 @@ def extract_path(handle):
         points = [_point(vs.GetSegPt1(handle)),
                   _point(vs.GetSegPt2(handle))]
     elif object_type in (TYPE_POLYGON, TYPE_POLYLINE):
+        if vs.IsPolyClosed(handle):
+            raise core.SlopeError(
+                "Geschlossene Polygone besitzen keinen eindeutigen Gefälleanfang und kein "
+                "eindeutiges Ende. Bitte die Kontur am gewünschten Anfangspunkt öffnen.")
         count = int(vs.GetVertNum(handle) or 0)
         for index in range(1, count + 1):
             if object_type == TYPE_POLYLINE:
@@ -241,10 +245,33 @@ def _curve_vertices(handle, factor):
     vertices = []
     count = int(vs.GetVertNum(handle))
     for index in range(1, count + 1):
-        point, kind, radius = vs.GetPolylineVertex(handle, index)
-        vertices.append(dict(x_m=float(point[0]) * factor, y_m=float(point[1]) * factor,
-                             type=int(kind), radius_m=float(radius) * factor))
+        raw = vs.GetPolylineVertex(handle, index)
+        if not isinstance(raw, (tuple, list)) or len(raw) < 3:
+            raise core.SlopeError(
+                "Vectorworks hat Kurvenstützpunkt %d nicht bereitgestellt." % index)
+        point, kind, radius = raw[:3]
+        point = _point(point)
+        if point is None:
+            raise core.SlopeError(
+                "Vectorworks liefert ungültige Koordinaten für Kurvenstützpunkt %d." % index)
+        try:
+            kind, radius = int(kind), float(radius)
+        except (TypeError, ValueError) as error:
+            raise core.SlopeError(
+                "Vectorworks liefert ungültige Daten für Kurvenstützpunkt %d." % index) from error
+        if not math.isfinite(radius):
+            raise core.SlopeError(
+                "Vectorworks liefert einen ungültigen Radius für Kurvenstützpunkt %d." % index)
+        vertices.append(dict(x_m=point[0] * factor, y_m=point[1] * factor,
+                             type=kind, radius_m=radius * factor))
     return vertices
+
+
+def _curve_result(value, description):
+    """Validate PointAlongPolyN's documented ``(ok, point, tangent)`` tuple."""
+    if not isinstance(value, (tuple, list)) or len(value) < 3:
+        raise core.SlopeError("Vectorworks hat %s nicht bereitgestellt." % description)
+    return bool(value[0]), value[1], value[2]
 
 
 def _curve_evaluator(handle, factor, length_m):
@@ -252,19 +279,29 @@ def _curve_evaluator(handle, factor, length_m):
     # than HPerimN's arc length. Calibrate that domain against the independent
     # last control vertex; preserve the original curve and true arc length.
     native_length = length_m
-    end = vs.PointAlongPolyN(handle, length_m / factor, 1e-7 / factor)
+    end = _curve_result(
+        vs.PointAlongPolyN(handle, length_m / factor, 1e-7 / factor),
+        "das Ende der Gefällekurve")
     if not end[0]:
-        if not vs.PointAlongPolyN(handle, 0., 1e-7 / factor)[0]:
+        start = _curve_result(
+            vs.PointAlongPolyN(handle, 0., 1e-7 / factor),
+            "den Anfang der Gefällekurve")
+        if not start[0]:
             raise core.SlopeError("Der Kurvenanfang konnte nicht bestimmt werden.")
         low, high = 0., length_m
         for _ in range(48):
             middle = (low + high) * .5
-            result = vs.PointAlongPolyN(handle, middle / factor, 1e-7 / factor)
+            result = _curve_result(
+                vs.PointAlongPolyN(handle, middle / factor, 1e-7 / factor),
+                "einen Punkt der Gefällekurve")
             if result[0]:
                 low, end = middle, result
             else:
                 high = middle
-        endpoint = _point(vs.GetPolylineVertex(handle, vs.GetVertNum(handle))[0])
+        raw_endpoint = vs.GetPolylineVertex(handle, vs.GetVertNum(handle))
+        if not isinstance(raw_endpoint, (tuple, list)) or not raw_endpoint:
+            raise core.SlopeError("Der letzte Kurvenstützpunkt konnte nicht gelesen werden.")
+        endpoint = _point(raw_endpoint[0])
         actual = _point(end[1])
         if (endpoint is None or actual is None
                 or math.hypot(actual[0]-endpoint[0], actual[1]-endpoint[1])*factor > 1e-5
@@ -273,7 +310,10 @@ def _curve_evaluator(handle, factor, length_m):
         native_length = low
 
     def at(station):
-        return vs.PointAlongPolyN(handle, station / length_m * native_length / factor, 1e-7 / factor)
+        return _curve_result(
+            vs.PointAlongPolyN(
+                handle, station / length_m * native_length / factor, 1e-7 / factor),
+            "einen Punkt der Gefällekurve")
 
     def evaluate(station_m):
         if not math.isfinite(station_m) or not 0 <= station_m <= length_m:
@@ -348,16 +388,18 @@ def cancel_point_input():
 
 def draw_points(on_complete, first_point=None, help_text=None,
                 undo_name="PD Gefällelinie zeichnen"):
-    """Collect an unlimited chain and finish on Vectorworks' real double-click."""
-    del undo_name
-    _pick_points(None, on_complete, first_point, help_text)
+    """Collect an unlimited chain with the event-enabled native VST."""
+    from . import point_tool
+    point_tool.start(on_complete, first_point, help_text, undo_name)
 
 
 def draw_height_points(on_complete):
     """Collect several independent point positions with the native tool."""
     help_text = ("Höhenpunkte nacheinander anklicken. Doppelklick: Positionsfolge abschließen. "
                  "Esc: ohne Erstellung abbrechen.")
-    _pick_points(None, on_complete, help_text=help_text)
+    from . import point_tool
+    point_tool.start(on_complete, help_text=help_text,
+                     undo_name="PD Höhenpunkte setzen", minimum_points=1)
 
 
 def _pick_points(count, on_complete, first_point=None, help_text=None):
@@ -569,9 +611,15 @@ def pick_height_object(help_text, excluded_names=()):
 
     vs.SetTempToolHelpStr(str(help_text))
     try:
-        handle, _point = vs.TrackObject(accepted)
+        result = vs.TrackObject(accepted)
     finally:
         vs.SetTempToolHelpStr("")
+    if result is None:
+        return None
+    if isinstance(result, (tuple, list)):
+        handle = result[0] if result else None
+    else:
+        handle = result
     if not handle:
         return None
     data = live_objects.data_of(handle)
@@ -707,7 +755,7 @@ def read_chain(handle):
     try:
         value = json.loads(raw)
         chain = core.validate_chain(value)
-    except (ValueError, TypeError, core.SlopeError):
+    except (ValueError, TypeError, KeyError, IndexError, core.SlopeError):
         return None
     return _with_current_coordinates(handle, chain)
 
@@ -775,7 +823,15 @@ def _with_current_heights(handle, chain):
         child, loci = vs.FInGroup(handle), []
         while child:
             if vs.GetTypeN(child) == 9:
-                loci.append(vs.GetLocus3D(child))
+                try:
+                    raw = vs.GetLocus3D(child)
+                    if (not isinstance(raw, (tuple, list)) or len(raw) < 3 or
+                            not all(math.isfinite(float(value)) for value in raw[:3])):
+                        raise ValueError
+                    loci.append(tuple(float(value) for value in raw[:3]))
+                except (TypeError, ValueError, IndexError):
+                    raise core.SlopeError(
+                        "Ein 3D-Höhenpunkt ist nicht lesbar; Gefällegruppe bleibt unverändert.")
             child = vs.NextObj(child)
         if len(loci) != len(chain["points"]):
             raise core.SlopeError("Höhenpunkte wurden entfernt oder ergänzt; Gefällegruppe bleibt unverändert.")
@@ -894,6 +950,7 @@ def _set_object_graphics(handle, class_value):
     vs.SetClass(handle, str(class_value["name"]))
     vs.SetPenFore(handle, _rgb(class_value['color']))
     vs.SetLSN(handle, 2)
+    vs.SetOpacityN(handle, 100, 100)
 
 
 def _create_line(first, second, class_value):
@@ -980,6 +1037,7 @@ def _create_text(value, origin, angle, class_value, preferences):
     vs.SetClass(handle, str(class_value["name"]))
     vs.SetPenFore(handle, _rgb(class_value['color']))
     vs.SetFPat(handle, 0)
+    vs.SetOpacityN(handle, 100, 100)
     return handle
 
 
@@ -1254,11 +1312,21 @@ def export_terrain_data(kind, preferences):
             moved.append(child)
             index = len(moved) - 1
             if kind == "points":
-                x, y, z = vs.GetLocus3D(child)
+                raw = vs.GetLocus3D(child)
+                if (not isinstance(raw, (tuple, list)) or len(raw) < 3 or
+                        not all(math.isfinite(float(value)) for value in raw[:3])):
+                    raise core.SlopeError(
+                        "Ein erzeugter 3D-Geländepunkt konnte nicht geprüft werden.")
+                x, y, z = (float(value) for value in raw[:3])
                 point_geometry._check_xyz((x*factor, y*factor, (z+layer_z)*factor), points[index])
             else:
                 for i, expected in enumerate(paths[index]):
-                    x, y, z = vs.GetPolyPt3D(child, i)
+                    raw = vs.GetPolyPt3D(child, i)
+                    if (not isinstance(raw, (tuple, list)) or len(raw) < 3 or
+                            not all(math.isfinite(float(value)) for value in raw[:3])):
+                        raise core.SlopeError(
+                            "Ein erzeugter 3D-Geländestützpunkt konnte nicht geprüft werden.")
+                    x, y, z = (float(value) for value in raw[:3])
                     point_geometry._check_xyz((x*factor, y*factor, z*factor), expected)
         vs.DelObject(group)
         group = None

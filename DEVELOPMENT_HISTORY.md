@@ -159,3 +159,148 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   Initialisierungsereignis befüllt. Dadurch erscheinen bereits erkannte,
   benannte Geländemodelle sowie Aktionen und Rollen zuverlässig in den
   Pulldown-Menüs von Vectorworks 2026.
+- Kanaltool 1.1.5 / Leitungstool 1.0.3 / Gefälletool 1.17.8 /
+  Mengenausgabe 1.1.2: Vollständige modulübergreifende Fehlerprüfung mit
+  abgesicherten nativen Rückgabewerten, transaktionalem Objektaufbau,
+  konsistenter 3D-Rohr- und Sonderschachtgeometrie, stabiler Kopierlogik,
+  belastbaren Schachtblättern und topologisch korrekter Massenermittlung.
+  Enter, Doppelklick und Rücktaste steuern das Punktwerkzeug zuverlässig;
+  ein einzelner Höhenpunkt lässt sich ebenfalls abschließen. Leitungsdaten,
+  eigene Typen, Beschriftungsstile und beschädigte Datensätze werden ohne
+  Folgeschäden verarbeitet. 132 automatisierte Regressionstests sichern den
+  freigegebenen Stand ab.
+- Kanaltool 1.2.0 / Mengenausgabe 1.2.0: Rigolenbauwerke werden als eigene,
+  verwaltete Kanalobjekte mit frei wählbaren Abmessungen, Unterkante,
+  Geländeoberkante, Grundrissdrehung, Farben, Transparenz und Freitext geführt.
+  Die gerahmte Beschriftung beginnt mittig und erhält beim Verschieben eine
+  Bezugslinie; Grundriss und einfacher 3D-Körper bleiben gemeinsam editierbar.
+  Kanäle lassen sich an einer grafisch gewählten Rigolenkante und einer
+  explizit abgefragten Anschlusshöhe anbinden. Die Massenermittlung enthält
+  Brutto- und 95-%-Wasservolumen, Böschungsbaugruben mit 45°/60° und 0,50 m
+  Arbeitsraum, Aushub, optionalen künftigen Oberbau als eigene Position sowie
+  die entsprechend verminderte Wiederverfüllung. Ein eigenes Rigolenblatt ist
+  Bestandteil der Arbeitsblatt- und Excel-Ausgabe. 143 automatisierte
+  Regressionstests sichern den gemeinsamen Stand ab.
+- Kanaltool 1.2.1: Die Renderprüfung parametrischer Kanalobjekte arbeitet ohne
+  erneutes Schreiben in den laufenden Objektcallback. Dadurch werden neue
+  Kanalstränge nach dem grafischen Abschluss nicht mehr zurückgerollt und zwei
+  vorhandene Schächte wieder zuverlässig mit einer Haltung verbunden. Native
+  Zeichenwerkzeuge halten außerdem die automatische Mengentabelle während der
+  vollständigen Geometrieerzeugung an und aktualisieren sie danach genau einmal;
+  ein Tabellenfehler kann die bereits erstellte Kanalgeometrie nicht abbrechen.
+  147 automatisierte Regressionstests sichern den Stand ab.
+- Kanaltool 1.2.2: Unterschiedliche Zu- und Ablaufhöhen werden nicht mehr als
+  unbewegliche Unterobjekte des Schachts gezeichnet. Jeder Anschluss erhält ein
+  eigenes verknüpftes Beschriftungsobjekt, das unabhängig verschoben und gedreht
+  werden kann; seine manuelle Lage bleibt bei Schachtaktualisierungen erhalten.
+  Die Anschluss-Schriftgröße ist separat in den kompakten Voreinstellungen
+  wählbar. Bestehende Schächte werden beim nächsten Höhen- oder
+  Darstellungsupdate automatisch auf die neuen Anschlussbeschriftungen
+  umgestellt. 148 automatisierte Regressionstests sichern den Stand ab.
+- Kanaltool 1.2.3: Der wahlweise ein- und ausschaltbare Haltungsname wird als
+  eigene erste Zeile oberhalb von Gefälle und Länge gezeichnet. Die ein- oder
+  zweizeilige Darstellung steuert ausschließlich die darunterliegenden
+  technischen Angaben; beim Ausschalten entfällt nur die Namenszeile.
+  148 automatisierte Regressionstests sichern den Stand ab.
+- Kanaltool 1.2.4: Beim Einsetzen eines Schachts oder Anschlusses in eine
+  vorhandene Haltung werden vor dem Austausch nicht nur die abhängigen
+  Beschriftungen, sondern auch die nativen Verknüpfungen der alten Haltung zu
+  beiden Endschächten gezielt entfernt. Nur die alte Haltung wird gelöst; die
+  bereits erzeugten Ersatzhaltungen bleiben verbunden. Scheitert das Löschen,
+  werden die gelösten Altverknüpfungen und Beschriftungen wiederhergestellt.
+  Zwei zusätzliche Grenztests prüfen Erfolg und Rollback; insgesamt bestehen
+  150 automatisierte Tests.
+- Kanaltool 1.2.5: Die Umwandlung eines Rundschachts in einen Sonderschacht
+  validiert den abschließenden Vectorworks-Objekthandle erneut und akzeptiert
+  nur frei gezeichnete, geschlossene Konturen direkt auf der
+  Konstruktionsebene. Interne Polygon-Unterobjekte eines parametrischen
+  Kanalobjekts können dadurch nicht mehr als später ungültige Vorlage in den
+  Ablauf gelangen. Der bereits transaktional aktualisierte Schacht und seine
+  angeschlossenen Haltungen werden nicht länger ein zweites Mal zurückgesetzt;
+  die Ausgangskontur wird erst nach erfolgreichem Neuaufbau entfernt und bleibt
+  bei einem Fehler für den nächsten Versuch erhalten. Vier zusätzliche
+  Wiederholungs- und Handle-Grenztests sichern den Absturzfall ab; insgesamt
+  bestehen 154 automatisierte Tests.
+- Kanaltool 1.2.6: Die Vierpunktkontur der Rigole wird vor der 3D-Extrusion
+  ausdrücklich geschlossen. Vectorworks erzeugt dadurch einen nativen
+  Extrusionskörper mit vier Seiten sowie Boden- und Deckfläche statt einer
+  offenen U-förmigen Mantelfläche. Der globale Polygonmodus wird nach der
+  Profilerzeugung zuverlässig zurückgestellt und der resultierende Objekttyp
+  gegen den dokumentierten Extrusionstyp 24 geprüft. Zwei zusätzliche
+  API-Grenztests prüfen die geschlossene Erzeugungsreihenfolge und weisen ein
+  falsches Vectorworks-Ergebnis zurück; insgesamt bestehen 156 automatisierte
+  Tests.
+- Kanaltool 1.2.7: Schachtblatt- und Papiergröße werden über die nativen
+  Layervariablen 165 bis 168 in den von Vectorworks erwarteten physischen Zoll
+  gesetzt. Die fehlerhafte zusätzliche Umrechnung mit den Dokumenteinheiten,
+  die A4-Blätter in metrischen Projekten auf mehrere hundert Zoll vergrößerte,
+  entfällt. Beim gemeinsamen PDF-Export wird jede Schachtblatt-Layoutebene vor
+  dem Schreiben aktiviert und der im Exportdialog gewählte gemeinsame
+  Dateiname verwendet. Zwei zusätzliche API-Grenztests prüfen die
+  Einheitenunabhängigkeit und die vollständige Mehrseiten-PDF-Befehlsfolge;
+  insgesamt bestehen 158 automatisierte Tests.
+- Kanaltool 1.2.8 / Leitungstool 1.0.4 / Gefälletool 1.17.9 /
+  Mengenausgabe 1.2.1: Normales Löschen verwendet nun gerichtete
+  Vectorworks-Objektverknüpfungen. Das Löschen eines Schachts oder
+  Gefällepunktes entfernt nur wirklich abhängige Haltungen beziehungsweise
+  Ketten; das Löschen einer Haltung, Trasse oder Kette aktualisiert die
+  verbleibenden Endobjekte, ohne sie zu entfernen. Alte Reset-Verknüpfungen
+  werden beim nächsten Objektneuaufbau automatisch migriert. Ein unsichtbarer
+  Mengen-Löschbeobachter erzwingt anschließend den Neuaufbau vorhandener
+  Detail- und Summenblätter aus dem realen Restbestand. Vier zusätzliche
+  Regressionstests prüfen Kanal- und Gefällerichtungen, den Löschbeobachter und
+  das Entfernen gelöschter Haltungen aus der Mengenermittlung; insgesamt
+  bestehen 162 automatisierte Tests.
+- Kanaltool und gemeinsamer Kanal-/Leitungsaufruf 1.2.9: Die
+  Schachtbearbeitung führt jeden einmündenden Anschluss als eigenes, stabil
+  über die Haltungs-ID zugeordnetes Feld (`Z1`, `Z2` usw.). Eine Änderung
+  betrifft nur die gewählte Zulaufhaltung; Gefälle, Fließrichtungsprüfung,
+  Schachtsohle und Beschriftungen werden anschließend gemeinsam neu aufgebaut.
+  Die ausdrückliche Gleichschaltung aller Zu- und Abläufe bleibt als Option
+  erhalten. Zwei zusätzliche Dialog- und Transaktionstests prüfen die
+  getrennte Änderung sowie die unveränderte Nachbarhaltung; insgesamt bestehen
+  164 automatisierte Tests.
+- Kanaltool und gemeinsamer Kanal-/Leitungsaufruf 1.3.0, Leitungstool 1.0.5,
+  Gefälletool 1.18.0 und Mengenausgabe 1.2.2: Der Schachteditor verwendet vier
+  kurze Register. Sämtliche Zulaufsohlen bleiben gleichzeitig in einer
+  mehrspaltigen Matrix sichtbar; auch 20 geprüfte Zuläufe erzeugen keine
+  überlange Einzelspalte und benötigen keine Auswahlliste. Zu jedem Zulauf wird
+  der beim Ändern sofort aktualisierte Höhenversatz zur direkt darunter
+  stehenden Ablaufsohle in Zentimetern angezeigt. Alle Dialog-Grundfunktionen
+  der Kanal-, Leitungs-, Gefälle- und Mengenkette begrenzen ihre Größe und
+  Position zusätzlich auf den aktuellen Bildschirm. Ein weiterer
+  Bildschirm-Grenztest deckt 800 × 500 Pixel ab; insgesamt bestehen 165
+  automatisierte Tests.
+- Kanaltool und gemeinsamer Kanal-/Leitungsaufruf 1.3.1: Für jedes Kanalsystem
+  RW, SW und MW stehen getrennte Schacht-Linienfarben, Schacht-Füllfarben und
+  Fülltransparenzen zur Verfügung, ohne die Rohrfarben zu verändern. Die
+  Fülltransparenz wirkt in 2D und 3D, während die Schachtkontur vollständig
+  deckend bleibt. Jeder Schacht kann diese drei Systemwerte zusätzlich
+  individuell überschreiben. Alte Einstellungen übernehmen beim ersten Laden
+  ihre bisherige Systemfarbe für Linie und Füllung. Vier zusätzliche Modell-,
+  Dialog- und Vectorworks-API-Grenztests erhöhen den Gesamtumfang auf 169
+  automatisierte Tests.
+- Kanaltool und gemeinsamer Kanal-/Leitungsaufruf 1.3.2, Leitungstool 1.0.6
+  und Gefälletool 1.18.1: Zu- und Ablaufhöhen am Schacht werden wieder als
+  eigenständig verschiebbare, leitungsparallele Beschriftungsobjekte erzeugt
+  und können in den Kanal-Voreinstellungen gemeinsam ein- oder ausgeschaltet
+  werden. Beim Anwenden auf bestehende Objekte werden fehlende
+  Anschlussbeschriftungen ergänzt. Das Schachttextfeld führt unabhängig von
+  der Anschlusslage immer sämtliche Zuläufe vor sämtlichen Abläufen auf.
+  Zusätzlich zeigen Kanal-, Leitungs- und Gefälletool alle Höhenwerte in
+  Dialogen, Listen, Meldungen, Zeichnungsbeschriftungen und Schachtblättern
+  einheitlich mit genau zwei Nachkommastellen; intern wird weiterhin mit voller
+  Genauigkeit gerechnet und gespeichert. Drei zusätzliche Dialog-, Format- und
+  Reihenfolgetests erhöhen den Gesamtumfang auf 172 automatisierte Tests.
+- Mengenausgabe 1.2.3: Vor Arbeitsblatt- und Excel-Ausgabe wird ausdrücklich
+  zwischen der kompakten Summenliste und der vollständigen Einzelmassenliste
+  gewählt. Die Einzelmassen enthalten eigene Summenzeilen für Haltungen,
+  Schächte, Rigolen, Leitungen, Erdmassen und Stutzen sowie eine abschließende
+  Gesamtsummenübersicht. Eine in Excel geöffnete Zieldatei blockiert die
+  Ausgabe nicht mehr; die neue Datei erhält in diesem Fall einen eindeutigen
+  `_neu_`-Zeitstempel. Die Oberbaustärke wird jetzt durchgängig in Metern
+  eingegeben, gespeichert und ausgegeben; alte Zentimeterwerte werden beim
+  Laden wertgleich migriert. Fünf zusätzliche Auswahl-, Summen-, Migrations-,
+  Arbeitsblatt- und Dateisperrentests sichern die Änderung ab. Nach der
+  Zusammenführung mit dem aktuellen Gelände-/Baugrubenstand bestehen insgesamt
+  190 automatisierte Tests.

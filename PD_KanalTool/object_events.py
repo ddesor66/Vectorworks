@@ -59,9 +59,12 @@ def run():
         live.reset()
         try:
             data = live_objects.data_of(handle) if valid and handle else None
-            if data and data.get("role") in ("sewer_pipe", "sewer_shaft"):
+            role = data.get("role") if data else None
+            if role in ("sewer_pipe", "sewer_shaft", "sewer_rigole",
+                        live_objects.QUANTITY_OBSERVER_ROLE):
                 from PD_KanalLeitungMengen import reporting as quantity_reporting
-                quantity_reporting.refresh_existing()
+                quantity_reporting.refresh_existing(
+                    force=role == live_objects.QUANTITY_OBSERVER_ROLE)
         except Exception:
             pass
         return

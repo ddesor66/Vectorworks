@@ -33,7 +33,9 @@ def owner(handle):
 
 def edit_point(handle, data):
     point = live.read_point(handle, data)
-    text = vs.StrDialog("Höhe von Punkt P:%d in Metern:" % point["number"], str(point["height_m"]))
+    text = vs.StrDialog(
+        "Höhe von Punkt P:%d in Metern:" % point["number"],
+        ("%.2f" % point["height_m"]).replace(".", ","))
     if vs.DidCancel():
         return False
     height = core._number(str(text).replace(",", "."), "Höhe")

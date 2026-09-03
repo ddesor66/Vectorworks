@@ -121,6 +121,21 @@ def _point(value):
     return None
 
 
+def symbol_location_2d(handle, fallback=None):
+    """Return a finite symbol/PIO insertion point at the native API boundary."""
+    try:
+        result = vs.GetSymLoc(handle) if handle else None
+    except Exception:
+        result = None
+    value = _point(result)
+    if value is None:
+        value = _point(fallback)
+    if value is None or not all(math.isfinite(component) for component in value):
+        raise core.SewerError(
+            "Vectorworks hat die Einfügeposition des Kanalobjekts nicht bereitgestellt.")
+    return value
+
+
 def selected_handles():
     result = []
 
@@ -171,8 +186,8 @@ def cancel_point_input():
 
 def draw_points(on_complete, first_point=None, help_text=None,
                 undo_name="PD Kanalhaltung zeichnen"):
-    del undo_name
-    _pick_points(None, on_complete, first_point, help_text)
+    from . import point_tool
+    point_tool.start(on_complete, first_point, help_text, undo_name)
 
 
 def _pick_points(count, on_complete, first_point=None, help_text=None):
@@ -335,10 +350,20 @@ def pick_object(predicate, help_text):
     if result is None:
         return None
     if isinstance(result, (tuple, list)):
-        return result[0] if result else None
-    # A few Vectorworks service-pack bindings have returned the handle alone.
-    # Supporting that shape costs nothing and keeps the adapter boundary safe.
-    return result
+        handle = result[0] if result else None
+    else:
+        # A few Vectorworks service-pack bindings have returned the handle
+        # alone. Supporting that shape keeps the adapter boundary safe.
+        handle = result
+    if not handle:
+        return None
+    # TrackObject can hand the callback a stale/NIL handle after a cancelled
+    # or failed pick. Re-check the final result before any native geometry
+    # accessor receives it; those accessors are not safe for invalid handles.
+    try:
+        return handle if predicate(handle) else None
+    except Exception:
+        return None
 
 
 def pick_pipe(help_text="Kanalhaltung grafisch anklicken. Esc: abbrechen."):
@@ -371,5 +396,26 @@ def pick_shaft(help_text="Kanalschacht grafisch anklicken. Esc: abbrechen."):
     return handle
 
 
+def _top_level_object(handle):
+    """Return True only for a live object directly on its design layer.
+
+    Geometry inside a parametric object can also report polygon type 5 while
+    TrackObject is hovering. Treating that transient subobject as the user's
+    construction contour leaves a stale handle as soon as the owning PIO is
+    reset and can crash Vectorworks on the next attempt.
+    """
+    if not handle:
+        return False
+    try:
+        parent = vs.GetParent(handle)
+        layer = vs.GetLayer(handle)
+        return bool(parent and layer and parent == layer)
+    except Exception:
+        return False
+
+
 def pick_polygon(help_text="Polygon oder Polylinie für den Sonderschacht anklicken. Esc: abbrechen."):
-    return pick_object(lambda handle: object_type(handle) in (TYPE_POLYGON, TYPE_POLYLINE), help_text)
+    def accepted(handle):
+        return (object_type(handle) in (TYPE_POLYGON, TYPE_POLYLINE) and
+                _top_level_object(handle))
+    return pick_object(accepted, help_text)

@@ -40,18 +40,20 @@ def _right_side_position(dialog, preferred_size=None):
         left, top, right, bottom = (int(value) for value in screen)
         screen_width = max(1, right - left)
         screen_height = max(1, bottom - top)
-        max_width = max(320, screen_width - 24)
-        max_height = max(240, screen_height - 48)
+        max_width = max(1, screen_width - 24)
+        max_height = max(1, screen_height - 48)
+        minimum_width = min(320, max_width)
+        minimum_height = min(240, max_height)
         if preferred_size:
             vs.SetLayoutDialogSize(
                 dialog,
-                min(max_width, int(preferred_size[0])),
-                min(max_height, int(preferred_size[1])))
+                min(max_width, max(minimum_width, int(preferred_size[0]))),
+                min(max_height, max(minimum_height, int(preferred_size[1]))))
         size = vs.GetLayoutDialogSize(dialog)
         if not isinstance(size, (tuple, list)) or len(size) != 2:
             return
-        width = min(max_width, max(320, int(size[0])))
-        height = min(max_height, max(240, int(size[1])))
+        width = min(max_width, max(minimum_width, int(size[0])))
+        height = min(max_height, max(minimum_height, int(size[1])))
         if (width, height) != (int(size[0]), int(size[1])):
             vs.SetLayoutDialogSize(dialog, width, height)
         # Reserve the normal width of Vectorworks' docked right palettes.
@@ -90,6 +92,11 @@ def _choice(dialog, item):
 
 def _float(dialog, item, label):
     return core.number(str(vs.GetItemText(dialog, item) or "").strip().replace(",", "."), label)
+
+
+def _height_text(value):
+    """Format a visible elevation without changing its stored precision."""
+    return ("%.2f" % float(value)).replace(".", ",")
 
 
 def _selected(dialog, item):
@@ -174,6 +181,7 @@ def home_dialog(source_count, managed_count, managed_role=None, selected_shaft_c
     actions = [
         ("Neue Kanalanlage durch Punkte zeichnen", "draw"),
         ("Vorhandene Linie, Polylinie oder Polygon in Kanalanlage umwandeln", "sources"),
+        ("Rigolenbauwerk als einzelnes Element einsetzen", "rigole"),
         ("Bodenablauf setzen und vom Ablauf zur Hauptleitung zeichnen", "floor_drain"),
         ("Hausanschluss vom freien Ende zur Hauptleitung zeichnen", "house"),
         ("Kanalnetz prüfen", "validate"),
@@ -195,6 +203,159 @@ def home_dialog(source_count, managed_count, managed_role=None, selected_shaft_c
     return result["value"] if _run(dialog, handler) == 1 else None
 
 
+def rigole_dialog(initial=None):
+    """Collect the complete engineering and appearance data of one rigole."""
+    current = copy.deepcopy(initial or {})
+    current.setdefault("name", "")
+    current.setdefault("length_m", 10.0)
+    current.setdefault("width_m", 3.0)
+    current.setdefault("height_m", 1.0)
+    current.setdefault("bottom_m", 99.0)
+    current.setdefault("terrain_top_m", 101.0)
+    current.setdefault("rotation_deg", 0.0)
+    current.setdefault("slope_angle_deg", 60.0)
+    current.setdefault("fill_color", [36000, 52000, 65535])
+    current.setdefault("pen_color", [0, 20000, 50000])
+    current.setdefault("transparency_percent", 50.0)
+    current.setdefault("note", "")
+    editing = bool(initial)
+    dialog = vs.CreateResizableLayout(
+        _title("Rigolenbauwerk bearbeiten" if editing else "Rigolenbauwerk einsetzen"),
+        True, "Übernehmen" if editing else "Einsetzen", "Abbrechen", True, True)
+    vs.CreateStyledStatic(dialog, 10, "RIGOLE  |  Bauwerk, Rückhaltevolumen und Erdarbeiten", -1, TITLE_STYLE)
+    controls = (
+        (11, "Bezeichnung (leer = automatisch):", 12, current["name"]),
+        (13, "Länge [m]:", 14, current["length_m"]),
+        (15, "Breite [m]:", 16, current["width_m"]),
+        (17, "Höhe [m]:", 18, current["height_m"]),
+        (19, "Unterkante Rigole [m]:", 20, current["bottom_m"]),
+        (21, "Oberkante Gelände [m]:", 22, current["terrain_top_m"]),
+        (23, "Drehung im Grundriss [°]:", 24, current["rotation_deg"]),
+        (27, "Transparenz der Füllung [%]:", 28, current["transparency_percent"]),
+        (29, "Freier Beschriftungstext:", 30, current["note"]),
+    )
+    for label_id, label, field_id, value in controls:
+        vs.CreateStaticText(dialog, label_id, label, -1)
+        if field_id == 30:
+            vs.CreateEditTextBox(
+                dialog, field_id, str(value).replace("\n", "\r\n"), 52, 4)
+        else:
+            text = (_height_text(value) if field_id in (20, 22)
+                    else str(value).replace(".", ","))
+            vs.CreateEditText(dialog, field_id, text,
+                              52 if field_id == 12 else 18)
+    vs.CreateStaticText(dialog, 25, "Böschung der Baugrube:", -1)
+    vs.CreatePullDownMenu(dialog, 26, 24)
+    vs.CreateStaticText(dialog, 31, "Füllfarbe:", -1)
+    vs.CreateColorPopup(dialog, 32, 24)
+    vs.CreateStaticText(dialog, 33, "Umrahmungsfarbe:", -1)
+    vs.CreateColorPopup(dialog, 34, 24)
+    vs.CreateStaticText(dialog, 35, "", 78)
+    vs.CreateStaticText(
+        dialog, 36,
+        "Die Beschriftung wird zuerst mittig eingesetzt. Nach dem Verschieben erhält sie automatisch einen Rahmen mit Bezugslinie zur Rigole.",
+        82)
+    vs.SetFirstLayoutItem(dialog, 10)
+    previous = 10
+    for label_id, _label, field_id, _value in controls[:7]:
+        vs.SetBelowItem(dialog, previous, label_id, 0, 6)
+        vs.SetRightItem(dialog, label_id, field_id, 8, 0)
+        previous = label_id
+    vs.SetBelowItem(dialog, previous, 25, 0, 6)
+    vs.SetRightItem(dialog, 25, 26, 8, 0)
+    vs.SetBelowItem(dialog, 25, 31, 0, 6)
+    vs.SetRightItem(dialog, 31, 32, 8, 0)
+    vs.SetBelowItem(dialog, 31, 33, 0, 6)
+    vs.SetRightItem(dialog, 33, 34, 8, 0)
+    vs.SetBelowItem(dialog, 33, 27, 0, 6)
+    vs.SetRightItem(dialog, 27, 28, 8, 0)
+    vs.SetBelowItem(dialog, 27, 29, 0, 6)
+    vs.SetRightItem(dialog, 29, 30, 8, 0)
+    vs.SetBelowItem(dialog, 29, 35, 0, 7)
+    vs.SetBelowItem(dialog, 35, 36, 0, 5)
+    slopes = (45.0, 60.0)
+    result = {"value": None}
+
+    def preview():
+        try:
+            length = _float(dialog, 14, "Rigolenlänge")
+            width = _float(dialog, 16, "Rigolenbreite")
+            height = _float(dialog, 18, "Rigolenhöhe")
+            gross = length * width * height
+            vs.SetItemText(
+                dialog, 35,
+                "Automatische Berechnung: Rigolenvolumen %.2f m³ | Rückhaltevolumen bei 95 %% Füllvolumen %.2f m³"
+                % (gross, gross * core.RIGOLE_FILL_FACTOR))
+        except (core.SewerError, ValueError):
+            vs.SetItemText(dialog, 35, "Automatische Berechnung folgt nach vollständiger Zahleneingabe.")
+
+    def handler(item, _data):
+        if item == INIT:
+            for index, slope in enumerate(slopes):
+                vs.AddChoice(dialog, 26, "%d°" % int(slope), index)
+            selected_slope = (slopes.index(float(current["slope_angle_deg"]))
+                              if float(current["slope_angle_deg"]) in slopes else 1)
+            vs.SelectChoice(dialog, 26, selected_slope, True)
+            vs.SetColorChoice(dialog, 32, vs.RGBToColorIndex(*current["fill_color"]))
+            vs.SetColorChoice(dialog, 34, vs.RGBToColorIndex(*current["pen_color"]))
+            preview()
+        elif item in (14, 16, 18):
+            preview()
+        elif item == 1:
+            candidate = dict(current)
+            candidate.update(
+                schema=core.SCHEMA, id=str(candidate.get("id") or "preview"),
+                name=str(vs.GetItemText(dialog, 12) or "").strip() or "RIG.001",
+                x_m=float(candidate.get("x_m", 0.0)), y_m=float(candidate.get("y_m", 0.0)),
+                length_m=_float(dialog, 14, "Rigolenlänge"),
+                width_m=_float(dialog, 16, "Rigolenbreite"),
+                height_m=_float(dialog, 18, "Rigolenhöhe"),
+                bottom_m=_float(dialog, 20, "Unterkante Rigole"),
+                terrain_top_m=_float(dialog, 22, "Oberkante Gelände"),
+                rotation_deg=_float(dialog, 24, "Rigolendrehung"),
+                slope_angle_deg=slopes[_choice(dialog, 26)],
+                fill_color=list(vs.ColorIndexToRGB(vs.GetColorChoice(dialog, 32))),
+                pen_color=list(vs.ColorIndexToRGB(vs.GetColorChoice(dialog, 34))),
+                transparency_percent=_float(dialog, 28, "Rigolen-Transparenz"),
+                note=str(vs.GetItemText(dialog, 30) or "").strip())
+            normalized = core.validate_rigole(candidate)
+            result["value"] = {key: normalized[key] for key in (
+                "name", "length_m", "width_m", "height_m", "bottom_m",
+                "terrain_top_m", "rotation_deg", "slope_angle_deg", "fill_color",
+                "pen_color", "transparency_percent", "note")}
+        return item
+    return result["value"] if _run(dialog, handler, (650, 690)) == 1 else None
+
+
+def rigole_connection_height_dialog(rigole):
+    value = core.validate_rigole(rigole)
+    dialog = vs.CreateResizableLayout(
+        _title("Kanal an Rigole anschließen"), True, "Weiter", "Abbrechen", True, True)
+    vs.CreateStyledStatic(dialog, 10, "RIGOLENANSCHLUSS  |  Anschlusshöhe", -1, TITLE_STYLE)
+    vs.CreateStaticText(
+        dialog, 11,
+        "%s: zulässiger Bereich %s m bis %s m. Im nächsten Schritt Leitungseigenschaften festlegen und zuerst die Anschlussstelle auf der Rigole anklicken."
+        % (value["name"], _height_text(value["bottom_m"]),
+           _height_text(value["top_m"])), 76)
+    vs.CreateStaticText(dialog, 12, "Anschlusshöhe KS [m]:", -1)
+    vs.CreateEditText(dialog, 13, _height_text(value["bottom_m"]), 18)
+    vs.SetFirstLayoutItem(dialog, 10)
+    vs.SetBelowItem(dialog, 10, 11, 0, 6)
+    vs.SetBelowItem(dialog, 11, 12, 0, 7)
+    vs.SetRightItem(dialog, 12, 13, 8, 0)
+    result = {"value": None}
+
+    def handler(item, _data):
+        if item == 1:
+            height = _float(dialog, 13, "Anschlusshöhe an der Rigole")
+            if not value["bottom_m"] - 1e-9 <= height <= value["top_m"] + 1e-9:
+                vs.AlrtDialog("Die Anschlusshöhe muss innerhalb der Rigolenhöhe liegen.")
+                return -1
+            result["value"] = height
+        return item
+    return result["value"] if _run(dialog, handler, (560, 300)) == 1 else None
+
+
 def shaft_connection_dialog(first, second, preferences):
     """Collect the few properties needed for a holding between two shafts."""
     preferences = settings.validate(preferences)
@@ -213,8 +374,9 @@ def shaft_connection_dialog(first, second, preferences):
     vs.CreateStyledStatic(dialog, 10, "HALTUNG  |  Zwei vorhandene Schächte", -1, TITLE_STYLE)
     vs.CreateStaticText(
         dialog, 11,
-        "%s (KS %.3f m)  →  %s (KS %.3f m)\nDie Fließrichtung wird automatisch von der höheren zur tieferen Sohle angelegt." %
-        (upstream["name"], upstream["ks_m"], downstream["name"], downstream["ks_m"]), 68)
+        "%s (KS %s m)  →  %s (KS %s m)\nDie Fließrichtung wird automatisch von der höheren zur tieferen Sohle angelegt." %
+        (upstream["name"], _height_text(upstream["ks_m"]),
+         downstream["name"], _height_text(downstream["ks_m"])), 68)
     vs.CreateStaticText(dialog, 12, "Nennweite:", -1)
     vs.CreatePullDownMenu(dialog, 13, 24)
     vs.CreateStaticText(dialog, 14, "Material:", -1)
@@ -359,7 +521,7 @@ def shaft_sheet_dialog(shaft_names, preferences):
 
 def confirm_delete(count):
     return bool(vs.YNDialog(
-        "%d markierte Kanalobjekt(e) wirklich löschen? Bei einem Schacht werden auch seine angeschlossenen Rohre gelöscht."
+        "%d markierte Kanalobjekt(e) wirklich löschen? Bei einem Schacht oder einer Rigole werden auch die angeschlossenen Rohre gelöscht."
         % int(count)))
 
 
@@ -395,7 +557,8 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
                    ("Nur Anfang, Ende und Abzweig", "endpoints"),
                    ("Keine sichtbaren Schächte automatisch", "manual"))
     joins = (("Rund", "round"), ("Abgeschrägt", "bevel"), ("Gehrung", "miter"))
-    layouts = (("Eine Zeile", "one_line"), ("Zwei Zeilen", "two_line"))
+    layouts = (("Technische Angaben in einer Zeile", "one_line"),
+               ("Technische Angaben in zwei Zeilen", "two_line"))
     graphics = (("Gefüllte Doppellinie mit gestrichelter Achslinie", "double_line"),
                 ("Einliniengrafik", "single_line"))
     shaft_materials = (("PP-Schacht", "PP"), ("Betonschacht", "concrete"))
@@ -443,6 +606,7 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
     vs.CreateEditText(
         dialog, 68,
         str(current.get("wall_thickness_mm", preferences["pipe_wall_thickness_mm"])).replace(".", ","), 18)
+    current_mode = current.get("calculation_mode", "slope")
     for item, value, width in (
             (19, current.get("start_invert_m", 100.0), 18),
             (23, current.get("calculation_value", current.get("end_invert_m", 1.5)), 18),
@@ -454,7 +618,10 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
             (45, current.get("label_width_m", 0.0), 18),
             (71, current.get("label_rotation_deg", preferences["label_rotation_deg"]), 18),
              (41, current.get("name", ""), 34)):
-        vs.CreateEditText(dialog, item, str(value).replace(".", ","), width)
+        is_height = item in (19, 26) or (item == 23 and current_mode == "end")
+        vs.CreateEditText(dialog, item,
+                          _height_text(value) if is_height else str(value).replace(".", ","),
+                          width)
     vs.CreateEditText(
         dialog, 53,
         str(current.get("outside_diameter_mm",
@@ -532,7 +699,7 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
         vs.SetItemText(dialog, 22, "Endsohle KS [m]:" if mode == "end" else "Gefälle [%]:")
         if reset_reference and editing:
             reference = current["end_invert_m"] if mode == "start" else current["start_invert_m"]
-            vs.SetItemText(dialog, 19, str(reference).replace(".", ","))
+            vs.SetItemText(dialog, 19, _height_text(reference))
 
     def update_shaft_material():
         material = shaft_materials[_choice(dialog, 49)][1]
@@ -634,32 +801,67 @@ def pipe_properties_dialog(preferences, initial=None, source_count=0, editing=No
     return result["value"] if _run(dialog, handler, (560, 540)) == 1 else None
 
 
+def _shaft_inlet_rows(values):
+    """Normalize legacy numeric values and live per-pipe inlet records."""
+    rows = []
+    for index, source in enumerate(tuple(values or ()), 1):
+        if isinstance(source, dict):
+            pipe_id = str(source.get("pipe_id") or source.get("connection_id") or
+                          "inlet-%d" % index)
+            tag = str(source.get("tag") or "Z%d" % index)
+            pipe_name = str(source.get("pipe_name") or "").strip()
+            invert_m = core.number(source.get("invert_m"), "Zulaufsohle %s" % tag)
+        else:
+            pipe_id = "inlet-%d" % index
+            tag = "Z%d" % index
+            pipe_name = ""
+            invert_m = core.number(source, "Zulaufsohle %s" % tag)
+        rows.append({
+            "pipe_id": pipe_id,
+            "tag": tag,
+            "pipe_name": pipe_name,
+            "invert_m": invert_m,
+        })
+    return tuple(rows)
+
+
 def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
     current = core.validate_shaft(shaft, allow_hidden=True)
-    incoming = tuple(core.number(value, "Zulaufsohle") for value in inlet_inverts)
+    inlet_rows = _shaft_inlet_rows(inlet_inverts)
+    incoming = tuple(row["invert_m"] for row in inlet_rows)
     outgoing = tuple(core.number(value, "Ablaufsohle") for value in outlet_inverts)
     inlet_value = min(incoming) if incoming else current["ks_m"]
     outlet_value = min(outgoing) if outgoing else current["ks_m"]
     kinds = list(core.KINDS)
+    shaft_pen_colors = preferences.get("shaft_pen_colors", preferences["colors"])
+    shaft_fill_colors = preferences.get("shaft_fill_colors", shaft_pen_colors)
+    shaft_transparencies = preferences.get(
+        "shaft_fill_transparency_percent", {kind: 50.0 for kind in kinds})
     dialog = vs.CreateResizableLayout(_title("Kanalschacht bearbeiten"), True,
                                       "Übernehmen", "Abbrechen", True, True)
     vs.CreateStyledStatic(dialog, 10, "SCHACHT  |  Lage bleibt direkt verschiebbar", -1, TITLE_STYLE)
     rows = ((11, "Schachtname:", 12, current["name"]),
             (15, "Deckelhöhe KD [m]:", 16, current["kd_m"]),
-            (17, "Kanalsohle Zulauf [m]:", 18, inlet_value),
             (34, "Kanalsohle Ablauf [m]:", 35, outlet_value),
             (19, "Lichter Innendurchmesser [m]:", 20, current["diameter_m"]))
+    height_fields = (16, 35)
     for label, text, field, value in rows:
         vs.CreateStaticText(dialog, label, text, -1)
-        vs.CreateEditText(dialog, field, str(value).replace(".", ","), 24)
+        vs.CreateEditText(dialog, field,
+                          _height_text(value) if field in height_fields
+                          else str(value).replace(".", ","), 24)
     vs.CreateStaticText(dialog, 13, "Kanalart:", -1)
     vs.CreatePullDownMenu(dialog, 14, 20)
     vs.CreateStaticText(dialog, 38, "Schachtbauart:", -1)
     vs.CreatePullDownMenu(dialog, 39, 28)
     vs.CreateStaticText(dialog, 40, "Beton-Wandstärke [m]:", -1)
     vs.CreateEditText(dialog, 41, str(current["wall_thickness_m"]).replace(".", ","), 24)
-    vs.CreateCheckBox(dialog, 21, "Individuelle Schachtfarbe")
+    vs.CreateCheckBox(dialog, 21, "Individuelle Schacht-Linienfarbe")
     vs.CreateColorPopup(dialog, 22, 22)
+    vs.CreateCheckBox(dialog, 55, "Individuelle Schachtfüllung")
+    vs.CreateColorPopup(dialog, 56, 22)
+    vs.CreateStaticText(dialog, 57, "Fülltransparenz [%]:", -1)
+    vs.CreateEditText(dialog, 58, "", 12)
     vs.CreateStaticText(dialog, 24, "Schachtdeckel-Ø [m]:", -1)
     vs.CreateEditText(dialog, 25, str(current["cover_diameter_m"]).replace(".", ","), 24)
     vs.CreateStaticText(dialog, 26, "Schachtdeckellage:", -1)
@@ -672,52 +874,109 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
     vs.CreateEditText(dialog, 33, current["construction_label"], 24)
     vs.CreateStaticText(dialog, 42, "Zusatztext unter Schachtname:", -1)
     vs.CreateEditText(dialog, 43, current.get("note", ""), 24)
-    vs.CreateCheckBox(dialog, 36, "Zu- und Ablauf mit gleicher Höhe")
+    # The editor is deliberately divided into short native tabs. Inlets are
+    # arranged as a compact multi-column matrix: every value remains visible
+    # at once without an unbounded single column or a scrolling selector.
+    vs.CreateTabControl(dialog, 50)
+    vs.CreateGroupBox(dialog, 51, "Allgemein", False)
+    vs.CreateGroupBox(dialog, 52, "Anschlusshöhen", False)
+    vs.CreateGroupBox(dialog, 53, "Schachtbau", False)
+    vs.CreateGroupBox(dialog, 54, "Deckel und Darstellung", False)
+
+    def inlet_caption(row, inlet_height=None, outlet_height=None):
+        target = " · %s" % row["pipe_name"] if row["pipe_name"] else ""
+        offset = " · ΔA —"
+        if inlet_height is not None and outlet_height is not None:
+            delta_cm = (float(inlet_height) - float(outlet_height)) * 100.0
+            offset = (" · ΔA %+.1f cm" % delta_cm).replace(".", ",")
+        return "%s%s%s" % (row["tag"], target, offset)
+
+    inlet_controls = []
+    for index, row in enumerate(inlet_rows):
+        label_id = 100 + index * 2
+        field_id = label_id + 1
+        vs.CreateStaticText(
+            dialog, label_id,
+            inlet_caption(
+                row, row["invert_m"], outlet_value if outgoing else None), -1)
+        vs.CreateEditText(
+            dialog, field_id, _height_text(row["invert_m"]), 13)
+        inlet_controls.append((label_id, field_id, row))
+    if not inlet_controls:
+        vs.CreateStaticText(dialog, 45, "Keine Zulaufhaltung angeschlossen.", -1)
+    vs.CreateCheckBox(dialog, 36, "Alle Zu- und Abläufe mit gleicher Höhe")
     vs.CreateStaticText(
         dialog, 37,
-        "Die Zulaufhöhe gilt für alle einmündenden Leitungen, die Ablaufhöhe für alle abgehenden Leitungen. "
-        "Die Rohrgefälle und die Schachtbeschriftung werden gemeinsam geprüft und neu aufgebaut.", 72)
+        "Alle Zulaufhöhen sind gleichzeitig sichtbar. Jede Höhe gehört nur zur angegebenen Haltung. "
+        "ΔA = Zulaufsohle minus Ablaufsohle in cm; positiv bedeutet Zulauf höher. Gefälle, "
+        "Fließrichtung und Beschriftungen werden gemeinsam geprüft.", 68)
     vs.CreateStaticText(dialog, 23,
-                        "Beim Verschieben dieses Schachtobjekts werden angeschlossene Rohre automatisch neu aufgebaut.", 72)
+                        "Beim Verschieben dieses Schachtobjekts werden angeschlossene Rohre automatisch neu aufgebaut.", 64)
     vs.SetFirstLayoutItem(dialog, 10)
-    previous = 10
-    for label, _text, field, _value in rows[:1]:
-        vs.SetBelowItem(dialog, previous, label, 0, 6)
+    vs.SetBelowItem(dialog, 10, 50, 0, 7)
+
+    # Allgemein.
+    vs.SetFirstGroupItem(dialog, 51, 11)
+    previous = None
+    for label, field in ((11, 12), (42, 43), (32, 33), (13, 14), (15, 16)):
+        if previous is not None:
+            vs.SetBelowItem(dialog, previous, label, 0, 6)
         vs.SetRightItem(dialog, label, field, 8, 0)
         previous = label
-    vs.SetBelowItem(dialog, previous, 42, 0, 6)
-    vs.SetRightItem(dialog, 42, 43, 8, 0)
-    previous = 42
-    vs.SetBelowItem(dialog, previous, 32, 0, 6)
-    vs.SetRightItem(dialog, 32, 33, 8, 0)
-    previous = 32
-    vs.SetBelowItem(dialog, previous, 13, 0, 6)
-    vs.SetRightItem(dialog, 13, 14, 8, 0)
-    previous = 13
-    for label, _text, field, _value in rows[1:3]:
-        vs.SetBelowItem(dialog, previous, label, 0, 6)
-        vs.SetRightItem(dialog, label, field, 8, 0)
-        previous = label
-    vs.SetBelowItem(dialog, previous, 36, 0, 4)
+    vs.SetBelowItem(dialog, previous, 23, 0, 6)
+
+    # Anschlusshöhen: at most four compact cards per row. Even the supported
+    # maximum of 24 connections therefore needs only six matrix rows.
+    inlet_columns = min(4, max(1, len(inlet_controls)))
+    if inlet_controls:
+        vs.SetFirstGroupItem(dialog, 52, inlet_controls[0][0])
+        for index, (label, field, _row) in enumerate(inlet_controls):
+            column = index % inlet_columns
+            if column:
+                vs.SetRightItem(
+                    dialog, inlet_controls[index - 1][0], label, 14, 0)
+            elif index:
+                vs.SetBelowItem(
+                    dialog, inlet_controls[index - inlet_columns][1], label, 0, 5)
+            vs.SetBelowItem(dialog, label, field, 0, 2)
+        final_row_start = ((len(inlet_controls) - 1) // inlet_columns) * inlet_columns
+        height_anchor = inlet_controls[final_row_start][1]
+    else:
+        vs.SetFirstGroupItem(dialog, 52, 45)
+        height_anchor = 45
+    vs.SetBelowItem(dialog, height_anchor, 34, 0, 7)
+    vs.SetRightItem(dialog, 34, 35, 8, 0)
+    vs.SetBelowItem(dialog, 34, 36, 0, 5)
     vs.SetBelowItem(dialog, 36, 37, 0, 3)
-    previous = 37
-    for label, _text, field, _value in rows[3:]:
-        vs.SetBelowItem(dialog, previous, label, 0, 6)
+
+    # Schachtbau.
+    vs.SetFirstGroupItem(dialog, 53, 19)
+    previous = None
+    for label, field in ((19, 20), (38, 39), (40, 41)):
+        if previous is not None:
+            vs.SetBelowItem(dialog, previous, label, 0, 6)
         vs.SetRightItem(dialog, label, field, 8, 0)
         previous = label
-    for label, field in ((38, 39), (40, 41)):
-        vs.SetBelowItem(dialog, previous, label, 0, 6)
-        vs.SetRightItem(dialog, label, field, 8, 0)
-        previous = label
+
+    # Deckel und Darstellung.
+    vs.SetFirstGroupItem(dialog, 54, 24)
+    previous = None
     for label, field in ((24, 25), (26, 27), (28, 29)):
-        vs.SetBelowItem(dialog, previous, label, 0, 6)
+        if previous is not None:
+            vs.SetBelowItem(dialog, previous, label, 0, 6)
         vs.SetRightItem(dialog, label, field, 8, 0)
         previous = label
     vs.SetBelowItem(dialog, previous, 30, 0, 6)
     vs.SetBelowItem(dialog, 30, 31, 0, 4)
     vs.SetBelowItem(dialog, 31, 21, 0, 6)
     vs.SetRightItem(dialog, 21, 22, 8, 0)
-    vs.SetBelowItem(dialog, 21, 23, 0, 5)
+    vs.SetBelowItem(dialog, 21, 55, 0, 6)
+    vs.SetRightItem(dialog, 55, 56, 8, 0)
+    vs.SetBelowItem(dialog, 55, 57, 0, 5)
+    vs.SetRightItem(dialog, 57, 58, 8, 0)
+    for pane in (51, 52, 53, 54):
+        vs.CreateTabPane(dialog, 50, pane)
+    vs.SetEdgeBinding(dialog, 50, True, True, True, True)
     result = {"value": None}
     resource_id = "PD.Kanal.Schachtdeckel.Schacht"
     shaft_materials = (("PP-Schacht", "PP"), ("Betonschacht", "concrete"))
@@ -756,6 +1015,30 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
             material = shaft_materials[_choice(dialog, 39)][1]
             vs.SetItemText(dialog, 33, "B" if material == "concrete" else "PP")
 
+    def update_inlet_offsets():
+        try:
+            outlet = _float(dialog, 35, "Ablaufsohle") if outgoing else None
+        except core.SewerError:
+            outlet = None
+        for label, field, row in inlet_controls:
+            try:
+                inlet = _float(dialog, field, "Zulaufsohle %s" % row["tag"])
+            except core.SewerError:
+                inlet = None
+            vs.SetItemText(dialog, label, inlet_caption(row, inlet, outlet))
+
+    def update_graphic_defaults():
+        kind = kinds[_choice(dialog, 14)]
+        if not _selected(dialog, 21):
+            vs.SetColorChoice(
+                dialog, 22, vs.RGBToColorIndex(*shaft_pen_colors[kind]))
+        if not _selected(dialog, 55):
+            vs.SetColorChoice(
+                dialog, 56, vs.RGBToColorIndex(*shaft_fill_colors[kind]))
+            vs.SetItemText(
+                dialog, 58,
+                str(shaft_transparencies[kind]).replace(".", ","))
+
     def handler(item, _data):
         if item == INIT:
             for index, kind in enumerate(kinds):
@@ -774,13 +1057,44 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
             vs.SetBooleanItem(dialog, 30, bool(current["cover_symbol"]))
             vs.EnableItem(dialog, 31, bool(current["cover_symbol"]))
             vs.SetBooleanItem(dialog, 36, False)
-            vs.EnableItem(dialog, 18, bool(incoming))
             vs.EnableItem(dialog, 35, bool(outgoing))
             vs.EnableItem(dialog, 36, bool(incoming and outgoing))
-            override = current.get("color_override")
-            vs.SetBooleanItem(dialog, 21, override is not None)
-            vs.SetColorChoice(dialog, 22, vs.RGBToColorIndex(*(override or preferences["colors"][current["kind"]])))
+            pen_override = current.get(
+                "pen_color_override", current.get("color_override"))
+            fill_override = current.get("fill_color_override")
+            transparency_override = current.get(
+                "fill_transparency_percent_override")
+            vs.SetBooleanItem(dialog, 21, pen_override is not None)
+            vs.SetColorChoice(
+                dialog, 22, vs.RGBToColorIndex(*(
+                    pen_override or shaft_pen_colors[current["kind"]])))
+            vs.SetBooleanItem(
+                dialog, 55,
+                fill_override is not None or transparency_override is not None)
+            vs.SetColorChoice(
+                dialog, 56, vs.RGBToColorIndex(*(
+                    fill_override or shaft_fill_colors[current["kind"]])))
+            vs.SetItemText(
+                dialog, 58, str(
+                    transparency_override if transparency_override is not None
+                    else shaft_transparencies[current["kind"]]).replace(".", ","))
+            vs.EnableItem(dialog, 22, pen_override is not None)
+            for control in (56, 57, 58):
+                vs.EnableItem(
+                    dialog, control,
+                    fill_override is not None or transparency_override is not None)
             update_cover_state()
+            update_inlet_offsets()
+        elif item == 14:
+            update_graphic_defaults()
+        elif item == 21:
+            vs.EnableItem(dialog, 22, _selected(dialog, 21))
+            update_graphic_defaults()
+        elif item == 55:
+            enabled = _selected(dialog, 55)
+            for control in (56, 57, 58):
+                vs.EnableItem(dialog, control, enabled)
+            update_graphic_defaults()
         elif item == 39:
             update_construction_label()
             update_cover_state()
@@ -788,23 +1102,37 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
             update_cover_state()
         elif item == 30:
             update_cover_state()
-        elif item in (18, 36):
+        elif item in (35, 36) or item in tuple(
+                field for _label, field, _row in inlet_controls):
             same = _selected(dialog, 36)
-            if same:
-                vs.SetItemText(dialog, 35, str(vs.GetItemText(dialog, 18) or ""))
+            if item != 35 and same and inlet_controls:
+                source_value = str(vs.GetItemText(dialog, inlet_controls[0][1]) or "")
+                for _label, field, _row in inlet_controls[1:]:
+                    vs.SetItemText(dialog, field, source_value)
+                vs.SetItemText(dialog, 35, source_value)
+            for _label, field, _row in inlet_controls[1:]:
+                vs.EnableItem(dialog, field, not same)
             vs.EnableItem(dialog, 35, bool(outgoing) and not same)
+            update_inlet_offsets()
         elif item == 1:
             try:
                 # Some Vectorworks dialog states return an empty string for an
                 # unchanged first edit field. Numeric edits must not erase the
                 # already valid shaft identity in that case.
                 name = _shaft_name_text(dialog, 12, current["name"])
-                inlet = _float(dialog, 18, "Zulaufsohle") if incoming else inlet_value
+                inlet_values = {
+                    row["pipe_id"]: _float(
+                        dialog, field, "Zulaufsohle %s" % row["tag"])
+                    for _label, field, row in inlet_controls}
+                inlet = min(inlet_values.values()) if inlet_values else inlet_value
                 outlet = _float(dialog, 35, "Ablaufsohle") if outgoing else outlet_value
                 equal = bool(incoming and outgoing and _selected(dialog, 36))
                 if equal:
-                    outlet = inlet
-                endpoint_values = ([inlet] if incoming else []) + ([outlet] if outgoing else [])
+                    common = inlet_values[inlet_rows[0]["pipe_id"]]
+                    inlet_values = {key: common for key in inlet_values}
+                    inlet = common
+                    outlet = common
+                endpoint_values = list(inlet_values.values()) + ([outlet] if outgoing else [])
                 diameter = _float(dialog, 20, "Schachtdurchmesser")
                 construction_material = shaft_materials[_choice(dialog, 39)][1]
                 wall_thickness = (_float(dialog, 41, "Schachtwandstärke")
@@ -816,6 +1144,15 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
                     cover_diameter = min(
                         _float(dialog, 25, "Schachtdeckeldurchmesser"), outside_diameter)
                 value = dict(current)
+                pen_override = (
+                    list(vs.ColorIndexToRGB(vs.GetColorChoice(dialog, 22)))
+                    if _selected(dialog, 21) else None)
+                fill_override = (
+                    list(vs.ColorIndexToRGB(vs.GetColorChoice(dialog, 56)))
+                    if _selected(dialog, 55) else None)
+                transparency_override = (
+                    _float(dialog, 58, "Schacht-Fülltransparenz")
+                    if _selected(dialog, 55) else None)
                 value.update(name=name,
                              note=str(vs.GetItemText(dialog, 43) or "").strip(),
                              construction_label=str(vs.GetItemText(dialog, 33) or "").strip(),
@@ -829,15 +1166,24 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
                              cover_symbol=_cover_symbol(resource_id, _selected(dialog, 30)),
                              cover_placement=COVER_PLACEMENTS[_choice(dialog, 27)][1],
                              cover_rotation_deg=_float(dialog, 29, "Schachtdeckeldrehung"),
-                             color_override=(list(vs.ColorIndexToRGB(vs.GetColorChoice(dialog, 22)))
-                                             if _selected(dialog, 21) else None))
+                             color_override=pen_override,
+                             pen_color_override=pen_override,
+                             fill_color_override=fill_override,
+                             fill_transparency_percent_override=
+                             transparency_override)
                 result["value"] = {
                     "shaft": core.validate_shaft(value, allow_hidden=True),
                     "inlet_invert_m": inlet,
+                    "inlet_inverts_m": inlet_values,
                     "outlet_invert_m": outlet,
                     "equal_inverts": equal,
-                    "inlet_changed": bool(incoming) and (
-                        equal or abs(inlet - inlet_value) > 1e-9),
+                    "inlet_changed": any(
+                        abs(inlet_values[row["pipe_id"]] - row["invert_m"]) > 1e-9
+                        for row in inlet_rows),
+                    "inlet_changed_by_pipe": {
+                        row["pipe_id"]: (
+                            abs(inlet_values[row["pipe_id"]] - row["invert_m"]) > 1e-9)
+                        for row in inlet_rows},
                     "outlet_changed": bool(outgoing) and (
                         equal or abs(outlet - outlet_value) > 1e-9),
                 }
@@ -846,7 +1192,9 @@ def shaft_dialog(shaft, preferences, inlet_inverts=(), outlet_inverts=()):
                 result["value"] = None
                 return -1
         return item
-    return result["value"] if _run(dialog, handler, (520, 760)) == 1 else None
+    preferred_width = min(860, 360 + inlet_columns * 125)
+    return result["value"] if _run(
+        dialog, handler, (preferred_width, 520)) == 1 else None
 
 
 def downstream_height_dialog(delta_m, pipe_count):
@@ -862,7 +1210,7 @@ def downstream_height_dialog(delta_m, pipe_count):
     vs.CreateStaticText(
         dialog, 11,
         "Die Sohle wurde um %s m %s. %d nachfolgende Haltung(en) sind betroffen." %
-        (("%.3f" % abs(delta)).replace(".", ","), direction, count), 72)
+        (_height_text(abs(delta)), direction, count), 72)
     vs.CreateStaticText(dialog, 12, "Weiterführung:", -1)
     vs.CreatePullDownMenu(dialog, 13, 68)
     vs.CreateStaticText(
@@ -953,6 +1301,19 @@ def preferences_dialog(preferences, default_scope="save"):
     vs.CreateStaticText(dialog, 19, "Materialien, mit Semikolon getrennt:", -1)
     vs.CreateEditText(dialog, 20, "; ".join(current["materials"]), 68)
 
+    vs.CreateGroupBox(dialog, 105, "Schachtfarben nach Kanalsystem", False)
+    for index, kind in enumerate(core.KINDS):
+        label = 62 + index * 4
+        vs.CreateStaticText(
+            dialog, label,
+            "%s-Schacht – Linie | Füllung | Transparenz [%%]:" % kind, -1)
+        vs.CreateColorPopup(dialog, label + 1, 18)
+        vs.CreateColorPopup(dialog, label + 2, 18)
+        vs.CreateEditText(
+            dialog, label + 3,
+            str(current["shaft_fill_transparency_percent"][kind]).replace(".", ","),
+            10)
+
     vs.CreateGroupBox(dialog, 102, "Darstellung", False)
     vs.CreateStaticText(dialog, 21, "Schriftgröße [pt]:", -1)
     vs.CreateEditText(dialog, 22, str(current["point_size"]).replace(".", ","), 14)
@@ -979,6 +1340,11 @@ def preferences_dialog(preferences, default_scope="save"):
     vs.CreateStaticText(dialog, 58, "Schriftgröße Haltungsname [pt]:", -1)
     vs.CreateEditText(
         dialog, 59, str(current["pipe_name_point_size"]).replace(".", ","), 14)
+    vs.CreateStaticText(dialog, 60, "Schriftgröße Zu-/Ablaufhöhen [pt]:", -1)
+    vs.CreateEditText(
+        dialog, 61, str(current["connection_point_size"]).replace(".", ","), 14)
+    vs.CreateCheckBox(
+        dialog, 74, "Zu-/Ablaufbeschriftungen direkt am Schacht anzeigen")
 
     vs.CreateGroupBox(dialog, 103, "Schächte und Schachtdeckel", False)
     vs.CreateStaticText(dialog, 45, "Standard-Schachtbauart:", -1)
@@ -1025,7 +1391,20 @@ def preferences_dialog(preferences, default_scope="save"):
         vs.SetRightItem(dialog, label, field, 8, 0)
         previous = label
 
-    # Pane 2: drawing geometry defaults.
+    # Pane 2: shaft contour, fill and fill transparency per channel type.
+    previous = None
+    for index in range(3):
+        label = 62 + index * 4
+        if previous is None:
+            vs.SetFirstGroupItem(dialog, 105, label)
+        else:
+            vs.SetBelowItem(dialog, previous, label, 0, 8)
+        vs.SetRightItem(dialog, label, label + 1, 8, 0)
+        vs.SetRightItem(dialog, label + 1, label + 2, 5, 0)
+        vs.SetRightItem(dialog, label + 2, label + 3, 5, 0)
+        previous = label
+
+    # Pane 3: drawing geometry defaults.
     previous = None
     for label, field in ((27, 28), (37, 38), (39, 40), (41, 42), (43, 44)):
         if previous is None:
@@ -1035,7 +1414,7 @@ def preferences_dialog(preferences, default_scope="save"):
         vs.SetRightItem(dialog, label, field, 8, 0)
         previous = label
 
-    # Pane 3: text and name defaults.
+    # Pane 4: text and name defaults.
     previous = None
     for label, field in ((21, 22), (53, 54), (55, 56), (23, 24)):
         if previous is None:
@@ -1047,8 +1426,11 @@ def preferences_dialog(preferences, default_scope="save"):
     vs.SetBelowItem(dialog, previous, 57, 0, 6)
     vs.SetBelowItem(dialog, 57, 58, 0, 6)
     vs.SetRightItem(dialog, 58, 59, 8, 0)
+    vs.SetBelowItem(dialog, 58, 60, 0, 6)
+    vs.SetRightItem(dialog, 60, 61, 8, 0)
+    vs.SetBelowItem(dialog, 60, 74, 0, 6)
 
-    # Pane 4: shaft defaults.
+    # Pane 5: shaft defaults.
     previous = None
     for label, field in ((45, 46), (47, 48), (29, 30), (31, 32), (33, 34)):
         if previous is None:
@@ -1060,6 +1442,7 @@ def preferences_dialog(preferences, default_scope="save"):
     vs.SetBelowItem(dialog, previous, 35, 0, 6)
     vs.SetBelowItem(dialog, 35, 36, 0, 4)
     vs.CreateTabPane(dialog, 100, 101)
+    vs.CreateTabPane(dialog, 100, 105)
     vs.CreateTabPane(dialog, 100, 102)
     vs.CreateTabPane(dialog, 100, 104)
     vs.CreateTabPane(dialog, 100, 103)
@@ -1099,6 +1482,13 @@ def preferences_dialog(preferences, default_scope="save"):
         if item == INIT:
             for index, kind in enumerate(core.KINDS):
                 vs.SetColorChoice(dialog, 12 + index * 2, vs.RGBToColorIndex(*current["colors"][kind]))
+                label = 62 + index * 4
+                vs.SetColorChoice(
+                    dialog, label + 1,
+                    vs.RGBToColorIndex(*current["shaft_pen_colors"][kind]))
+                vs.SetColorChoice(
+                    dialog, label + 2,
+                    vs.RGBToColorIndex(*current["shaft_fill_colors"][kind]))
             for index, row in enumerate(COVER_PLACEMENTS):
                 vs.AddChoice(dialog, 32, row[0], index)
             placement_values = [row[1] for row in COVER_PLACEMENTS]
@@ -1112,6 +1502,8 @@ def preferences_dialog(preferences, default_scope="save"):
             vs.SetLineTypeChoice(dialog, 42, current["single_line_type"])
             vs.SetLineTypeChoice(dialog, 44, current["axis_line_type"])
             vs.SetBooleanItem(dialog, 57, current["pipe_name_visible"])
+            vs.SetBooleanItem(
+                dialog, 74, current["shaft_connection_labels_visible"])
             vs.EnableItem(dialog, 58, current["pipe_name_visible"])
             vs.EnableItem(dialog, 59, current["pipe_name_visible"])
             for index, row in enumerate(shaft_name_styles):
@@ -1145,6 +1537,19 @@ def preferences_dialog(preferences, default_scope="save"):
                 value = copy.deepcopy(current)
                 value["colors"] = {kind: list(vs.ColorIndexToRGB(vs.GetColorChoice(dialog, 12 + index * 2)))
                                    for index, kind in enumerate(core.KINDS)}
+                value["shaft_pen_colors"] = {
+                    kind: list(vs.ColorIndexToRGB(vs.GetColorChoice(
+                        dialog, 63 + index * 4)))
+                    for index, kind in enumerate(core.KINDS)}
+                value["shaft_fill_colors"] = {
+                    kind: list(vs.ColorIndexToRGB(vs.GetColorChoice(
+                        dialog, 64 + index * 4)))
+                    for index, kind in enumerate(core.KINDS)}
+                value["shaft_fill_transparency_percent"] = {
+                    kind: _float(
+                        dialog, 65 + index * 4,
+                        "Schacht-Fülltransparenz für %s" % kind)
+                    for index, kind in enumerate(core.KINDS)}
                 value["dns"] = [core._dn(row) for row in split(18)]
                 value["materials"] = [core._material(row) for row in split(20)]
                 value["point_size"] = _float(dialog, 22, "Schriftgröße")
@@ -1153,6 +1558,9 @@ def preferences_dialog(preferences, default_scope="save"):
                     dialog, 59, "Schriftgröße des Haltungsnamens")
                 value["shaft_name_point_size"] = _float(
                     dialog, 54, "Schriftgröße des Schachtnamens")
+                value["connection_point_size"] = _float(
+                    dialog, 61, "Schriftgröße der Zu- und Ablaufhöhen")
+                value["shaft_connection_labels_visible"] = _selected(dialog, 74)
                 value["shaft_name_text_style"] = shaft_name_styles[_choice(dialog, 56)][1]
                 value["text_offset_mm"] = _float(dialog, 24, "Textabstand")
                 value["fillet_radius_m"] = _float(dialog, 28, "Ausrundungsradius")
@@ -1227,6 +1635,9 @@ def network_chain_dialog(shafts, pipes, highlight=None):
     def fmt(value):
         return ("%.4f" % float(value)).replace(".", ",")
 
+    def height_fmt(value):
+        return _height_text(value)
+
     def selected_indexes():
         return [index for index in range(len(rows))
                 if vs.IsLBItemSelected(dialog, 13, index)]
@@ -1249,10 +1660,10 @@ def network_chain_dialog(shafts, pipes, highlight=None):
                 if inserted != row_index:
                     raise core.SewerError("Die Kanalkette konnte nicht vollständig angezeigt werden.")
                 if role == "shaft":
-                    values = (fmt(value["ks_m"]), "", "")
+                    values = (height_fmt(value["ks_m"]), "", "")
                 else:
-                    values = (fmt(value["start_invert_m"]),
-                              fmt(value["end_invert_m"]), fmt(value["slope_percent"]))
+                    values = (height_fmt(value["start_invert_m"]),
+                              height_fmt(value["end_invert_m"]), fmt(value["slope_percent"]))
                 for column, text_value in enumerate(values, 1):
                     if vs.SetLBItemInfo(
                             dialog, 13, row_index, column, text_value, -1) is False:
@@ -1321,8 +1732,8 @@ def network_chain_dialog(shafts, pipes, highlight=None):
             shaft = shafts[identity]
             vs.SetItemText(dialog, 14, "Deckelhöhe KD [m]:")
             vs.SetItemText(dialog, 16, "Sohlhöhe KS [m]:")
-            vs.SetItemText(dialog, 15, fmt(shaft["kd_m"]))
-            vs.SetItemText(dialog, 17, fmt(shaft["ks_m"]))
+            vs.SetItemText(dialog, 15, height_fmt(shaft["kd_m"]))
+            vs.SetItemText(dialog, 17, height_fmt(shaft["ks_m"]))
             vs.SetItemText(dialog, 19, "")
             vs.EnableItem(dialog, 15, True)
             vs.EnableItem(dialog, 17, True)
@@ -1332,8 +1743,8 @@ def network_chain_dialog(shafts, pipes, highlight=None):
             pipe = pipes[identity]
             vs.SetItemText(dialog, 14, "Anfangssohle KS [m]:")
             vs.SetItemText(dialog, 16, "Endsohle KS [m]:")
-            vs.SetItemText(dialog, 15, fmt(pipe["start_invert_m"]))
-            vs.SetItemText(dialog, 17, fmt(pipe["end_invert_m"]))
+            vs.SetItemText(dialog, 15, height_fmt(pipe["start_invert_m"]))
+            vs.SetItemText(dialog, 17, height_fmt(pipe["end_invert_m"]))
             vs.SetItemText(dialog, 19, fmt(pipe["slope_percent"]))
             vs.EnableItem(dialog, 15, False)
             vs.EnableItem(dialog, 17, False)
@@ -1495,8 +1906,8 @@ def drop_dialog(shaft, connected_pipes):
     for pipe in connected_pipes:
         if pipe["end_id"] == shaft["id"]:
             elevation = pipe["end_invert_m"]
-            rows.append((pipe, "DN %d %s | ankommend KS %.3f m" %
-                         (pipe["dn_mm"], pipe["material"], elevation), elevation))
+            rows.append((pipe, "DN %d %s | ankommend KS %s m" %
+                         (pipe["dn_mm"], pipe["material"], _height_text(elevation)), elevation))
     if not rows:
         raise core.SewerError("Am gewählten Schacht ist keine ankommende Haltung vorhanden.")
     dialog = vs.CreateResizableLayout(
@@ -1505,9 +1916,9 @@ def drop_dialog(shaft, connected_pipes):
     vs.CreateStaticText(dialog, 11, "Ankommende Haltung:", -1)
     vs.CreatePullDownMenu(dialog, 12, 52)
     vs.CreateStaticText(dialog, 13, "Obere ankommende Sohlhöhe [m]:", -1)
-    vs.CreateEditText(dialog, 14, str(rows[0][2]).replace(".", ","), 18)
+    vs.CreateEditText(dialog, 14, _height_text(rows[0][2]), 18)
     vs.CreateStaticText(dialog, 15, "Unterkante Absturzleitung [m]:", -1)
-    vs.CreateEditText(dialog, 16, str(shaft["ks_m"]).replace(".", ","), 18)
+    vs.CreateEditText(dialog, 16, _height_text(shaft["ks_m"]), 18)
     vs.SetFirstLayoutItem(dialog, 10)
     previous = 10
     for label, field in ((11, 12), (13, 14), (15, 16)):
@@ -1522,7 +1933,7 @@ def drop_dialog(shaft, connected_pipes):
                 vs.AddChoice(dialog, 12, row[1], index)
             vs.SelectChoice(dialog, 12, 0, True)
         elif item == 12:
-            vs.SetItemText(dialog, 14, str(rows[_choice(dialog, 12)][2]).replace(".", ","))
+            vs.SetItemText(dialog, 14, _height_text(rows[_choice(dialog, 12)][2]))
         elif item == 1:
             value = rows[_choice(dialog, 12)][0]
             result["value"] = {

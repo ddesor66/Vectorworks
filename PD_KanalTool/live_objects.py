@@ -11,7 +11,9 @@ from . import core
 
 
 PLUGIN = "PD KAN Objekt"
-ROLES = ("sewer_pipe", "sewer_shaft", "sewer_label", "sewer_fitting")
+QUANTITY_OBSERVER_ROLE = "quantity_observer"
+ROLES = ("sewer_pipe", "sewer_shaft", "sewer_rigole", "sewer_label", "sewer_fitting",
+         QUANTITY_OBSERVER_ROLE)
 
 
 def plugin_of(handle):

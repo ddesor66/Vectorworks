@@ -11,6 +11,8 @@ from . import core
 
 PLUGIN = "PD LEI Objekt"
 ROLE = "utility_route"
+CONTAINER_CLASS = "PD-LEI-Objekte"
+_LAST_OBJECT_ERRORS = ()
 
 
 def plugin_of(handle):
@@ -41,8 +43,13 @@ def data_of(handle):
         data = json.loads(raw)
     except (TypeError, ValueError) as error:
         raise core.UtilityError("Beschädigte Daten in einer Leitungstrasse.") from error
-    if data.get("schema") != core.SCHEMA or data.get("role") != ROLE:
-        return None
+    if not isinstance(data, dict):
+        raise core.UtilityError("Beschädigte Daten in einer Leitungstrasse: Objekt erwartet.")
+    if data.get("schema") != core.SCHEMA:
+        raise core.UtilityError(
+            "Nicht unterstützte Leitungstrassen-Datenversion %r." % data.get("schema"))
+    if data.get("role") != ROLE:
+        raise core.UtilityError("Ungültige Objektrolle in einer Leitungstrasse.")
     core.validate_route(data.get("route"))
     return data
 
@@ -72,6 +79,7 @@ def _handle_key(handle):
 
 
 def objects():
+    global _LAST_OBJECT_ERRORS
     rows = []
     errors = []
     seen = set()
@@ -90,9 +98,13 @@ def objects():
         except Exception as error:
             errors.append(error)
     vs.ForEachObject(collect, "((PON='PD LEI Objekt'))")
-    if errors:
-        raise errors[0]
+    _LAST_OBJECT_ERRORS = tuple(str(error) for error in errors)
     return tuple(rows)
+
+
+def object_errors():
+    """Return controlled diagnostics for malformed routes skipped by objects()."""
+    return _LAST_OBJECT_ERRORS
 
 
 def new_object(xy_document, data, name, created):
@@ -105,6 +117,12 @@ def new_object(xy_document, data, name, created):
     vs.SetName(handle, name)
     if str(vs.GetName(handle) or "") != name:
         raise core.UtilityError("Leitungstrassenidentität konnte nicht reserviert werden.")
-    vs.SetClass(handle, vs.ClassList(1))
+    active = str(vs.ActiveClass() or "")
+    try:
+        vs.NameClass(CONTAINER_CLASS)
+        vs.SetClass(handle, CONTAINER_CLASS)
+    finally:
+        if active and str(vs.ActiveClass() or "") != active:
+            vs.NameClass(active)
     write_data(handle, data, PLUGIN)
     return handle

@@ -4,7 +4,7 @@ from __future__ import absolute_import
 
 import unittest
 
-from PD_KanalTool import core
+from PD_KanalTool import core, settings
 
 
 def shaft(identity, name, x_m, ks_m, material="concrete", construction_label=None):
@@ -70,6 +70,37 @@ def connection_options():
 
 
 class ShaftLabelTests(unittest.TestCase):
+    def test_shaft_graphic_overrides_are_independently_validated(self):
+        value = core.validate_shaft(dict(
+            shaft("s1", "RW.001", 0.0, 100.0),
+            pen_color_override=[100, 200, 300],
+            fill_color_override=[400, 500, 600],
+            fill_transparency_percent_override=35.0), allow_hidden=True)
+        self.assertEqual([100, 200, 300], value["pen_color_override"])
+        self.assertEqual([100, 200, 300], value["color_override"])
+        self.assertEqual([400, 500, 600], value["fill_color_override"])
+        self.assertEqual(35.0, value["fill_transparency_percent_override"])
+        with self.assertRaises(core.SewerError):
+            core.validate_shaft(dict(
+                value, fill_transparency_percent_override=101.0),
+                allow_hidden=True)
+
+    def test_system_shaft_graphics_have_separate_validated_defaults(self):
+        value = settings.validate({
+            "shaft_pen_colors": {"RW": [1, 2, 3]},
+            "shaft_fill_colors": {"RW": [4, 5, 6]},
+            "shaft_fill_transparency_percent": {"RW": 25.0},
+        })
+        self.assertEqual([1, 2, 3], value["shaft_pen_colors"]["RW"])
+        self.assertEqual([4, 5, 6], value["shaft_fill_colors"]["RW"])
+        self.assertEqual(25.0, value["shaft_fill_transparency_percent"]["RW"])
+        with self.assertRaises(core.SewerError):
+            settings.validate({
+                "shaft_fill_transparency_percent": {"RW": -1.0}})
+        migrated = settings.validate({"colors": {"RW": [7, 8, 9]}})
+        self.assertEqual([7, 8, 9], migrated["shaft_pen_colors"]["RW"])
+        self.assertEqual([7, 8, 9], migrated["shaft_fill_colors"]["RW"])
+
     def test_compact_concrete_label_has_only_requested_rows(self):
         value = shaft("s1", "RW.001", 0.0, 100.0)
         endpoints = (
@@ -107,6 +138,25 @@ class ShaftLabelTests(unittest.TestCase):
         self.assertNotIn("STB", label)
         self.assertNotIn("PVC", label)
 
+    def test_shaft_label_lists_every_inlet_before_every_outlet(self):
+        value = shaft("s1", "RW.001", 0.0, 100.0)
+        # Geometric angle order can interleave inlet and outlet connections.
+        endpoints = (
+            {"tag": "Z1", "role": "in", "invert_m": 100.20,
+             "dn_mm": 300, "material": "STB", "bearing_deg": 10.0},
+            {"tag": "A1", "role": "out", "invert_m": 100.00,
+             "dn_mm": 300, "material": "STB", "bearing_deg": 90.0},
+            {"tag": "Z2", "role": "in", "invert_m": 100.10,
+             "dn_mm": 250, "material": "PP", "bearing_deg": 180.0},
+        )
+        lines = core.shaft_label(value, endpoints, preferences()).splitlines()
+        self.assertLess(
+            lines.index("Z1 Zulauf | KS = 100,20 m"),
+            lines.index("Z2 Zulauf | KS = 100,10 m"))
+        self.assertLess(
+            lines.index("Z2 Zulauf | KS = 100,10 m"),
+            lines.index("Ablauf | KS = 100,00 m"))
+
     def test_connection_text_angles_follow_pipe_and_remain_readable(self):
         self.assertAlmostEqual(0.0, core.readable_line_angle(1.0, 0.0))
         self.assertAlmostEqual(0.0, core.readable_line_angle(-1.0, 0.0))
@@ -133,6 +183,21 @@ class ShaftLabelTests(unittest.TestCase):
         self.assertNotIn("Ablauf", label)
         self.assertIn("KS = 100,00 m", label)
         self.assertEqual(6, len(label.splitlines()))
+
+    def test_zero_diameter_shaft_has_only_one_invert_row(self):
+        value = core.validate_shaft(dict(
+            shaft("s1", "RW.001", 0.0, 100.0), diameter_m=0.0),
+            allow_hidden=True)
+        label = core.shaft_label(
+            value,
+            ({"tag": "Z1", "role": "in", "invert_m": 100.2,
+              "dn_mm": 300, "material": "STB", "bearing_deg": 10.0},
+             {"tag": "A1", "role": "out", "invert_m": 100.0,
+              "dn_mm": 300, "material": "STB", "bearing_deg": 190.0}),
+            preferences())
+        self.assertEqual(1, sum(line.startswith("KS =") for line in label.splitlines()))
+        self.assertNotIn("Zulauf", label)
+        self.assertNotIn("Ablauf", label)
 
     def test_supplementary_text_is_directly_below_shaft_name(self):
         value = core.validate_shaft(dict(
@@ -167,6 +232,28 @@ class ShaftLabelTests(unittest.TestCase):
 
 
 class ShaftConnectionTests(unittest.TestCase):
+    def test_special_outline_rejects_self_intersection(self):
+        with self.assertRaisesRegex(core.SewerError, "überschneiden"):
+            core.special_outline(((0.0, 0.0), (4.0, 4.0),
+                                  (0.0, 3.0), (3.0, 0.0)))
+
+    def test_pipe_axis_uses_real_inner_radius(self):
+        first = shaft("s1", "RW.001", 0.0, 100.0)
+        second = shaft("s2", "RW.002", 10.0, 99.0)
+        value = core.pipe_between_shafts(
+            first, second, connection_options(), identity_factory=lambda: "p1")
+        self.assertAlmostEqual(0.14, core.pipe_axis_offset_m(value))
+
+    def test_network_rejects_duplicate_pipe_ids_and_mixed_endpoint_kind(self):
+        first = shaft("s1", "RW.001", 0.0, 100.0)
+        second = shaft("s2", "RW.002", 10.0, 99.0)
+        value = core.pipe_between_shafts(
+            first, second, connection_options(), identity_factory=lambda: "p1")
+        with self.assertRaisesRegex(core.SewerError, "doppelt"):
+            core.validate_network((value, dict(value)), (first, second))
+        wrong = core.validate_shaft(dict(second, kind="SW"), allow_hidden=True)
+        with self.assertRaisesRegex(core.SewerError, "Kanalart"):
+            core.validate_network((value,), (first, wrong))
     def test_holding_name_uses_visible_downstream_shaft(self):
         first = shaft("s1", "RW.001", 0.0, 100.0)
         bend = dict(shaft("bend", "BEND", 5.0, 99.5),
@@ -196,8 +283,10 @@ class ShaftConnectionTests(unittest.TestCase):
         value = dict(value, name=core.holding_name(value, (first, second)))
         shown = dict(preferences(), pipe_name_visible=True)
         hidden = dict(preferences(), pipe_name_visible=False)
-        self.assertTrue(core.pipe_label(value, shown).startswith("H-RW.002 | "))
+        self.assertTrue(core.pipe_label(value, shown).startswith("H-RW.002\n"))
         self.assertFalse(core.pipe_label(value, hidden).startswith("H-RW.002"))
+        self.assertEqual(2, len(core.pipe_label(value, shown).splitlines()))
+        self.assertEqual(1, len(core.pipe_label(value, hidden).splitlines()))
 
     def test_geometric_branch_segments_have_one_two_line_total_label(self):
         first = shaft("s1", "RW.001", 0.0, 100.0)
@@ -208,7 +297,8 @@ class ShaftConnectionTests(unittest.TestCase):
                      label_rotation_deg=37.5)
         value = core.validate_pipe(value)
         shown = dict(preferences(), pipe_name_visible=True)
-        self.assertEqual(2, len(core.pipe_label(value, shown).splitlines()))
+        self.assertEqual(3, len(core.pipe_label(value, shown).splitlines()))
+        self.assertEqual("H-RW.002", core.pipe_label(value, shown).splitlines()[0])
         self.assertIn("12,50 m", core.pipe_label(value, shown))
         self.assertEqual(37.5, value["label_rotation_deg"])
         value.update(label_suppressed=True)

@@ -167,6 +167,88 @@ def shaft_pit(width_m, height_m, depth_m, workspace_m=SHAFT_WORKSPACE_M,
     }
 
 
+def _validated_pavement_thickness_m(include_pavement=False, thickness_m=0.0):
+    thickness = number(thickness_m, "Oberbaustärke", 0.0)
+    if not include_pavement:
+        return 0.0
+    if thickness <= 0.0:
+        raise QuantityError(
+            "Bei berücksichtigtem Oberbau muss eine Stärke größer als 0 m angegeben werden.")
+    if thickness > 5.0:
+        raise QuantityError("Die Oberbaustärke darf höchstens 5,00 m betragen.")
+    return thickness
+
+
+def _sloped_pit_volume(bottom_length_m, bottom_width_m, height_m, angle_deg):
+    """Volume from the bottom to ``height_m`` for a four-sided sloped pit."""
+    length = number(bottom_length_m, "Baugrubenlänge unten", 0.0, False)
+    width = number(bottom_width_m, "Baugrubenbreite unten", 0.0, False)
+    height = number(height_m, "Baugrubentiefe", 0.0)
+    angle = number(angle_deg, "Böschungswinkel")
+    if angle not in (45.0, 60.0):
+        raise QuantityError("Der Böschungswinkel muss 45° oder 60° betragen.")
+    widening = 1.0 / math.tan(math.radians(angle))
+    # Integral of (L + 2*k*z) * (B + 2*k*z), z=0..height.
+    return (length * width * height +
+            (length + width) * widening * height ** 2 +
+            4.0 / 3.0 * widening ** 2 * height ** 3)
+
+
+def rigole_earthwork(rigole, include_pavement=False,
+                     pavement_thickness_m=0.0, workspace_m=0.50):
+    """Calculate one rectangular rigole pit, storage and backfill volumes."""
+    if not isinstance(rigole, dict):
+        raise QuantityError("Rigolendaten fehlen.")
+    length = number(rigole.get("length_m"), "Rigolenlänge", 0.0, False)
+    width = number(rigole.get("width_m"), "Rigolenbreite", 0.0, False)
+    height = number(rigole.get("height_m"), "Rigolenhöhe", 0.0, False)
+    bottom = number(rigole.get("bottom_m"), "Unterkante Rigole")
+    terrain = number(rigole.get("terrain_top_m"), "Oberkante Gelände")
+    depth = terrain - bottom
+    if depth + 1e-9 < height or depth <= 0.0:
+        raise QuantityError(
+            "Die Rigolenbaugrube reicht nicht von der Unterkante bis zur Oberkante Gelände.")
+    workspace = number(workspace_m, "Arbeitsraum der Rigole", 0.0)
+    bottom_length = length + 2.0 * workspace
+    bottom_width = width + 2.0 * workspace
+    angle = number(rigole.get("slope_angle_deg", 60.0), "Böschungswinkel")
+    excavation = _sloped_pit_volume(bottom_length, bottom_width, depth, angle)
+    tangent = math.tan(math.radians(angle))
+    top_length = bottom_length + 2.0 * depth / tangent
+    top_width = bottom_width + 2.0 * depth / tangent
+    thickness = min(_validated_pavement_thickness_m(
+        include_pavement, pavement_thickness_m), depth)
+    pavement = (excavation - _sloped_pit_volume(
+        bottom_length, bottom_width, depth - thickness, angle)
+                if thickness > 0.0 else 0.0)
+    gross = length * width * height
+    storage = gross * 0.95
+    return {
+        "depth_m": depth,
+        "bottom_length_m": bottom_length,
+        "bottom_width_m": bottom_width,
+        "top_length_m": top_length,
+        "top_width_m": top_width,
+        "slope_angle_deg": angle,
+        "gross_volume_m3": gross,
+        "storage_volume_m3": storage,
+        "excavation_volume_m3": excavation,
+        "pavement_volume_m3": pavement,
+        "backfill_volume_m3": max(0.0, excavation - gross - pavement),
+    }
+
+
+def _shaft_structure_volume_m3(shaft, depth_m):
+    outline = tuple(shaft.get("special_outline_m") or ())
+    if shaft.get("structure_type") == "special" and len(outline) >= 3:
+        area = abs(sum(
+            first[0] * second[1] - second[0] * first[1]
+            for first, second in zip(outline, outline[1:] + outline[:1]))) * 0.5
+        return area * depth_m
+    width, _height = shaft_body_dimensions(shaft)
+    return math.pi * (width * 0.5) ** 2 * depth_m if width > 0.0 else 0.0
+
+
 def path_length_2d(points):
     values = tuple((number(row[0], "X"), number(row[1], "Y")) for row in points)
     return sum(math.hypot(second[0] - first[0], second[1] - first[1])
@@ -230,19 +312,72 @@ def shaft_pit_projection_m(shaft, direction_xy,
     return min(candidates) if candidates else 0.0
 
 
-def analyze(canals, shafts, utility_lines,
-            shoring_thickness_m=DEFAULT_SHORING_THICKNESS_M):
+def holding_components(pipes, shafts):
+    """Return one stable topological holding key for every pipe id.
+
+    Visible shafts separate holdings. Invisible two-way junctions pass them
+    through. At a branch fitting only the recorded two main arms belong to the
+    same holding; the branch remains an independent holding.
+    """
+    pipe_rows = tuple(dict(row) for row in pipes)
+    identities = [str(row.get("id") or "") for row in pipe_rows]
+    parent = {identity: identity for identity in identities if identity}
+
+    def find(identity):
+        while parent[identity] != identity:
+            parent[identity] = parent[parent[identity]]
+            identity = parent[identity]
+        return identity
+
+    def union(first, second):
+        if first not in parent or second not in parent:
+            return
+        a, b = find(first), find(second)
+        if a != b:
+            low, high = sorted((a, b))
+            parent[high] = low
+
+    for shaft in shafts:
+        shaft_id = shaft.get("id")
+        connected = [str(pipe.get("id") or "") for pipe in pipe_rows
+                     if shaft_id in (pipe.get("start_id"), pipe.get("end_id"))]
+        if shaft.get("structure_type") == "stub" and isinstance(shaft.get("stub"), dict):
+            main = [str(identity) for identity in shaft["stub"].get("main_pipe_ids", ())
+                    if str(identity) in parent]
+            if len(main) == 2:
+                union(main[0], main[1])
+        elif (not shaft.get("visible", False) or
+              shaft.get("structure_type") == "junction") and len(connected) == 2:
+            union(connected[0], connected[1])
+    groups = {}
+    for identity in parent:
+        groups.setdefault(find(identity), []).append(identity)
+    result = {}
+    for members in groups.values():
+        key = min(members)
+        result.update((identity, key) for identity in members)
+    return result
+
+
+def analyze(canals, shafts, utility_lines, rigoles=(),
+            shoring_thickness_m=DEFAULT_SHORING_THICKNESS_M,
+            include_pavement=False, pavement_thickness_m=0.0):
     """Build auditable summaries and details from normalized live records."""
     pipes = tuple(dict(row) for row in canals)
     shaft_rows = tuple(dict(row) for row in shafts)
     utilities = tuple(dict(row) for row in utility_lines)
+    rigole_rows = tuple(dict(row) for row in rigoles)
+    pavement_t = _validated_pavement_thickness_m(
+        include_pavement, pavement_thickness_m)
     shaft_index = {row["id"]: row for row in shaft_rows}
+    holding_keys = holding_components(pipes, shaft_rows)
     warnings = []
     canal_details = []
     earth_segments = []
     shaft_details = []
     stub_details = []
     utility_details = []
+    rigole_details = []
 
     for pipe in pipes:
         start = shaft_index.get(pipe.get("start_id"))
@@ -285,8 +420,23 @@ def analyze(canals, shafts, utility_lines,
         quantities = trench_totals(
             trench_length, dn, outside_mm / 1000.0,
             trench_start_depth, trench_end_depth, shoring_thickness_m)
+        net_delta = (delta * trench_length / length_2d
+                     if length_2d > 1e-12 else 0.0)
+        pipe_displacement = (math.pi * (outside_mm / 2000.0) ** 2 *
+                             math.hypot(trench_length, net_delta))
+        pavement = 0.0
+        for segment in quantities["segments"]:
+            surface_depth = max(0.0, min(
+                segment["depth_start_m"], segment["depth_end_m"]))
+            pavement += (segment["length_m"] * segment["excavation_width_m"] *
+                         min(pavement_t, surface_depth))
+        backfill = max(
+            0.0, quantities["excavation_volume_m3"] -
+            pipe_displacement - pavement)
         detail = {
             "id": pipe.get("id", ""), "network_id": pipe.get("network_id", ""),
+            "holding_key": holding_keys.get(str(pipe.get("id") or ""),
+                                             str(pipe.get("id") or "")),
             "name": (str(pipe.get("name") or "").strip() or
                      "%s – %s" % (start.get("name", ""), end.get("name", ""))),
             "kind": pipe.get("kind", ""), "dn_mm": dn,
@@ -300,8 +450,14 @@ def analyze(canals, shafts, utility_lines,
             "end_x_m": end.get("x_m"), "end_y_m": end.get("y_m"),
             "start_invert_m": pipe.get("start_invert_m"),
             "end_invert_m": pipe.get("end_invert_m"),
-            "start_axis_m": number(pipe.get("start_invert_m"), "Anfangssohle") + dn / 2000.0,
-            "end_axis_m": number(pipe.get("end_invert_m"), "Endsohle") + dn / 2000.0,
+            "start_axis_m": number(pipe.get("start_invert_m"), "Anfangssohle") +
+                            outside_mm / 2000.0 -
+                            (number(pipe.get("wall_thickness_mm", 0.0), "Rohrwandstärke") /
+                             1000.0 if pipe.get("hollow_3d", False) else 0.0),
+            "end_axis_m": number(pipe.get("end_invert_m"), "Endsohle") +
+                          outside_mm / 2000.0 -
+                          (number(pipe.get("wall_thickness_mm", 0.0), "Rohrwandstärke") /
+                           1000.0 if pipe.get("hollow_3d", False) else 0.0),
             "slope_percent": pipe.get("slope_percent", 0.0),
             "start_depth_m": start_depth, "end_depth_m": end_depth,
             "length_2d_m": length_2d, "length_3d_m": length_3d,
@@ -311,6 +467,9 @@ def analyze(canals, shafts, utility_lines,
             "excavation_volume_m3": quantities["excavation_volume_m3"],
             "shoring_allowance_volume_m3": quantities["shoring_allowance_volume_m3"],
             "shoring_area_m2": quantities["shoring_area_m2"],
+            "pipe_displacement_m3": pipe_displacement,
+            "pavement_volume_m3": pavement,
+            "backfill_volume_m3": backfill,
             "minimum_clear_width_m": quantities["minimum_clear_width_m"],
             "maximum_clear_width_m": quantities["maximum_clear_width_m"],
             "minimum_excavation_width_m": quantities["minimum_excavation_width_m"],
@@ -325,6 +484,19 @@ def analyze(canals, shafts, utility_lines,
                        kind=detail["kind"], dn_mm=dn,
                        material=detail["material"], segment=index,
                        outside_diameter_mm=outside_mm)
+            segment_depth = max(0.0, min(
+                row["depth_start_m"], row["depth_end_m"]))
+            row["pavement_volume_m3"] = (
+                row["length_m"] * row["excavation_width_m"] *
+                min(pavement_t, segment_depth))
+            row_delta = (delta * row["length_m"] / length_2d
+                         if length_2d > 1e-12 else 0.0)
+            row["pipe_displacement_m3"] = (
+                math.pi * (outside_mm / 2000.0) ** 2 *
+                math.hypot(row["length_m"], row_delta))
+            row["backfill_volume_m3"] = max(
+                0.0, row["excavation_volume_m3"] -
+                row["pipe_displacement_m3"] - row["pavement_volume_m3"])
             earth_segments.append(row)
 
     for shaft in shaft_rows:
@@ -338,12 +510,18 @@ def analyze(canals, shafts, utility_lines,
             ]
             branch = branches[0] if branches else {}
             stub_details.append({
+                "name": "Stutzen %03d" % (len(stub_details) + 1),
                 "kind": shaft.get("kind", ""),
                 "dn_mm": int(number(
                     stub.get("branch_dn_mm", branch.get("dn_mm", 150)),
                     "Stutzen-Nennweite", 0.0, False)),
                 "material": str(branch.get("material", "") or ""),
                 "alignment": str(stub.get("alignment", "invert") or "invert"),
+                "connection_invert_m": number(
+                    stub.get("connection_invert_m", shaft.get("ks_m")),
+                    "Stutzen-Anschlusshöhe"),
+                "station_m": (number(stub.get("station_m"), "Stutzen-Station")
+                              if stub.get("station_m") is not None else None),
             })
         if not shaft.get("visible", False):
             continue
@@ -354,6 +532,13 @@ def analyze(canals, shafts, utility_lines,
                     number(shaft.get("ks_m"), "Schachtsohle"))
         pit = shaft_pit(body_width, body_height, depth,
                         SHAFT_WORKSPACE_M, shoring_thickness_m)
+        shaft_displacement = _shaft_structure_volume_m3(shaft, depth)
+        shaft_pavement = (pit["excavation_width_m"] *
+                          pit["excavation_height_m"] *
+                          min(pavement_t, depth))
+        shaft_backfill = max(
+            0.0, pit["excavation_volume_m3"] - shaft_displacement -
+            shaft_pavement)
         inlets, outlets = shaft_counts(pipes, shaft["id"])
         shaft_details.append({
             "id": shaft["id"], "name": shaft.get("name", ""),
@@ -371,7 +556,23 @@ def analyze(canals, shafts, utility_lines,
             "pit_excavation_height_m": pit["excavation_height_m"],
             "pit_volume_m3": pit["excavation_volume_m3"],
             "pit_shoring_area_m2": pit["shoring_area_m2"],
+            "shaft_displacement_m3": shaft_displacement,
+            "pavement_volume_m3": shaft_pavement,
+            "backfill_volume_m3": shaft_backfill,
         })
+
+    for rigole in rigole_rows:
+        quantities = rigole_earthwork(
+            rigole, include_pavement, pavement_thickness_m)
+        detail = dict(rigole)
+        detail.update(quantities)
+        detail["id"] = str(rigole.get("id") or "")
+        detail["name"] = str(rigole.get("name") or "Rigole")
+        detail["top_m"] = number(
+            rigole.get("top_m", number(rigole.get("bottom_m"), "Unterkante Rigole") +
+                       number(rigole.get("height_m"), "Rigolenhöhe")),
+            "Oberkante Rigole")
+        rigole_details.append(detail)
 
     for line in utilities:
         utility_details.append({
@@ -410,11 +611,37 @@ def analyze(canals, shafts, utility_lines,
         "shaft_height_m": sum(row["height_m"] for row in shaft_details),
         "trench_excavation_m3": sum(row["excavation_volume_m3"] for row in canal_details),
         "shaft_pit_excavation_m3": sum(row["pit_volume_m3"] for row in shaft_details),
+        "rigole_excavation_m3": sum(
+            row["excavation_volume_m3"] for row in rigole_details),
         "trench_shoring_m2": sum(row["shoring_area_m2"] for row in canal_details),
         "shaft_pit_shoring_m2": sum(row["pit_shoring_area_m2"] for row in shaft_details),
+        "rigole_count": len(rigole_details),
+        "rigole_gross_volume_m3": sum(
+            row["gross_volume_m3"] for row in rigole_details),
+        "rigole_storage_volume_m3": sum(
+            row["storage_volume_m3"] for row in rigole_details),
+        "trench_backfill_m3": sum(
+            row["backfill_volume_m3"] for row in canal_details),
+        "shaft_backfill_m3": sum(
+            row["backfill_volume_m3"] for row in shaft_details),
+        "rigole_backfill_m3": sum(
+            row["backfill_volume_m3"] for row in rigole_details),
+        "trench_pavement_m3": sum(
+            row["pavement_volume_m3"] for row in canal_details),
+        "shaft_pavement_m3": sum(
+            row["pavement_volume_m3"] for row in shaft_details),
+        "rigole_pavement_m3": sum(
+            row["pavement_volume_m3"] for row in rigole_details),
     }
     totals["earthwork_total_m3"] = (totals["trench_excavation_m3"] +
-                                     totals["shaft_pit_excavation_m3"])
+                                     totals["shaft_pit_excavation_m3"] +
+                                     totals["rigole_excavation_m3"])
+    totals["earthwork_backfill_m3"] = (
+        totals["trench_backfill_m3"] + totals["shaft_backfill_m3"] +
+        totals["rigole_backfill_m3"])
+    totals["pavement_total_m3"] = (
+        totals["trench_pavement_m3"] + totals["shaft_pavement_m3"] +
+        totals["rigole_pavement_m3"])
     totals["shoring_total_m2"] = (totals["trench_shoring_m2"] +
                                    totals["shaft_pit_shoring_m2"])
     return {
@@ -423,6 +650,7 @@ def analyze(canals, shafts, utility_lines,
         "utility_summary": utility_summary,
         "canals": tuple(canal_details), "shafts": tuple(shaft_details),
         "stubs": tuple(stub_details),
+        "rigoles": tuple(rigole_details),
         "utilities": tuple(utility_details), "earth_segments": tuple(earth_segments),
         "totals": totals, "warnings": tuple(dict.fromkeys(warnings)),
     }
@@ -460,7 +688,7 @@ def _pipe_summary(canals):
     keys = sorted({(row["kind"], row["dn_mm"], row["material"]) for row in canals})
     return tuple({
         "kind": kind, "dn_mm": dn, "material": material,
-        "holding_count": len({row["name"] for row in rows}),
+        "holding_count": len({row["holding_key"] for row in rows}),
         "length_2d_m": sum(row["length_2d_m"] for row in rows),
         "length_3d_m": sum(row["length_3d_m"] for row in rows),
         "trench_excavation_m3": sum(row["excavation_volume_m3"] for row in rows),
