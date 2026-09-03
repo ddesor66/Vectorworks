@@ -586,6 +586,32 @@ class KanalDialogTests(unittest.TestCase):
 
         self.assertEqual("two_line", result["label_layout"])
 
+    def test_utility_multi_selection_offers_common_property_editing(self):
+        api = DialogAPI()
+
+        def accept(dialog, handler):
+            handler(-1, 0)
+            return handler(1, 0)
+
+        api.on_run = accept
+        ui = load_ui(api, "PD_LeitungsTool")
+        self.assertEqual("batch_edit", ui.home_dialog(0, 3))
+
+    def test_utility_preferences_return_selected_update_scope(self):
+        api = DialogAPI()
+
+        def accept(dialog, handler):
+            handler(-1, 0)
+            api.SelectChoice(dialog, 36, 1, True)
+            return handler(1, 0)
+
+        api.on_run = accept
+        ui = load_ui(api, "PD_LeitungsTool")
+        preferences = importlib.import_module("PD_LeitungsTool.settings").validate({})
+        updated, scope = ui.preferences_dialog(preferences, "selection")
+        self.assertIsNotNone(updated)
+        self.assertEqual("selection", scope)
+
     def test_shaft_dialog_can_override_contour_fill_and_transparency(self):
         api = DialogAPI()
 

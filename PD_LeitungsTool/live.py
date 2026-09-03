@@ -89,6 +89,10 @@ def selected_managed():
     return tuple(result.values())
 
 
+def all_managed():
+    return tuple(_objects().objects())
+
+
 def _route_name(identity):
     return core.ROUTE_PREFIX + str(identity)
 
@@ -233,6 +237,102 @@ def update(handle, route, preferences=None, undo_name="PD Leitungstrasse bearbei
         raise
     vs.ReDrawAll()
     return normalized
+
+
+def update_many(updates, preferences=None,
+                undo_name="PD Leitungstrassen gemeinsam bearbeiten"):
+    """Update several routes as one verified and rollback-safe transaction."""
+    rows = tuple(updates or ())
+    if not rows:
+        raise core.UtilityError("Keine Leitungstrassen zum Aktualisieren übergeben.")
+    prepared = []
+    snapshots = {}
+    for handle, route in rows:
+        data = _objects().data_of(handle)
+        if not data:
+            raise core.UtilityError("Eine markierte Leitungstrasse konnte nicht gelesen werden.")
+        normalized = core.validate_route(route)
+        core.render_route_paths(normalized)
+        snapshots[handle] = copy.deepcopy(data)
+        stored_preferences = settings.validate(
+            data.get("preferences") if preferences is None else preferences)
+        prepared.append((handle, normalized, stored_preferences))
+    vs.NameUndoEvent(undo_name)
+    try:
+        for handle, normalized, stored_preferences in prepared:
+            changed = dict(
+                snapshots[handle], route=normalized,
+                preferences=copy.deepcopy(stored_preferences))
+            _objects().write_data(
+                handle, _with_render_status(changed, RENDER_PENDING))
+        for handle, _normalized, _stored_preferences in prepared:
+            vs.ResetObject(handle)
+            _require_render_ok(handle)
+    except Exception as error:
+        rollback_errors = []
+        for handle, snapshot in snapshots.items():
+            try:
+                _objects().write_data(
+                    handle, _with_render_status(snapshot, RENDER_PENDING))
+                vs.ResetObject(handle)
+                _require_render_ok(handle)
+            except Exception as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        if rollback_errors:
+            raise core.UtilityError(
+                "Leitungstrassen konnten nicht aktualisiert und nicht vollständig "
+                "wiederhergestellt werden: %s / %s"
+                % (error, "; ".join(rollback_errors)))
+        raise
+    vs.ReDrawAll()
+    return len(prepared)
+
+
+_PREFERENCE_ROUTE_FIELDS = frozenset((
+    "graphics_mode", "line_type", "axis_line_type", "round_corners",
+    "fillet_radius_m", "show_fittings", "label_bend_angles", "show_heights",
+    "regular_label", "label_text", "label_interval_m", "label_frame",
+    "label_fill", "label_bold", "label_underline", "label_rotation_deg",
+    "label_layout", "font_name", "font_size_pt", "draw_3d", "text_color",
+    "frame_color", "fill_color",
+))
+
+
+def _route_with_preferences(route, preferences):
+    """Apply drawing standards while preserving engineering route values."""
+    result = copy.deepcopy(route)
+    for key in _PREFERENCE_ROUTE_FIELDS:
+        result[key] = copy.deepcopy(preferences[key])
+    result["line_color"] = copy.deepcopy(
+        preferences["colors"].get(result["utility_type"], result["line_color"]))
+    return core.validate_route(result)
+
+
+def apply_preferences(preferences, selected=None, scope="drawing"):
+    """Redraw selected systems or every utility route with saved standards."""
+    preferences = settings.validate(preferences)
+    scope = str(scope or "save")
+    if scope not in ("selection", "drawing"):
+        raise core.UtilityError("Ungültiger Aktualisierungsumfang der Leitungsstandards.")
+    rows = all_managed()
+    if scope == "selection":
+        selected_handles = {handle for handle, _data in tuple(selected or ())}
+        rows = tuple(row for row in rows if row[0] in selected_handles)
+        if not rows:
+            raise core.UtilityError(
+                "Für diese Aktualisierung zuerst mindestens eine Leitungstrasse markieren.")
+    elif not rows:
+        raise core.UtilityError("Keine Leitungstrassen zum Aktualisieren gefunden.")
+    ensure_classes_for_routes = []
+    updates = []
+    for handle, data in rows:
+        route = _route_with_preferences(read_route(handle, data), preferences)
+        ensure_classes_for_routes.append(route)
+        updates.append((handle, route))
+    for route in ensure_classes_for_routes:
+        ensure_classes(route, preferences)
+    return update_many(
+        updates, preferences, "PD Leitungsstandards anwenden")
 
 
 def delete(handles):

@@ -127,8 +127,92 @@ def _single(managed):
     return managed[0][0]
 
 
+def _preference_default_scope(managed, has_routes):
+    if managed:
+        return "selection"
+    return "drawing" if has_routes else "save"
+
+
+def _preferences_from_options(preferences, options):
+    """Copy every reusable route option into the persistent defaults."""
+    result = dict(preferences)
+    utility_type = options["utility_type"]
+    colors = dict(result["colors"])
+    colors[utility_type] = list(options["line_color"])
+    result.update({
+        "default_type": utility_type,
+        "default_dn_mm": int(options["dns_mm"][0]),
+        "default_material": options["material"],
+        "count": int(options["count"]),
+        "spacing_m": options["spacing_m"],
+        "axis_reference": options["axis_reference"],
+        "graphics_mode": options["graphics_mode"],
+        "line_type": options["line_type"],
+        "axis_line_type": options["axis_line_type"],
+        "round_corners": options["round_corners"],
+        "fillet_radius_m": options["fillet_radius_m"],
+        "show_fittings": options["show_fittings"],
+        "label_bend_angles": options["label_bend_angles"],
+        "slope_percent": options["slope_percent"],
+        "start_height_m": options["start_height_m"],
+        "elevation_mode": options["elevation_mode"],
+        "cover_depth_m": options["cover_depth_m"],
+        "surface_tin_type": options["surface_tin_type"],
+        "show_heights": options["show_heights"],
+        "regular_label": options["regular_label"],
+        "label_text": options["label_text"],
+        "label_interval_m": options["label_interval_m"],
+        "label_frame": options["label_frame"],
+        "label_fill": options["label_fill"],
+        "label_bold": options["label_bold"],
+        "label_underline": options["label_underline"],
+        "label_rotation_deg": options["label_rotation_deg"],
+        "label_layout": options["label_layout"],
+        "font_name": options["font_name"],
+        "font_size_pt": options["font_size_pt"],
+        "draw_3d": options["draw_3d"],
+        "text_color": list(options["text_color"]),
+        "frame_color": list(options["frame_color"]),
+        "fill_color": list(options["fill_color"]),
+        "colors": colors,
+    })
+    return settings.validate(result)
+
+
+_BATCH_ROUTE_FIELDS = frozenset((
+    "utility_type", "material", "count", "dns_mm", "outside_diameters_mm",
+    "outside_diameters_explicit", "spacing_m", "axis_reference",
+    "graphics_mode", "line_type", "axis_line_type", "round_corners",
+    "fillet_radius_m", "show_fittings", "label_bend_angles",
+    "start_height_m", "slope_percent", "elevation_mode", "cover_depth_m",
+    "surface_tin_type", "surface_model_name", "show_heights", "regular_label",
+    "label_text", "label_interval_m", "label_frame", "label_fill",
+    "label_bold", "label_underline", "label_rotation_deg", "label_layout",
+    "font_name", "font_size_pt", "draw_3d", "line_color", "text_color",
+    "frame_color", "fill_color",
+))
+
+
+def _batch_edit(preferences, managed):
+    if len(managed) < 2:
+        raise core.UtilityError("Für die Sammeländerung mindestens zwei Leitungstrassen markieren.")
+    originals = [(handle, live.read_route(handle)) for handle, _data in managed]
+    values = ui.route_dialog(
+        preferences, originals[0][1], editing_count=len(originals))
+    if values is None:
+        return 0
+    rebuild = bool(values.get("_rebuild_heights", False))
+    shared = {key: value for key, value in values.items()
+              if key in _BATCH_ROUTE_FIELDS}
+    shared["_rebuild_heights"] = rebuild
+    updates = []
+    for handle, original in originals:
+        updates.append((handle, _editable_route(original, dict(shared))))
+    return live.update_many(updates, preferences)
+
+
 _QUANTITY_MUTATIONS = frozenset((
-    "sources", "draw", "edit", "chain", "terrain", "delete", "settings",
+    "sources", "draw", "edit", "batch_edit", "chain", "terrain", "delete", "settings",
 ))
 
 
@@ -164,6 +248,12 @@ def run(action=None):
             if values is not None:
                 live.update(handle, _editable_route(original, values), object_preferences)
                 adapter.alert("Leitungstrasse und 3D-Darstellung wurden aktualisiert.")
+        elif action == "batch_edit":
+            count = _batch_edit(preferences, managed)
+            if count:
+                adapter.alert(
+                    "%d Leitungstrassen gemeinsam aktualisiert; Lage und Objektidentität blieben erhalten."
+                    % count)
         elif action == "chain":
             handle = _single(managed)
             changed = ui.height_chain_dialog(live.read_route(handle))
@@ -201,10 +291,28 @@ def run(action=None):
             from PD_KanalLeitungMengen import app as quantities_app
             quantities_app.run()
         elif action == "settings":
-            changed = ui.preferences_dialog(preferences)
+            changed, update_scope = ui.preferences_dialog(
+                preferences,
+                _preference_default_scope(managed, bool(live.all_managed())))
             if changed is not None:
-                settings.save(changed)
-                adapter.alert("Leitungsstandards wurden gespeichert; bestehende Trassen bleiben unverändert.")
+                standard_options = ui.route_dialog(
+                    changed, _options(changed), standards=True)
+                if standard_options is None:
+                    return
+                preferences = settings.save(
+                    _preferences_from_options(changed, standard_options))
+                count = (live.apply_preferences(preferences, managed, update_scope)
+                         if update_scope != "save" else 0)
+                scope_labels = {
+                    "selection": "in der Markierung",
+                    "drawing": "in der gesamten Zeichnung",
+                }
+                adapter.alert(
+                    "Leitungsstandards wurden gespeichert.%s"
+                    % ((" %d Leitungstrasse(n) %s aktualisiert; Lage, Name, DN, Material "
+                         "und Höhen blieben erhalten."
+                         % (count, scope_labels[update_scope]))
+                       if update_scope != "save" else ""))
         else:
             raise core.UtilityError("Unbekannte Leitungsaktion.")
         if quantity_batch:

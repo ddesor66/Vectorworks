@@ -123,6 +123,10 @@ def home_dialog(source_count, managed_count):
         actions.extend((("Markierte Leitungstrasse bearbeiten", "edit"),
                         ("Höhenkette der markierten Leitung bearbeiten", "chain"),
                         ("Markierte Leitung unter Geländemodell aktualisieren", "terrain")))
+    elif managed_count > 1:
+        actions.append((
+            "Gemeinsame Eigenschaften der markierten Leitungstrassen bearbeiten",
+            "batch_edit"))
     if managed_count:
         actions.append(("Markierte Leitungstrasse(n) löschen …", "delete"))
     actions.extend((("Neue Leitungstrasse durch Punkte zeichnen", "draw"),
@@ -142,9 +146,10 @@ def home_dialog(source_count, managed_count):
     return result["value"] if _run(dialog, handler) == 1 else None
 
 
-def route_dialog(preferences, initial=None, source_count=0):
+def route_dialog(preferences, initial=None, source_count=0, editing_count=1,
+                 standards=False):
     current = copy.deepcopy(initial or {})
-    editing = bool(initial)
+    editing = bool(initial) and not standards
     types = list(preferences["types"])
     materials = list(preferences["materials"])
     references = (("Gezeichnete Achse = linke Trassenseite", "left"),
@@ -156,13 +161,29 @@ def route_dialog(preferences, initial=None, source_count=0):
                        ("DGM-Überdeckung, geprüft in Abständen bis 1,00 m", "surface_cover"))
     label_layouts = (("Eine Zeile", "one_line"),
                      ("Zwei Zeilen", "two_line"))
+    if standards:
+        dialog_title = "Leitung – Darstellungsstandards"
+        accept_text = "Standards übernehmen"
+    elif editing:
+        dialog_title = ("%d Leitungstrassen gemeinsam bearbeiten" % int(editing_count)
+                        if int(editing_count) > 1 else "Leitungstrasse bearbeiten")
+        accept_text = "Für alle übernehmen" if int(editing_count) > 1 else "Übernehmen"
+    else:
+        dialog_title = "Leitungstrasse anlegen"
+        accept_text = "Zeichnen"
     dialog = vs.CreateResizableLayout(
-        _title("Leitungstrasse bearbeiten" if editing else "Leitungstrasse anlegen"),
-        True, "Übernehmen" if editing else "Zeichnen", "Abbrechen", True, True)
+        _title(dialog_title), True, accept_text, "Abbrechen", True, True)
     vs.CreateStyledStatic(dialog, 10, "LEITUNGSTRASSE  |  System und Geometrie", -1, TITLE_STYLE)
     vs.CreateStaticText(dialog, 11,
-                        ("Bestehende Trasse ändern; die Höhenkette bleibt erhalten, sofern Anzahl und Punkte gleich bleiben."
-                         if editing else "%d markierte Ausgangsstrecke(n). Danach wird eine verknüpfte Trasse erzeugt." % source_count),
+                        (("Die Werte der ersten Trasse werden auf %d markierte Trassen übertragen; "
+                          "Lage, Name und vorhandene Höhen bleiben erhalten, sofern keine Neuberechnung gewählt wird."
+                          % int(editing_count))
+                         if editing and int(editing_count) > 1 else
+                         ("Bestehende Trasse ändern; die Höhenkette bleibt erhalten, sofern Anzahl und Punkte gleich bleiben."
+                          if editing else
+                          ("Standards für neue Trassen und den gewählten Aktualisierungsumfang festlegen."
+                           if standards else
+                           "%d markierte Ausgangsstrecke(n). Danach wird eine verknüpfte Trasse erzeugt." % source_count))),
                         82)
     labels = (
         (12, "Leitungstyp:"), (14, "Trassenname:"), (16, "Material:"),
@@ -313,7 +334,7 @@ def route_dialog(preferences, initial=None, source_count=0):
                 vs.SetBooleanItem(dialog, control, bool(current.get(key, preferences[key])))
             vs.SetBooleanItem(
                 dialog, 68, bool(current.get("outside_diameters_explicit", False)))
-            vs.SetBooleanItem(dialog, 57, not editing)
+            vs.SetBooleanItem(dialog, 57, not editing and not standards)
             color = current.get("line_color", preferences["colors"][type_value])
             for control, value in ((62, color),
                                    (64, current.get("text_color", preferences["text_color"])),
@@ -434,7 +455,7 @@ def confirm_delete(count):
     return bool(vs.YNDialog("%d markierte Leitungstrasse(n) wirklich löschen?" % int(count)))
 
 
-def preferences_dialog(preferences):
+def preferences_dialog(preferences, default_scope="save"):
     current = copy.deepcopy(preferences)
     dialog = vs.CreateResizableLayout(
         _title("Leitung – Voreinstellungen"), True, "Speichern", "Abbrechen", True, True)
@@ -459,8 +480,10 @@ def preferences_dialog(preferences):
     for item in (26, 27, 28, 29):
         vs.CreateColorPopup(dialog, item, 15)
     vs.CreateStaticText(dialog, 30,
-                        "Die Auswahlwerte bleiben in jeder Trasse gespeichert. Änderungen an Standards "
-                        "überschreiben vorhandene Objekte nicht.", 76)
+                        "Im nächsten Schritt werden Darstellung, Beschriftung, Höhen und 3D-Standards festgelegt.",
+                        76)
+    vs.CreateStaticText(dialog, 35, "Neue Standards anwenden auf:", -1)
+    vs.CreatePullDownMenu(dialog, 36, 46)
     vs.SetFirstLayoutItem(dialog, 10)
     previous = 10
     for label, field in ((11, 12), (13, 14), (15, 16), (17, 18),
@@ -474,7 +497,17 @@ def preferences_dialog(preferences):
             vs.SetRightItem(dialog, 27, 28, 5, 0)
             vs.SetRightItem(dialog, 28, 29, 5, 0)
     vs.SetBelowItem(dialog, previous, 30, 0, 7)
-    result = {"value": None}
+    vs.SetBelowItem(dialog, 30, 35, 0, 7)
+    vs.SetRightItem(dialog, 35, 36, 8, 0)
+    scopes = (
+        ("Nur als Standard für neue Trassen speichern", "save"),
+        ("Markierte Leitungstrasse(n) / Systeme aktualisieren", "selection"),
+        ("Alle Leitungstrassen der Zeichnung aktualisieren", "drawing"),
+    )
+    scope_values = [row[1] for row in scopes]
+    if default_scope not in scope_values:
+        default_scope = "save"
+    result = {"value": None, "scope": default_scope}
 
     def handler(item, _data):
         if item == INIT:
@@ -486,6 +519,9 @@ def preferences_dialog(preferences):
             vs.SelectChoice(dialog, 16, current["materials"].index(current["default_material"]), True)
             for control, utility_type in zip((26, 27, 28, 29), core.UTILITY_TYPES):
                 vs.SetColorChoice(dialog, control, vs.RGBToColorIndex(*current["colors"][utility_type]))
+            for index, row in enumerate(scopes):
+                vs.AddChoice(dialog, 36, row[0], index)
+            vs.SelectChoice(dialog, 36, scope_values.index(default_scope), True)
         elif item == 1:
             types = list(dict.fromkeys(
                 core.utility_type(part.strip())
@@ -516,5 +552,7 @@ def preferences_dialog(preferences):
                 class_prefix=_text(dialog, 22), text_class=_text(dialog, 24),
                 colors=colors)
             result["value"] = value
+            result["scope"] = scopes[_choice(dialog, 36)][1]
         return item
-    return result["value"] if _run(dialog, handler) == 1 else None
+    return ((result["value"], result["scope"])
+            if _run(dialog, handler) == 1 else (None, default_scope))

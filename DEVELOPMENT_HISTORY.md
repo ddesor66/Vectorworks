@@ -26,6 +26,18 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
 
 ## Weiterentwicklung im Repository
 
+- Leitungstool 1.1.0 / gemeinsames Kanal- und Leitungstool 1.5.0: Die für
+  Versorgungstrassen fachlich sinnvollen Bedienkonzepte des Kanalmoduls wurden
+  übertragen. Mehrere Trassen können gemeinsam mit allen System-, DN-,
+  Material-, Darstellungs-, Beschriftungs-, Höhen- und 3D-Eigenschaften
+  bearbeitet werden. Vollständige Leitungsstandards lassen sich nur speichern,
+  auf die markierten Leitungssysteme oder auf die gesamte Zeichnung anwenden;
+  beim Standard-Update bleiben technische Bestandswerte geschützt. Mehrfach-
+  Updates werden vorab validiert, gemeinsam neu aufgebaut und bei einem Fehler
+  vollständig zurückgesetzt. Der Dialogfehler beim unmittelbaren Bestätigen
+  einer neuen Trasse bleibt durch einen echten Initialisierungs-/Bestätigungs-
+  Regressionstest abgesichert.
+
 - Kanaltool 1.0.23: kompakte Schachtbeschriftung mit Schachtname, Bauart
   (`B`, `PP` oder Freitext), `D.=`, `KD`, einzelnen Zu-/Abläufen und Tiefe.
 - Die Kanalkette besitzt eine echte Mehrfachauswahl für Haltungen; ein

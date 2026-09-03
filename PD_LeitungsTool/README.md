@@ -1,8 +1,21 @@
-# PD Leitungstool 1.0.8
+# PD Leitungstool 1.1.0
 
 Das Modul verwaltet Versorgungstrassen getrennt vom Kanalnetz. Eine Trasse ist
 ein persistentes Vectorworks-Objekt und enthält eine oder mehrere Leitungen mit
 eigenen DN-, Außenmaß- und Höhenketten.
+
+Mehrere markierte Trassen lassen sich gemeinsam bearbeiten. Dabei werden die
+vollständigen System-, DN-, Material-, Darstellungs-, Beschriftungs-, Höhen-
+und 3D-Eigenschaften aus der ersten gewählten Trasse angeboten; Lage,
+Objektidentität und Trassenname bleiben je Objekt erhalten. Der Neuaufbau aller
+gewählten Trassen ist eine gemeinsame, geprüfte Transaktion und wird bei einem
+Fehler vollständig zurückgesetzt.
+
+Die Voreinstellungen umfassen nun auch alle wiederverwendbaren Darstellungs-,
+Beschriftungs-, Höhen-, Gelände- und 3D-Werte. Sie können nur für neue Trassen
+gespeichert, auf die markierten Leitungssysteme oder auf alle Leitungstrassen
+der Zeichnung angewendet werden. Beim reinen Standard-Update bleiben Lage,
+Name, DN, Material und bestehende Höhenketten unverändert.
 
 Die Auswahl der ein- oder zweizeiligen Beschriftung ist vor dem ersten
 Dialogereignis initialisiert. Dadurch kann eine neue Leitungstrasse nach dem

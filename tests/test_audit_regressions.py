@@ -322,6 +322,88 @@ class UtilityCoreTests(unittest.TestCase):
         self.assertEqual(12, len(faces[0]))
         self.assertEqual(12, len(faces[1]))
 
+    def test_route_standards_preserve_engineering_data(self):
+        live = importlib.import_module("PD_LeitungsTool.live")
+        preferences = utility_settings.validate({
+            "graphics_mode": "double_line", "regular_label": True,
+            "label_text": "NEU", "font_size_pt": 12.0,
+            "colors": dict(utility_settings.DEFAULT_COLORS,
+                           Trinkwasser=[11, 22, 33]),
+        })
+        route = utility_core.new_route(
+            ((0.0, 0.0), (10.0, 0.0)), self._options(),
+            identity_factory=lambda: "standards")
+        updated = live._route_with_preferences(route, preferences)
+        self.assertEqual(route["id"], updated["id"])
+        self.assertEqual(route["points_m"], updated["points_m"])
+        self.assertEqual(route["dns_mm"], updated["dns_mm"])
+        self.assertEqual(route["material"], updated["material"])
+        self.assertEqual(route["route_heights_m"], updated["route_heights_m"])
+        self.assertEqual("double_line", updated["graphics_mode"])
+        self.assertEqual("NEU", updated["label_text"])
+        self.assertEqual((11, 22, 33), updated["line_color"])
+
+    def test_complete_route_options_become_saved_defaults(self):
+        app = importlib.import_module("PD_LeitungsTool.app")
+        preferences = utility_settings.validate({})
+        options = app._options(preferences)
+        options.update(
+            graphics_mode="double_line", draw_3d=False,
+            label_layout="two_line", font_size_pt=13.0,
+            line_color=[100, 200, 300])
+        updated = app._preferences_from_options(preferences, options)
+        self.assertEqual("double_line", updated["graphics_mode"])
+        self.assertFalse(updated["draw_3d"])
+        self.assertEqual("two_line", updated["label_layout"])
+        self.assertEqual(13.0, updated["font_size_pt"])
+        self.assertEqual([100, 200, 300],
+                         updated["colors"][updated["default_type"]])
+
+    def test_multi_route_update_resets_once_and_redraws_once(self):
+        live = importlib.import_module("PD_LeitungsTool.live")
+        preferences = utility_settings.validate({})
+        first = utility_core.new_route(
+            ((0.0, 0.0), (5.0, 0.0)), self._options(),
+            identity_factory=lambda: "first")
+        second = utility_core.new_route(
+            ((0.0, 1.0), (5.0, 1.0)), self._options(),
+            identity_factory=lambda: "second")
+        store = {
+            "A": {"schema": utility_core.SCHEMA, "role": "utility_route",
+                  "route": first, "preferences": preferences},
+            "B": {"schema": utility_core.SCHEMA, "role": "utility_route",
+                  "route": second, "preferences": preferences},
+        }
+
+        class Store(object):
+            def data_of(self, handle):
+                return store.get(handle)
+
+            def write_data(self, handle, data):
+                store[handle] = copy.deepcopy(data)
+
+        resets = []
+        redraws = []
+
+        def reset(handle):
+            resets.append(handle)
+            store[handle]["render_status"] = {"state": live.RENDER_OK, "message": ""}
+
+        api = types.SimpleNamespace(
+            NameUndoEvent=lambda _name: None, ResetObject=reset,
+            ReDrawAll=lambda: redraws.append(True))
+        changed_first = dict(first, label_text="A")
+        changed_second = dict(second, label_text="B")
+        with mock.patch.object(live, "vs", api), mock.patch.object(
+                live, "_objects", return_value=Store()):
+            count = live.update_many(
+                (("A", changed_first), ("B", changed_second)), preferences)
+        self.assertEqual(2, count)
+        self.assertEqual(["A", "B"], resets)
+        self.assertEqual([True], redraws)
+        self.assertEqual("A", store["A"]["route"]["label_text"])
+        self.assertEqual("B", store["B"]["route"]["label_text"])
+
 
 class UtilityPersistenceTests(unittest.TestCase):
     def test_valid_json_list_is_reported_as_domain_error(self):
