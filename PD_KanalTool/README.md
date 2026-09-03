@@ -1,4 +1,4 @@
-# PD Kanaltool 1.3.8
+# PD Kanaltool 1.3.9
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und
@@ -28,6 +28,13 @@ Schachtbeschriftung `KS = …` erzeugt. Die leitungsparallele Anschlusshöhe ble
 als eigenständig verschiebbare Beschriftung erhalten. Vorhandene Zeichnungen
 werden beim nächsten Objektaufbau anhand des anonymen Endknotens ebenso
 korrigiert; echte Schächte und mehrarmige Verbindungsknoten bleiben unverändert.
+
+Die Tabelle `Kanalkette – Mehrere Gefälle und Schachthöhen` kann nach
+Objektbezeichnung auf- oder absteigend sortiert, auf Schächte beziehungsweise
+Rohre eingeschränkt und über eine freie, nicht zwischen Groß- und
+Kleinschreibung unterscheidende Zeichenfolge durchsucht werden. Auswahl und
+Objektidentität bleiben beim Filtern und Sortieren getrennt von der sichtbaren
+Zeilennummer erhalten.
 
 ## Einstieg und Zeichenrichtung
 

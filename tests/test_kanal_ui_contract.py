@@ -1320,6 +1320,61 @@ class KanalDialogTests(unittest.TestCase):
         self.assertEqual([2.5, 2.5], [value["slope_percent"] for value in result[1]])
         self.assertIn((("pipe", "p1"), ("pipe", "p2")), highlighted)
 
+    def test_chain_rows_filter_search_and_sort_without_mixing_types(self):
+        api = DialogAPI()
+        ui = load_ui(api)
+        shafts = {
+            value["id"]: value for value in (
+                shaft("s1", "MW.001", 0.0, 100.0),
+                shaft("s2", "MW.002", 10.0, 99.9),
+                shaft("s3", "MW.003", 20.0, 99.8))}
+        pipes = {
+            value["id"]: value for value in (
+                pipe("p1", "s1", "s2", 100.0, 99.9),
+                pipe("p2", "s2", "s3", 99.9, 99.8))}
+
+        descending = ui.network_chain_rows(
+            shafts, pipes, object_type="shaft", descending=True)
+        self.assertEqual(
+            ["Schacht MW.003", "Schacht MW.002", "Schacht MW.001"],
+            [row[2] for row in descending])
+        searched = ui.network_chain_rows(
+            shafts, pipes, object_type="pipe", search="mw.003")
+        self.assertEqual(("pipe", "p2", "Rohr MW.002 → MW.003"), searched[0])
+        self.assertEqual(1, len(searched))
+
+    def test_chain_dialog_type_filter_sort_and_search_refresh_the_table(self):
+        api = DialogAPI()
+
+        def inspect(dialog, handler):
+            self.assertEqual(5, len(api.lb_rows[(dialog, 13)]))
+            api.choice_selection[(dialog, 25)] = 2
+            handler(25, 0)
+            self.assertEqual(2, len(api.lb_rows[(dialog, 13)]))
+            self.assertTrue(all(row[0].startswith("Rohr ")
+                                for row in api.lb_rows[(dialog, 13)]))
+            api.SetItemText(dialog, 29, "RW.003")
+            handler(29, 0)
+            self.assertEqual(
+                "Rohr RW.002 → RW.003", api.lb_rows[(dialog, 13)][0][0])
+            api.SetItemText(dialog, 29, "")
+            api.choice_selection[(dialog, 27)] = 1
+            handler(27, 0)
+            self.assertEqual(
+                ["Rohr RW.002 → RW.003", "Rohr RW.001 → RW.002"],
+                [row[0] for row in api.lb_rows[(dialog, 13)]])
+            return 2
+
+        api.on_run = inspect
+        ui = load_ui(api)
+        result = ui.network_chain_dialog(
+            (shaft("s1", "RW.001", 0.0, 100.0),
+             shaft("s2", "RW.002", 10.0, 99.9),
+             shaft("s3", "RW.003", 20.0, 99.8)),
+            (pipe("p1", "s1", "s2", 100.0, 99.9),
+             pipe("p2", "s2", "s3", 99.9, 99.8)))
+        self.assertIsNone(result)
+
     def test_chain_confirms_and_applies_height_induced_flow_reversal(self):
         api = DialogAPI()
 

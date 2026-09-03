@@ -388,3 +388,10 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   Zeichnungen aus, ohne echte Schächte oder mehrarmige Verbindungsknoten zu
   verändern. Drei zusätzliche Modell- und Beschriftungsregressionen erhöhen
   den Gesamtumfang auf 216 automatisierte Tests.
+- Kanaltool und gemeinsamer Kanal-/Leitungsaufruf 1.3.9: Die Kanalkettenliste
+  erhält eine auf- und absteigende Objektsortierung, den Typfilter `Alle`,
+  `Schächte` oder `Rohre` sowie eine freie, groß-/kleinschreibungsunabhängige
+  Teiltextsuche. Auswahl und Bearbeitung werden über stabile Objektidentitäten
+  statt sichtbarer Zeilennummern geführt, sodass Sortieren und Filtern keine
+  falschen Haltungen oder Schächte ändern. Zwei zusätzliche Filter-, Sortier-
+  und Dialogregressionen erhöhen den Gesamtumfang auf 218 automatisierte Tests.

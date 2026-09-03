@@ -1655,16 +1655,48 @@ def preferences_dialog(preferences, default_scope="save"):
             if _run(dialog, handler, (680, 560)) == 1 else (None, "save"))
 
 
+def network_chain_rows(shafts, pipes, object_type="all", search="", descending=False):
+    """Build deterministic, searchable rows for the network-chain dialog."""
+    if object_type not in ("all", "shaft", "pipe"):
+        raise core.SewerError("Unbekannter Objekttypfilter der Kanalkette.")
+    query = str(search or "").strip().casefold()
+
+    def matches(title, identity, value):
+        searchable = " ".join((
+            title, str(identity), str(value.get("kind") or ""),
+            str(value.get("name") or ""), str(value.get("material") or ""),
+            str(value.get("dn_mm") or ""),
+        )).casefold()
+        return not query or query in searchable
+
+    shaft_rows = []
+    if object_type in ("all", "shaft"):
+        for value in shafts.values():
+            title = "Schacht %s" % value["name"]
+            if matches(title, value["id"], value):
+                shaft_rows.append(("shaft", value["id"], title))
+    pipe_rows = []
+    if object_type in ("all", "pipe"):
+        for value in pipes.values():
+            title = "Rohr %s → %s" % (
+                shafts[value["start_id"]]["name"],
+                shafts[value["end_id"]]["name"])
+            if matches(title, value["id"], value):
+                pipe_rows.append(("pipe", value["id"], title))
+    key = lambda row: (row[2].casefold(), row[1])
+    # Keep the familiar type groups. The selected direction changes the
+    # object order inside each group and therefore remains easy to scan.
+    shaft_rows.sort(key=key, reverse=bool(descending))
+    pipe_rows.sort(key=key, reverse=bool(descending))
+    return tuple(shaft_rows + pipe_rows)
+
+
 def network_chain_dialog(shafts, pipes, highlight=None):
     """Stage several shaft elevations and pipe slopes in one network dialog."""
     shafts = {value["id"]: core.validate_shaft(value, allow_hidden=True) for value in shafts}
     pipes = {value["id"]: core.validate_pipe(value) for value in pipes}
-    rows = ([('shaft', value["id"], "Schacht %s" % value["name"])
-             for value in sorted(shafts.values(), key=lambda row: (row["name"], row["id"]))] +
-            [('pipe', value["id"], "Rohr %s → %s" %
-              (shafts[value["start_id"]]["name"], shafts[value["end_id"]]["name"]))
-             for value in sorted(pipes.values(), key=lambda row: row["id"])] )
-    if not rows:
+    initial_rows = network_chain_rows(shafts, pipes)
+    if not initial_rows:
         raise core.SewerError("Das gewählte Kanalnetz enthält keine bearbeitbaren Objekte.")
     dialog = vs.CreateResizableLayout(_title("Kanalanlage – Kette bearbeiten"), True,
                                       "Alle Änderungen übernehmen", "Abbrechen", True, True)
@@ -1672,7 +1704,14 @@ def network_chain_dialog(shafts, pipes, highlight=None):
     vs.CreateStaticText(
         dialog, 11,
         "Ein Objekt oder mehrere Haltungen mit Strg-/Umschalt-Klick auswählen. "
-        "Ein gemeinsames Gefälle wird auf alle markierten Haltungen angewendet.", 78)
+        "Objekttyp, Sortierung und Suche grenzen die Liste ein. Ein gemeinsames Gefälle "
+        "wird auf alle sichtbaren markierten Haltungen angewendet.", 78)
+    vs.CreateStaticText(dialog, 24, "Objekttyp:", -1)
+    vs.CreatePullDownMenu(dialog, 25, 20)
+    vs.CreateStaticText(dialog, 26, "Sortierung:", -1)
+    vs.CreatePullDownMenu(dialog, 27, 20)
+    vs.CreateStaticText(dialog, 28, "Suche:", -1)
+    vs.CreateEditText(dialog, 29, "", 24)
     vs.CreateStaticText(dialog, 12, "Kettenobjekte:", -1)
     vs.CreateLB(dialog, 13, 78, 12)
     vs.CreateStaticText(dialog, 14, "Deckelhöhe KD [m]:", -1)
@@ -1687,7 +1726,13 @@ def network_chain_dialog(shafts, pipes, highlight=None):
     vs.CreateStaticText(dialog, 23, "Noch keine Änderung vorgemerkt.", 76)
     vs.SetFirstLayoutItem(dialog, 10)
     vs.SetBelowItem(dialog, 10, 11, 0, 6)
-    vs.SetBelowItem(dialog, 11, 12, 0, 6)
+    vs.SetBelowItem(dialog, 11, 24, 0, 6)
+    vs.SetRightItem(dialog, 24, 25, 8, 0)
+    vs.SetRightItem(dialog, 25, 26, 16, 0)
+    vs.SetRightItem(dialog, 26, 27, 8, 0)
+    vs.SetRightItem(dialog, 27, 28, 16, 0)
+    vs.SetRightItem(dialog, 28, 29, 8, 0)
+    vs.SetBelowItem(dialog, 24, 12, 0, 6)
     vs.SetBelowItem(dialog, 12, 13, 0, 3)
     previous = 13
     for label, field in ((14, 15), (16, 17), (18, 19), (20, 21)):
@@ -1698,7 +1743,11 @@ def network_chain_dialog(shafts, pipes, highlight=None):
     vs.SetBelowItem(dialog, 22, 23, 0, 5)
     vs.SetEdgeBinding(dialog, 13, True, True, True, True)
     result = {"value": None, "changes": 0}
-    state = {"filling": False}
+    state = {
+        "filling": False,
+        "rows": initial_rows,
+        "selected_keys": {(initial_rows[0][0], initial_rows[0][1])},
+    }
 
     def fmt(value):
         return ("%.4f" % float(value)).replace(".", ",")
@@ -1707,18 +1756,32 @@ def network_chain_dialog(shafts, pipes, highlight=None):
         return _height_text(value)
 
     def selected_indexes():
-        return [index for index in range(len(rows))
+        return [index for index in range(len(state["rows"]))
                 if vs.IsLBItemSelected(dialog, 13, index)]
 
     def selected_rows():
-        return [rows[index] for index in selected_indexes()]
+        return [state["rows"][index] for index in selected_indexes()]
 
-    def fill_table(selected=()):
+    def remember_selection():
+        visible = {(role, identity) for role, identity, _title in state["rows"]}
+        chosen = {(state["rows"][index][0], state["rows"][index][1])
+                  for index in selected_indexes()}
+        state["selected_keys"].difference_update(visible)
+        state["selected_keys"].update(chosen)
+
+    def fill_table(selected=None):
+        if selected is not None:
+            state["selected_keys"] = set(selected)
+        object_type = ("all", "shaft", "pipe")[_choice(dialog, 25)]
+        descending = _choice(dialog, 27) == 1
+        state["rows"] = network_chain_rows(
+            shafts, pipes, object_type,
+            str(vs.GetItemText(dialog, 29) or ""), descending)
         state["filling"] = True
         try:
             vs.EnableLBUpdates(dialog, 13, False)
             vs.DeleteAllLBItems(dialog, 13)
-            for row_index, (role, identity, title) in enumerate(rows):
+            for row_index, (role, identity, title) in enumerate(state["rows"]):
                 value = shafts[identity] if role == "shaft" else pipes[identity]
                 if role == "pipe":
                     title = "Rohr %s → %s" % (
@@ -1736,11 +1799,14 @@ def network_chain_dialog(shafts, pipes, highlight=None):
                     if vs.SetLBItemInfo(
                             dialog, 13, row_index, column, text_value, -1) is False:
                         raise core.SewerError("Die Kanalkette konnte nicht vollständig angezeigt werden.")
-            if rows:
-                vs.SetLBSelection(dialog, 13, 0, len(rows) - 1, False)
-            for index in selected:
-                if 0 <= index < len(rows):
+            if state["rows"]:
+                vs.SetLBSelection(dialog, 13, 0, len(state["rows"]) - 1, False)
+            for index, (role, identity, _title) in enumerate(state["rows"]):
+                if (role, identity) in state["selected_keys"]:
                     vs.SetLBSelection(dialog, 13, index, index, True)
+            vs.SetItemText(
+                dialog, 12, "Kettenobjekte: %d von %d" % (
+                    len(state["rows"]), len(shafts) + len(pipes)))
         finally:
             vs.EnableLBUpdates(dialog, 13, True)
             state["filling"] = False
@@ -1761,13 +1827,18 @@ def network_chain_dialog(shafts, pipes, highlight=None):
                 shafts[identity]["ks_m"] = min(values)
 
     def show():
+        remember_selection()
         selected = selected_rows()
         if highlight:
             highlight(tuple((role, identity) for role, identity, _title_value in selected))
         if not selected:
             for item in (15, 17, 19, 21, 22):
                 vs.EnableItem(dialog, item, False)
-            vs.SetItemText(dialog, 23, "Bitte mindestens ein Kettenobjekt auswählen.")
+            vs.SetItemText(
+                dialog, 23,
+                ("Keine Objekte entsprechen dem aktuellen Filter."
+                 if not state["rows"] else
+                 "Bitte mindestens ein Kettenobjekt auswählen."))
             return
         if len(selected) > 1:
             if any(role != "pipe" for role, _identity, _title_value in selected):
@@ -1822,7 +1893,8 @@ def network_chain_dialog(shafts, pipes, highlight=None):
 
     def stage():
         shaft_snapshot, pipe_snapshot = copy.deepcopy(shafts), copy.deepcopy(pipes)
-        selected_snapshot = selected_indexes()
+        selected_snapshot = tuple(
+            (role, identity) for role, identity, _title in selected_rows())
 
         def restore(message=None):
             shafts.clear()
@@ -1902,8 +1974,9 @@ def network_chain_dialog(shafts, pipes, highlight=None):
             core.validate_network(tuple(pipes.values()), tuple(shafts.values()))
             result["changes"] += 1
             vs.SetItemText(dialog, 23, "%d Änderung(en) vorgemerkt. Weitere Kettenobjekte wählen oder alles übernehmen." % result["changes"])
-            indexes = selected_indexes()
-            fill_table(indexes)
+            selected_keys = tuple(
+                (role, identity) for role, identity, _title in selected)
+            fill_table(selected_keys)
             show()
         except (core.SewerError, ValueError, TypeError) as error:
             restore()
@@ -1921,12 +1994,23 @@ def network_chain_dialog(shafts, pipes, highlight=None):
             vs.EnableLBColumnLines(dialog, 13, True)
             vs.EnableLBSingleLineSelection(dialog, 13, False)
             vs.EnableLBSorting(dialog, 13, False)
-            fill_table((0,))
+            for index, title in enumerate(
+                    ("Alle Objekte", "Nur Schächte", "Nur Rohre")):
+                vs.AddChoice(dialog, 25, title, index)
+            vs.SelectChoice(dialog, 25, 0, True)
+            for index, title in enumerate(("Aufsteigend", "Absteigend")):
+                vs.AddChoice(dialog, 27, title, index)
+            vs.SelectChoice(dialog, 27, 0, True)
+            fill_table()
             vs.AddChoice(dialog, 21, "Anfangssohle", 0)
             vs.AddChoice(dialog, 21, "Endsohle", 1)
             vs.SelectChoice(dialog, 21, 0, True)
             show()
         elif abs(item) == 13 and not state["filling"]:
+            show()
+        elif abs(item) in (25, 27, 29) and not state["filling"]:
+            remember_selection()
+            fill_table()
             show()
         elif item == 22:
             stage()
