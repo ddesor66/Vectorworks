@@ -29,6 +29,7 @@ class FakeVS(types.ModuleType):
         self.shown_classes = []
         self.shown_layers = []
         self.redraw_count = 0
+        self.moves = []
 
     def GetTypeN(self, handle): return self.types[handle]
     def GetUnits(self): return (None, None, None, 0.0254)
@@ -99,6 +100,9 @@ class FakeVS(types.ModuleType):
 
     def HDuplicate(self, handle, _dx, _dy):
         return getattr(self, "duplicates", {}).get(handle)
+
+    def HMove(self, handle, dx, dy):
+        self.moves.append((handle, dx, dy))
 
     def CreateDuplicateObject(self, handle, container):
         duplicate = handle + "-control"
@@ -467,6 +471,10 @@ class Foreign3DTests(unittest.TestCase):
         self.assertTrue(result["ready"])
         self.assertTrue(result["selected"])
         self.assertEqual((3463300.0, 5547900.0), result["xy_anchor_m"])
+        self.assertEqual(1, len(fake.moves))
+        self.assertEqual("new-model", fake.moves[0][0])
+        self.assertAlmostEqual(3463300.0, fake.moves[0][1])
+        self.assertAlmostEqual(5547900.0, fake.moves[0][2])
         self.assertEqual("DGM Bestand", fake.names["new-model"])
         self.assertEqual("PD-GB-Gelaendemodell", fake.classes["new-model"])
         self.assertEqual(["PD-GB-Gelaendemodell"], fake.shown_classes)
@@ -509,6 +517,9 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual(adapter.QUERY_RECORD, writes[0][1])
         self.assertEqual("new-model", writes[0][3]["model_uuid"])
         self.assertEqual("DGM Bestand", writes[0][3]["model_name"])
+        self.assertEqual("source_xy_placement",
+                         writes[0][3]["coordinate_mode"])
+        self.assertEqual([10.0, 20.0], writes[0][3]["placement_units"])
 
     def test_query_metadata_prefers_matching_control_layer_record(self):
         fake = FakeVS()
@@ -544,15 +555,14 @@ class Foreign3DTests(unittest.TestCase):
             "DGM Bestand", "PD-GB-Gelaendemodell"))
         self.assertEqual([("DTM6 Menu", 1)], fake.menu_calls)
 
-    def test_normalized_site_model_validation_adds_document_origin(self):
+    def test_translated_site_model_validation_adds_source_placement(self):
         fake = FakeVS()
-        fake.document_origin = (-3463348.5, -5547900.4)
         adapter = load_adapter(fake)
         calls = []
         expected = {
-            (-3463347.5, -5547898.4): 100.7,
-            (-3463345.5, -5547896.4): 102.5,
-            (-3463343.5, -5547894.4): 104.2,
+            (3463379.4, 5547916.1): 100.7,
+            (3463381.4, 5547918.1): 102.5,
+            (3463383.4, 5547920.1): 104.2,
         }
 
         def elevation(_handle, point, tin_type):
@@ -562,7 +572,8 @@ class Foreign3DTests(unittest.TestCase):
         adapter.site_model.elevation = elevation
         result = adapter._validate_normalized_site_model(
             "model", ((1.0, 2.0, 100.7), (3.0, 4.0, 102.5),
-                      (5.0, 6.0, 104.2)), fake.document_origin, 1.0)
+                      (5.0, 6.0, 104.2)),
+            (3463378.4, 5547914.1), 1.0)
 
         self.assertEqual(3, result["checked"])
         self.assertAlmostEqual(0.0, result["maximum_error_m"])
@@ -591,6 +602,27 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual(0, calls[0][2])
         self.assertAlmostEqual(-3463347.502, calls[0][1][0])
         self.assertAlmostEqual(-5547898.413, calls[0][1][1])
+
+    def test_sampler_uses_original_xy_for_translated_site_model(self):
+        fake = FakeVS()
+        adapter = load_adapter(fake)
+        adapter._read_record = lambda *_args: {
+            "schema": adapter.QUERY_SCHEMA,
+            "coordinate_mode": "source_xy_placement",
+            "xy_anchor_m": [3463378.392, 5547914.112],
+        }
+        calls = []
+
+        def elevation(handle, point, tin_type):
+            calls.append((handle, point, tin_type))
+            return 102.65
+
+        adapter.site_model.elevation = elevation
+        value = adapter.sampler("model", 0)(3463379.392, 5547916.112)
+
+        self.assertAlmostEqual(102.65, value)
+        self.assertEqual(
+            ("model", (3463379.392, 5547916.112), 0), calls[0])
 
     def test_nurbs_keeps_individual_vertex_heights(self):
         fake = FakeVS()

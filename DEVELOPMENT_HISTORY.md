@@ -148,3 +148,9 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   Höhenlinien und Triangulation bleibt erhalten. Der Assistent weist außerdem
   eindeutig darauf hin, dass Schritt 1 den nativen Erzeugungsdialog bereits
   selbst öffnet und der Befehl danach nicht nochmals ausgeführt werden darf.
+- Gelände- und Baugrubenmodul 1.0.24: Die numerisch stabil um den internen
+  Nullpunkt triangulierte DGM-Geometrie wird nach der nativen Erzeugung als
+  vollständiges Plug-in-Objekt um den zuvor entfernten XY-Datenanker
+  zurückversetzt. Das sichtbare Geländemodell liegt damit wieder deckungsgleich
+  auf den ursprünglichen Vermessungsdaten. Die native Höhenprüfung erfolgt
+  anschließend an den zurückversetzten Originalkoordinaten.

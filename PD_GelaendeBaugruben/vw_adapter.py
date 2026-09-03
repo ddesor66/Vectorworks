@@ -1191,20 +1191,20 @@ def _normalized_source_samples(handles, factor):
     return tuple(samples)
 
 
-def _validate_normalized_site_model(handle, samples, origin_units, factor,
+def _validate_normalized_site_model(handle, samples, placement_units, factor,
                                     tolerance_m=0.02):
-    """Verify the native existing TIN against every consumed source vertex."""
+    """Verify the translated native TIN against every consumed source vertex."""
     checked = tuple(samples or ())
     if len(checked) < 3:
         raise core.TerrainError(
             "Für die Höhenprüfung des Geländemodells fehlen Quellstützpunkte.")
     failed = 0
     maximum_error_m = 0.0
-    origin_x, origin_y = origin_units
+    placement_x, placement_y = placement_units
     for x_value, y_value, expected_z in checked:
         try:
             actual_z = site_model.elevation(
-                handle, (x_value + origin_x, y_value + origin_y), 0)
+                handle, (x_value + placement_x, y_value + placement_y), 0)
         except site_model.SiteModelError:
             failed += 1
             continue
@@ -1254,11 +1254,20 @@ def create_site_model_from_selected_sources(model_name, model_class,
     handle = created[-1]
 
     anchor = tuple(xy_anchor_m or (0.0, 0.0))
-    # Vectorworks' Python geometry coordinates are relative to its internal
-    # origin, while the OIP and document rulers expose the georeferenced user
-    # coordinates.  The local source values therefore already appear at their
-    # correct world position.  Applying the anchor as an object translation
-    # would add the georeference twice.
+    # The temporary source geometry was deliberately centred around (0, 0) so
+    # the native triangulation remains numerically stable at large survey
+    # coordinates. The resulting PIO inherits that local position. Move the
+    # complete PIO by the removed source anchor: its TIN stays local and stable,
+    # while the visible model returns exactly to the original data footprint.
+    placement_units = (float(anchor[0]) / factor,
+                       float(anchor[1]) / factor)
+    if abs(placement_units[0]) > 1e-12 or abs(placement_units[1]) > 1e-12:
+        try:
+            vs.HMove(handle, placement_units[0], placement_units[1])
+        except (AttributeError, TypeError) as error:
+            raise core.TerrainError(
+                "Das erzeugte Geländemodell konnte nicht auf die ursprüngliche "
+                "Datenfläche zurückgesetzt werden: %s" % error)
 
     desired_name = str(model_name or "").strip() or "DGM Bestand"
     named_object = vs.GetObject(desired_name)
@@ -1347,7 +1356,7 @@ def create_site_model_from_selected_sources(model_name, model_class,
     validation = {"checked": 0, "maximum_error_m": 0.0}
     if source_handles is not None:
         validation = _validate_normalized_site_model(
-            handle, source_samples, creation_origin, factor)
+            handle, source_samples, placement_units, factor)
         # Never attach auxiliary records to the native site-model PIO or to
         # the layer that contains it. Either mutation can invalidate the
         # freshly generated display cache while leaving calculated areas and
@@ -1374,8 +1383,10 @@ def create_site_model_from_selected_sources(model_name, model_class,
             "model_name": actual_name,
             "model_layer_name": layer_name,
             "metadata_layer_name": requested_metadata_layer,
-            "coordinate_mode": "document_origin_plus_normalized",
+            "coordinate_mode": "source_xy_placement",
             "xy_anchor_m": [float(anchor[0]), float(anchor[1])],
+            "placement_units": [float(placement_units[0]),
+                                float(placement_units[1])],
             "creation_origin_units": [float(creation_origin[0]),
                                       float(creation_origin[1])],
             "validated_points": int(validation["checked"]),
@@ -1401,6 +1412,7 @@ def create_site_model_from_selected_sources(model_name, model_class,
         "ready": True,
         "selected": True,
         "xy_anchor_m": anchor,
+        "placement_units": placement_units,
         "validated_points": int(validation["checked"]),
         "maximum_error_m": float(validation["maximum_error_m"]),
     }
