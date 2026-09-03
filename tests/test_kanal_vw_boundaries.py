@@ -228,6 +228,80 @@ class ShaftGraphicsAPI(object):
 
 
 class VectorworksBoundaryTests(unittest.TestCase):
+    def test_terminal_structures_have_independent_persistent_roles(self):
+        live = load_module(types.SimpleNamespace(), "PD_KanalTool.live")
+        self.assertEqual(
+            "sewer_floor_drain",
+            live._node_role({"structure_type": "floor_drain"}))
+        self.assertEqual(
+            "sewer_house_connection",
+            live._node_role({"structure_type": "house"}))
+        self.assertEqual(
+            "sewer_fitting", live._node_role({"structure_type": "stub"}))
+        self.assertEqual(
+            "sewer_shaft", live._node_role({"structure_type": "round"}))
+
+    def test_legacy_ba_object_migrates_to_abl_floor_drain_role(self):
+        api = types.SimpleNamespace(
+            GetName=lambda _handle: "PD-KAN-S-drain-1")
+        live = load_module(api, "PD_KanalTool.live")
+        written = []
+        store = types.SimpleNamespace(
+            write_data=lambda handle, data: written.append((handle, data)))
+        legacy = {
+            "schema": live.core.SCHEMA,
+            "role": "sewer_shaft",
+            "shaft": {"id": "drain-1", "structure_type": "floor_drain",
+                      "name": "BA.001"},
+            "labels": [],
+        }
+        with mock.patch.object(live, "_live", return_value=store), mock.patch.object(
+                live, "_existing_names", return_value={"BA.001"}):
+            migrated = live._repair_duplicate("DRAIN", legacy)
+        self.assertEqual("sewer_floor_drain", migrated["role"])
+        self.assertEqual("ABL.001", migrated["shaft"]["name"])
+
+    def test_terminal_connection_adopts_sw_host_and_uses_floor_lower_edge(self):
+        live = load_module(types.SimpleNamespace(), "PD_KanalTool.live")
+        main = {
+            "id": "main", "kind": "SW", "dn_mm": 300,
+            "start_invert_m": 100.0, "end_invert_m": 99.0,
+        }
+        start = {"id": "s1", "x_m": 0.0, "y_m": 0.0}
+        end = {"id": "s2", "x_m": 10.0, "y_m": 0.0}
+        terminal = {
+            "structure_type": "floor_drain", "kind": "RW",
+            "dn_mm": 150, "material": "PP", "alignment": "invert",
+            "terminal_bottom_m": 100.50, "terminal_length_m": 0.60,
+            "terminal_width_m": 0.35, "terminal_height_m": 0.40,
+            "terminal_label_visible": True, "terminal_label_point_size": 8.0,
+        }
+        preferences = {
+            "shaft_cover_diameter_m": 0.625, "join_style": "round",
+            "fillet_radius_m": 0.20, "flow_arrow_scale": 1.0,
+            "label_layout": "one_line", "label_rotation_deg": 0.0,
+            "draw_3d": True, "graphics_mode": "double_line",
+            "single_line_type": 1,
+        }
+        captured = {}
+
+        def connect(_handle, point, paths, options, _preferences):
+            captured.update(point=point, paths=paths, options=options)
+            return ("branch",), options["terminal"]["terminal_invert_m"]
+
+        with mock.patch.object(
+                live, "pipe_at_point",
+                return_value=("MAIN", main, (5.0, 0.0))), mock.patch.object(
+                live, "_endpoints", return_value=(("S1", start), ("S2", end))), mock.patch.object(
+                live, "connect_branch", side_effect=connect):
+            result = live.connect_terminal(
+                ((0.0, 1.0), (5.0, 0.0)), terminal, preferences)
+        self.assertEqual((("branch",), 100.50), result)
+        self.assertEqual("SW", captured["options"]["kind"])
+        self.assertEqual("SW", captured["options"]["terminal"]["kind"])
+        self.assertEqual(100.50, captured["options"]["terminal"]["terminal_invert_m"])
+        self.assertEqual(100.90, captured["options"]["terminal"]["terminal_top_m"])
+
     def test_legacy_stub_role_migrates_to_independent_fitting_type(self):
         api = types.SimpleNamespace(
             GetName=lambda _handle: "PD-KAN-S-stub-1")

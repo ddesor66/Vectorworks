@@ -1,4 +1,4 @@
-# PD Kanaltool 1.3.5
+# PD Kanaltool 1.3.6
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und
@@ -174,8 +174,10 @@ werden. Ein vorhandener Stutzen wird als eigener Objekttyp und nicht als
 Schacht geführt. Ältere Zeichnungen werden beim nächsten Objektaufbau ohne
 Änderung ihrer Geometrie auf diesen Typ umgestellt. Ein Doppelklick öffnet die
 Anschlussart erneut; eine Änderung aktualisiert Anschlusssohle, Gefälle,
-3D-Geometrie und Beschriftung der Anschlussleitung gemeinsam. Die daraus
-berechnete Anschlusshöhe wird beschriftet. Die Hauptleitung
+3D-Geometrie und Beschriftung der Anschlussleitung gemeinsam. Die
+Stutzenbeschriftung enthält ausschließlich die separat schaltbaren Zeilen
+`ST 0+… m` und `Anschluss KS = … m`; beide Schriftgrößen werden unabhängig in
+den Voreinstellungen festgelegt. Die Hauptleitung
 wird transaktional in zwei Resthaltungen geteilt; die überlagerte alte Haltung
 wird erst nach erfolgreichem Aufbau und mit anschließender Löschkontrolle
 entfernt. Die beiden geometrischen Restsegmente erhalten zusammen nur eine
@@ -198,10 +200,17 @@ damit werden auch ältere Stutzendaten und später eingefügte Schächte korrekt
 berücksichtigt.
 
 Beim Hausanschluss ist die Höhe des freien Endpunkts zwingend anzugeben. Beim
-Bodenablauf kann die Oberkante eingegeben oder von der Deckelhöhe des nächsten
-Schachts übernommen werden. Ohne Bibliothekssymbol entsteht in 2D ein
-30 × 30 cm großer Ablauf und in 3D ein 60 cm tiefer Kasten; beide Maße sind
-änderbar. Bei einem reinen 2D-Symbol wird der Ersatzkasten zusätzlich erzeugt,
+Bodenablauf entspricht die Anschlusshöhe immer der Unterkante. Länge, Breite
+und Höhe des eigenständigen Objekttyps `Bodenablauf` sind beim Erzeugen und
+nachträglich bearbeitbar; seine Bezeichnung beginnt mit `ABL` und seine
+Beschriftung besitzt eine eigene Sichtbarkeit und Schriftgröße. Hausanschluss
+und Bodenablauf übernehmen RW, SW oder MW direkt von der gewählten
+Hauptleitung und erzeugen dort jeweils einen separaten Stutzen. Beide Befehle
+stehen zusätzlich direkt in der Objekt-Info-Palette. Wird keine Unterkante
+eingegeben, wird sie aus der Deckelhöhe des nächsten Schachts und der
+eingestellten Objekthöhe abgeleitet. Ohne Bibliothekssymbol entsteht in 2D und
+3D ein geschlossener rechteckiger Ablauf mit den gewählten L/B/H-Maßen. Bei
+einem reinen 2D-Symbol wird der 3D-Ersatzkörper zusätzlich erzeugt,
 bei einem Hybrid-/3D-Symbol kann er abgeschaltet werden. Die Leitung beginnt an
 der Unterkante des Ablaufs und fällt gleichmäßig zur Hauptleitung.
 Hausanschluss- und Bodenablaufleitungen erhalten unabhängig von ihrer Anzahl

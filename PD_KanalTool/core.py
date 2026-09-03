@@ -958,14 +958,29 @@ def validate_shaft(value, allow_hidden=False):
             character in result["terminal_symbol"] for character in "\r\n\t"):
         raise SewerError("Ungültiger Name des Bodenablaufsymbols.")
     result["terminal_symbol_has_3d"] = bool(result.get("terminal_symbol_has_3d", False))
+    result["terminal_length_m"] = number(
+        result.get("terminal_length_m", result.get("terminal_width_m", 0.50)),
+        "Länge des Bodenablaufs")
     result["terminal_width_m"] = number(
         result.get("terminal_width_m", 0.30), "Breite des Bodenablaufs")
-    result["terminal_depth_m"] = number(
-        result.get("terminal_depth_m", 0.60), "Tiefe des Bodenablaufs")
+    result["terminal_height_m"] = number(
+        result.get("terminal_height_m", result.get("terminal_depth_m", 0.60)),
+        "Höhe des Bodenablaufs")
+    result["terminal_depth_m"] = result["terminal_height_m"]
+    result["terminal_label_visible"] = bool(
+        result.get("terminal_label_visible", True))
+    result["terminal_label_point_size"] = number(
+        result.get("terminal_label_point_size", 9.0),
+        "Schriftgröße der Anschlussbeschriftung")
+    if not 1.0 <= result["terminal_label_point_size"] <= 200.0:
+        raise SewerError(
+            "Die Schriftgröße der Anschlussbeschriftung muss zwischen 1 und 200 pt liegen.")
+    if not 0.05 <= result["terminal_length_m"] <= 10.0:
+        raise SewerError("Die Länge des Bodenablaufs muss zwischen 0,05 m und 10,00 m liegen.")
     if not 0.05 <= result["terminal_width_m"] <= 5.0:
         raise SewerError("Die Breite des Bodenablaufs muss zwischen 0,05 m und 5,00 m liegen.")
-    if not 0.05 <= result["terminal_depth_m"] <= 10.0:
-        raise SewerError("Die Tiefe des Bodenablaufs muss zwischen 0,05 m und 10,00 m liegen.")
+    if not 0.05 <= result["terminal_height_m"] <= 10.0:
+        raise SewerError("Die Höhe des Bodenablaufs muss zwischen 0,05 m und 10,00 m liegen.")
     stub = result.get("stub")
     if result["structure_type"] == "stub":
         if not isinstance(stub, dict):
@@ -1387,14 +1402,19 @@ def shaft_label(shaft, endpoint_rows, preferences):
         outgoing = sorted({round(row[1], 9) for row in endpoint_rows if row[0] == "out"}, reverse=True)
     if shaft["structure_type"] == "stub":
         stub = shaft["stub"]
-        lines = ["Stutzen DN %d" % stub["branch_dn_mm"],
-                 connection_alignment_label(stub["alignment"]),
-                 "Anschluss KS = %s m" % height(stub["connection_invert_m"])]
-        station = station_text(stub)
-        if station:
-            lines.append(station)
+        lines = []
+        if preferences.get("stub_station_label_visible", True):
+            if stub.get("station_enabled") and stub.get("station_m") is not None:
+                lines.append("ST 0+%s m" % format_number(
+                    stub["station_m"], preferences.get("length_decimals", 2)))
+        if preferences.get("stub_height_label_visible", True):
+            lines.append("Anschluss KS = %s m" % height(
+                stub["connection_invert_m"]))
         return "\n".join(lines)
     if shaft["structure_type"] == "floor_drain":
+        if not shaft.get("terminal_label_visible", preferences.get(
+                "floor_drain_label_visible", True)):
+            return ""
         return "%s\nOK = %s m\nUK = %s m" % (
             shaft["name"], height(shaft["kd_m"]), height(shaft["ks_m"]))
     if shaft["structure_type"] == "house":

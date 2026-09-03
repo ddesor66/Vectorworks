@@ -40,7 +40,8 @@ def _quantity_owners():
     owners = [
         handle for handle, data in canal_objects.objects()
         if data.get("role") in (
-            "sewer_pipe", "sewer_shaft", "sewer_fitting", "sewer_rigole")]
+            "sewer_pipe", "sewer_shaft", "sewer_fitting",
+            "sewer_floor_drain", "sewer_house_connection", "sewer_rigole")]
     owners.extend(handle for handle, _data in utility_objects.objects())
     return tuple(owners)
 

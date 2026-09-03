@@ -1346,6 +1346,29 @@ def preferences_dialog(preferences, default_scope="save"):
     vs.CreateCheckBox(
         dialog, 74, "Zu-/Ablaufbeschriftungen direkt am Schacht anzeigen")
 
+    vs.CreateGroupBox(dialog, 106, "Stutzen und Anschlusspunkte", False)
+    vs.CreateCheckBox(dialog, 75, "Stutzen-Stationierung anzeigen")
+    vs.CreateStaticText(dialog, 76, "Schriftgröße Stationierung [pt]:", -1)
+    vs.CreateEditText(
+        dialog, 77, str(current["stub_station_point_size"]).replace(".", ","), 14)
+    vs.CreateCheckBox(dialog, 78, "Stutzen-Anschlusshöhe anzeigen")
+    vs.CreateStaticText(dialog, 79, "Schriftgröße Anschlusshöhe [pt]:", -1)
+    vs.CreateEditText(
+        dialog, 80, str(current["stub_height_point_size"]).replace(".", ","), 14)
+    vs.CreateCheckBox(dialog, 81, "Bodenablaufbeschriftung anzeigen")
+    vs.CreateStaticText(dialog, 82, "Schriftgröße Bodenablauf [pt]:", -1)
+    vs.CreateEditText(
+        dialog, 83, str(current["floor_drain_label_point_size"]).replace(".", ","), 14)
+    vs.CreateStaticText(dialog, 84, "Bodenablauf Länge [m]:", -1)
+    vs.CreateEditText(
+        dialog, 85, str(current["floor_drain_length_m"]).replace(".", ","), 14)
+    vs.CreateStaticText(dialog, 86, "Bodenablauf Breite [m]:", -1)
+    vs.CreateEditText(
+        dialog, 87, str(current["floor_drain_width_m"]).replace(".", ","), 14)
+    vs.CreateStaticText(dialog, 88, "Bodenablauf Höhe [m]:", -1)
+    vs.CreateEditText(
+        dialog, 89, str(current["floor_drain_height_m"]).replace(".", ","), 14)
+
     vs.CreateGroupBox(dialog, 103, "Schächte und Schachtdeckel", False)
     vs.CreateStaticText(dialog, 45, "Standard-Schachtbauart:", -1)
     vs.CreatePullDownMenu(dialog, 46, 28)
@@ -1441,11 +1464,28 @@ def preferences_dialog(preferences, default_scope="save"):
         previous = label
     vs.SetBelowItem(dialog, previous, 35, 0, 6)
     vs.SetBelowItem(dialog, 35, 36, 0, 4)
+    # Pane 6: stub annotations and floor-drain defaults.
+    vs.SetFirstGroupItem(dialog, 106, 75)
+    vs.SetBelowItem(dialog, 75, 76, 0, 5)
+    vs.SetRightItem(dialog, 76, 77, 8, 0)
+    vs.SetBelowItem(dialog, 76, 78, 0, 7)
+    vs.SetBelowItem(dialog, 78, 79, 0, 5)
+    vs.SetRightItem(dialog, 79, 80, 8, 0)
+    vs.SetBelowItem(dialog, 79, 81, 0, 7)
+    vs.SetBelowItem(dialog, 81, 82, 0, 5)
+    vs.SetRightItem(dialog, 82, 83, 8, 0)
+    vs.SetBelowItem(dialog, 82, 84, 0, 7)
+    vs.SetRightItem(dialog, 84, 85, 8, 0)
+    vs.SetBelowItem(dialog, 84, 86, 0, 5)
+    vs.SetRightItem(dialog, 86, 87, 8, 0)
+    vs.SetBelowItem(dialog, 86, 88, 0, 5)
+    vs.SetRightItem(dialog, 88, 89, 8, 0)
     vs.CreateTabPane(dialog, 100, 101)
     vs.CreateTabPane(dialog, 100, 105)
     vs.CreateTabPane(dialog, 100, 102)
     vs.CreateTabPane(dialog, 100, 104)
     vs.CreateTabPane(dialog, 100, 103)
+    vs.CreateTabPane(dialog, 100, 106)
     vs.SetBelowItem(dialog, 100, 49, 0, 7)
     vs.SetRightItem(dialog, 49, 50, 8, 0)
     vs.SetBelowItem(dialog, 49, 51, 0, 5)
@@ -1504,6 +1544,15 @@ def preferences_dialog(preferences, default_scope="save"):
             vs.SetBooleanItem(dialog, 57, current["pipe_name_visible"])
             vs.SetBooleanItem(
                 dialog, 74, current["shaft_connection_labels_visible"])
+            vs.SetBooleanItem(dialog, 75, current["stub_station_label_visible"])
+            vs.SetBooleanItem(dialog, 78, current["stub_height_label_visible"])
+            vs.SetBooleanItem(dialog, 81, current["floor_drain_label_visible"])
+            vs.EnableItem(dialog, 76, current["stub_station_label_visible"])
+            vs.EnableItem(dialog, 77, current["stub_station_label_visible"])
+            vs.EnableItem(dialog, 79, current["stub_height_label_visible"])
+            vs.EnableItem(dialog, 80, current["stub_height_label_visible"])
+            vs.EnableItem(dialog, 82, current["floor_drain_label_visible"])
+            vs.EnableItem(dialog, 83, current["floor_drain_label_visible"])
             vs.EnableItem(dialog, 58, current["pipe_name_visible"])
             vs.EnableItem(dialog, 59, current["pipe_name_visible"])
             for index, row in enumerate(shaft_name_styles):
@@ -1532,6 +1581,10 @@ def preferences_dialog(preferences, default_scope="save"):
         elif item == 57:
             vs.EnableItem(dialog, 58, _selected(dialog, 57))
             vs.EnableItem(dialog, 59, _selected(dialog, 57))
+        elif item in (75, 78, 81):
+            pair = {75: (76, 77), 78: (79, 80), 81: (82, 83)}[item]
+            for control in pair:
+                vs.EnableItem(dialog, control, _selected(dialog, item))
         elif item == 1:
             try:
                 value = copy.deepcopy(current)
@@ -1561,6 +1614,21 @@ def preferences_dialog(preferences, default_scope="save"):
                 value["connection_point_size"] = _float(
                     dialog, 61, "Schriftgröße der Zu- und Ablaufhöhen")
                 value["shaft_connection_labels_visible"] = _selected(dialog, 74)
+                value["stub_station_label_visible"] = _selected(dialog, 75)
+                value["stub_station_point_size"] = _float(
+                    dialog, 77, "Schriftgröße der Stutzen-Stationierung")
+                value["stub_height_label_visible"] = _selected(dialog, 78)
+                value["stub_height_point_size"] = _float(
+                    dialog, 80, "Schriftgröße der Stutzen-Anschlusshöhe")
+                value["floor_drain_label_visible"] = _selected(dialog, 81)
+                value["floor_drain_label_point_size"] = _float(
+                    dialog, 83, "Schriftgröße der Bodenablaufbeschriftung")
+                value["floor_drain_length_m"] = _float(
+                    dialog, 85, "Länge des Bodenablaufs")
+                value["floor_drain_width_m"] = _float(
+                    dialog, 87, "Breite des Bodenablaufs")
+                value["floor_drain_height_m"] = _float(
+                    dialog, 89, "Höhe des Bodenablaufs")
                 value["shaft_name_text_style"] = shaft_name_styles[_choice(dialog, 56)][1]
                 value["text_offset_mm"] = _float(dialog, 24, "Textabstand")
                 value["fillet_radius_m"] = _float(dialog, 28, "Ausrundungsradius")
@@ -1972,18 +2040,23 @@ def terminal_dialog(structure_type, preferences):
     vs.CreateStaticText(dialog, 16, "Material:", -1)
     vs.CreatePullDownMenu(dialog, 17, 24)
     vs.CreateStaticText(dialog, 18,
-                        "Oberkante Ablauf [m] (leer = KD des nächsten Schachts):" if floor else
+                        "Anschlusshöhe / Unterkante [m] (leer = automatisch):" if floor else
                         "Höhe des freien Anschlusspunktes [m]:", -1)
     vs.CreateEditText(dialog, 19, "", 18)
     vs.CreateStaticText(dialog, 20, "Anschlussart am Hauptkanal:", -1)
     vs.CreatePullDownMenu(dialog, 21, 30)
-    vs.CreateStaticText(dialog, 22, "Breite des 3D-Ersatzkastens [m]:", -1)
-    vs.CreateEditText(dialog, 23, str(preferences["floor_drain_width_m"]).replace(".", ","), 18)
-    vs.CreateStaticText(dialog, 24, "Tiefe des 3D-Ersatzkastens [m]:", -1)
-    vs.CreateEditText(dialog, 25, str(preferences["floor_drain_depth_m"]).replace(".", ","), 18)
-    vs.CreateCheckBox(dialog, 26, "Bodenablaufsymbol aus Dokument oder Bibliothek verwenden")
-    vs.CreateResourcePopup(dialog, 27, 44)
-    vs.CreateCheckBox(dialog, 28, "Gewähltes Symbol besitzt bereits einen 3D-Anteil")
+    vs.CreateStaticText(dialog, 22, "Länge des Bodenablaufs [m]:", -1)
+    vs.CreateEditText(dialog, 23, str(preferences["floor_drain_length_m"]).replace(".", ","), 18)
+    vs.CreateStaticText(dialog, 24, "Breite des Bodenablaufs [m]:", -1)
+    vs.CreateEditText(dialog, 25, str(preferences["floor_drain_width_m"]).replace(".", ","), 18)
+    vs.CreateStaticText(dialog, 29, "Höhe des Bodenablaufs [m]:", -1)
+    vs.CreateEditText(dialog, 30, str(preferences["floor_drain_height_m"]).replace(".", ","), 18)
+    vs.CreateCheckBox(dialog, 31, "Bodenablaufsymbol aus Dokument oder Bibliothek verwenden")
+    vs.CreateResourcePopup(dialog, 32, 44)
+    vs.CreateCheckBox(dialog, 33, "Gewähltes Symbol besitzt bereits einen 3D-Anteil")
+    vs.CreateCheckBox(dialog, 34, "Bodenablaufbeschriftung anzeigen")
+    vs.CreateStaticText(dialog, 35, "Schriftgröße der Beschriftung [pt]:", -1)
+    vs.CreateEditText(dialog, 36, str(preferences["floor_drain_label_point_size"]).replace(".", ","), 18)
     vs.SetFirstLayoutItem(dialog, 10)
     vs.SetBelowItem(dialog, 10, 11, 0, 6)
     previous = 11
@@ -1995,10 +2068,15 @@ def terminal_dialog(structure_type, preferences):
     vs.SetRightItem(dialog, 22, 23, 8, 0)
     vs.SetBelowItem(dialog, 22, 24, 0, 6)
     vs.SetRightItem(dialog, 24, 25, 8, 0)
-    vs.SetBelowItem(dialog, 24, 26, 0, 6)
-    vs.SetBelowItem(dialog, 26, 27, 0, 4)
-    vs.SetBelowItem(dialog, 27, 28, 0, 4)
-    for item in (22, 23, 24, 25, 26, 27, 28):
+    vs.SetBelowItem(dialog, 24, 29, 0, 6)
+    vs.SetRightItem(dialog, 29, 30, 8, 0)
+    vs.SetBelowItem(dialog, 29, 31, 0, 6)
+    vs.SetBelowItem(dialog, 31, 32, 0, 4)
+    vs.SetBelowItem(dialog, 32, 33, 0, 4)
+    vs.SetBelowItem(dialog, 33, 34, 0, 6)
+    vs.SetBelowItem(dialog, 34, 35, 0, 4)
+    vs.SetRightItem(dialog, 35, 36, 8, 0)
+    for item in (22, 23, 24, 25, 29, 30, 31, 32, 33, 34, 35, 36):
         vs.EnableItem(dialog, item, floor)
     resource_id = "PD.Kanal.Bodenablauf"
     result = {"value": None}
@@ -2022,14 +2100,20 @@ def terminal_dialog(structure_type, preferences):
             vs.SelectChoice(dialog, 17, preferences["materials"].index(preferences["default_material"]), True)
             vs.SelectChoice(dialog, 21, 0, True)
             if floor:
-                _init_cover_resource(dialog, 27, resource_id, preferences["floor_drain_symbol"])
-                vs.SetBooleanItem(dialog, 26, bool(preferences["floor_drain_symbol"]))
-                vs.SetBooleanItem(dialog, 28, bool(preferences["floor_drain_symbol_has_3d"]))
-                vs.EnableItem(dialog, 27, bool(preferences["floor_drain_symbol"]))
-                vs.EnableItem(dialog, 28, bool(preferences["floor_drain_symbol"]))
-        elif item == 26 and floor:
-            vs.EnableItem(dialog, 27, _selected(dialog, 26))
-            vs.EnableItem(dialog, 28, _selected(dialog, 26))
+                _init_cover_resource(dialog, 32, resource_id, preferences["floor_drain_symbol"])
+                vs.SetBooleanItem(dialog, 31, bool(preferences["floor_drain_symbol"]))
+                vs.SetBooleanItem(dialog, 33, bool(preferences["floor_drain_symbol_has_3d"]))
+                vs.SetBooleanItem(dialog, 34, preferences["floor_drain_label_visible"])
+                vs.EnableItem(dialog, 32, bool(preferences["floor_drain_symbol"]))
+                vs.EnableItem(dialog, 33, bool(preferences["floor_drain_symbol"]))
+                vs.EnableItem(dialog, 35, preferences["floor_drain_label_visible"])
+                vs.EnableItem(dialog, 36, preferences["floor_drain_label_visible"])
+        elif item == 31 and floor:
+            vs.EnableItem(dialog, 32, _selected(dialog, 31))
+            vs.EnableItem(dialog, 33, _selected(dialog, 31))
+        elif item == 34 and floor:
+            vs.EnableItem(dialog, 35, _selected(dialog, 34))
+            vs.EnableItem(dialog, 36, _selected(dialog, 34))
         elif item == 1:
             raw_height = str(vs.GetItemText(dialog, 19) or "").strip().replace(",", ".")
             if not floor and not raw_height:
@@ -2040,13 +2124,84 @@ def terminal_dialog(structure_type, preferences):
                 "kind": core.KINDS[_choice(dialog, 13)],
                 "dn_mm": dn_values[_choice(dialog, 15)],
                 "material": preferences["materials"][_choice(dialog, 17)],
-                "terminal_top_m": core.number(raw_height, "Anschlusshöhe") if raw_height else None,
+                "terminal_bottom_m": core.number(raw_height, "Anschlusshöhe") if raw_height else None,
                 "alignment": alignments[_choice(dialog, 21)][1],
-                "terminal_width_m": _float(dialog, 23, "Breite") if floor else 0.30,
-                "terminal_depth_m": _float(dialog, 25, "Tiefe") if floor else 0.60,
-                "terminal_symbol": _cover_symbol(resource_id, _selected(dialog, 26)) if floor else "",
-                "terminal_symbol_has_3d": bool(_selected(dialog, 28)) if floor else False,
+                "terminal_length_m": _float(dialog, 23, "Länge") if floor else 0.50,
+                "terminal_width_m": _float(dialog, 25, "Breite") if floor else 0.30,
+                "terminal_height_m": _float(dialog, 30, "Höhe") if floor else 0.60,
+                "terminal_symbol": _cover_symbol(resource_id, _selected(dialog, 31)) if floor else "",
+                "terminal_symbol_has_3d": bool(_selected(dialog, 33)) if floor else False,
+                "terminal_label_visible": bool(_selected(dialog, 34)) if floor else True,
+                "terminal_label_point_size": (_float(
+                    dialog, 36, "Schriftgröße der Bodenablaufbeschriftung")
+                    if floor else preferences["point_size"]),
             }
             result["value"] = value
         return item
     return result["value"] if _run(dialog, handler) == 1 else None
+
+
+def terminal_properties_dialog(shaft, preferences):
+    """Edit the body and lower-edge height of a terminal object."""
+    current = core.validate_shaft(shaft, allow_hidden=True)
+    floor = current["structure_type"] == "floor_drain"
+    if current["structure_type"] not in ("floor_drain", "house"):
+        raise core.SewerError("Das gewählte Objekt ist kein Anschluss-Endpunkt.")
+    noun = "Bodenablauf" if floor else "Hausanschluss"
+    dialog = vs.CreateResizableLayout(
+        _title(noun + " bearbeiten"), True, "Übernehmen", "Abbrechen", True, True)
+    vs.CreateStyledStatic(dialog, 10, "%s  |  %s" % (noun.upper(), current["name"]), -1, TITLE_STYLE)
+    vs.CreateStaticText(dialog, 11, "Anschlusshöhe / Unterkante [m]:", -1)
+    vs.CreateEditText(dialog, 12, _height_text(current["ks_m"]), 18)
+    vs.CreateStaticText(dialog, 13, "Länge [m]:", -1)
+    vs.CreateEditText(dialog, 14, str(current["terminal_length_m"]).replace(".", ","), 18)
+    vs.CreateStaticText(dialog, 15, "Breite [m]:", -1)
+    vs.CreateEditText(dialog, 16, str(current["terminal_width_m"]).replace(".", ","), 18)
+    vs.CreateStaticText(dialog, 17, "Höhe [m]:", -1)
+    vs.CreateEditText(dialog, 18, str(current["terminal_height_m"]).replace(".", ","), 18)
+    vs.CreateCheckBox(dialog, 19, "Beschriftung anzeigen")
+    vs.CreateStaticText(dialog, 20, "Schriftgröße [pt]:", -1)
+    vs.CreateEditText(dialog, 21, str(current["terminal_label_point_size"]).replace(".", ","), 18)
+    vs.SetFirstLayoutItem(dialog, 10)
+    previous = 10
+    for label, field in ((11, 12), (13, 14), (15, 16), (17, 18)):
+        vs.SetBelowItem(dialog, previous, label, 0, 6)
+        vs.SetRightItem(dialog, label, field, 8, 0)
+        previous = label
+    vs.SetBelowItem(dialog, previous, 19, 0, 7)
+    vs.SetBelowItem(dialog, 19, 20, 0, 5)
+    vs.SetRightItem(dialog, 20, 21, 8, 0)
+    for item in (13, 14, 15, 16, 17, 18):
+        vs.EnableItem(dialog, item, floor)
+    result = {"value": None}
+
+    def handler(item, _data):
+        if item == INIT:
+            vs.SetBooleanItem(dialog, 19, current["terminal_label_visible"])
+            vs.EnableItem(dialog, 20, current["terminal_label_visible"])
+            vs.EnableItem(dialog, 21, current["terminal_label_visible"])
+        elif item == 19:
+            vs.EnableItem(dialog, 20, _selected(dialog, 19))
+            vs.EnableItem(dialog, 21, _selected(dialog, 19))
+        elif item == 1:
+            try:
+                bottom = _float(dialog, 12, "Anschlusshöhe")
+                updated = copy.deepcopy(current)
+                updated["ks_m"] = bottom
+                updated["terminal_label_visible"] = _selected(dialog, 19)
+                updated["terminal_label_point_size"] = _float(
+                    dialog, 21, "Schriftgröße der Beschriftung")
+                if floor:
+                    updated["terminal_length_m"] = _float(dialog, 14, "Länge")
+                    updated["terminal_width_m"] = _float(dialog, 16, "Breite")
+                    updated["terminal_height_m"] = _float(dialog, 18, "Höhe")
+                    updated["terminal_depth_m"] = updated["terminal_height_m"]
+                    updated["kd_m"] = bottom + updated["terminal_height_m"]
+                else:
+                    updated["kd_m"] = bottom
+                result["value"] = core.validate_shaft(updated, allow_hidden=True)
+            except core.SewerError as error:
+                vs.AlrtDialog(str(error))
+                return -1
+        return item
+    return result["value"] if _run(dialog, handler, (480, 390)) == 1 else None

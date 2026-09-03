@@ -13,6 +13,7 @@ from . import core
 PLUGIN = "PD KAN Objekt"
 QUANTITY_OBSERVER_ROLE = "quantity_observer"
 ROLES = ("sewer_pipe", "sewer_shaft", "sewer_rigole", "sewer_label", "sewer_fitting",
+         "sewer_floor_drain", "sewer_house_connection",
          QUANTITY_OBSERVER_ROLE)
 
 

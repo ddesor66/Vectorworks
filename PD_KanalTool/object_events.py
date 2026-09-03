@@ -20,6 +20,8 @@ SHEETS = 2010
 CONNECT_SHAFTS = 2014
 MERGE = 2015
 DELETE = 2016
+FLOOR_DRAIN = 2017
+HOUSE = 2018
 
 
 def owner(handle):
@@ -45,6 +47,8 @@ def run():
                 (CONNECT_SHAFTS, "Schacht mit weiterem Schacht verbinden…"),
                 (SPLIT, "Schacht in Haltung einsetzen…"),
                 (STUB, "Kanalstutzen herstellen…"),
+                (FLOOR_DRAIN, "Bodenablauf an Hauptleitung anschließen…"),
+                (HOUSE, "Hausanschluss an Hauptleitung anschließen…"),
                 (SPECIAL, "Schacht in Sonderschacht umwandeln…"),
                 (DROP, "Absturz vor Schacht bearbeiten…"),
                 (MERGE, "Zwei Haltungen vereinigen…"),
@@ -60,7 +64,8 @@ def run():
         try:
             data = live_objects.data_of(handle) if valid and handle else None
             role = data.get("role") if data else None
-            if role in ("sewer_pipe", "sewer_shaft", "sewer_fitting", "sewer_rigole",
+            if role in ("sewer_pipe", "sewer_shaft", "sewer_fitting",
+                        "sewer_floor_drain", "sewer_house_connection", "sewer_rigole",
                         live_objects.QUANTITY_OBSERVER_ROLE):
                 from PD_KanalLeitungMengen import reporting as quantity_reporting
                 quantity_reporting.mark_existing_dirty()
@@ -100,7 +105,8 @@ def run():
         actions = {
             HOME: None, CONNECT: "connect", CONNECT_SHAFTS: "connect_shafts",
             SPLIT: "split",
-            STUB: "stub", SPECIAL: "special", DROP: "drop",
+            STUB: "stub", FLOOR_DRAIN: "floor_drain", HOUSE: "house",
+            SPECIAL: "special", DROP: "drop",
             MERGE: "merge", DELETE: "delete",
             TERRAIN: "terrain_covers", SHEETS: "shaft_sheets",
         }

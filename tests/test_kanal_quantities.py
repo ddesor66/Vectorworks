@@ -288,6 +288,8 @@ class RefreshBatchTests(unittest.TestCase):
                 reporting.canal_objects, "objects", return_value=(
                     ("PIPE", {"role": "sewer_pipe"}),
                     ("STUB", {"role": "sewer_fitting"}),
+                    ("DRAIN", {"role": "sewer_floor_drain"}),
+                    ("HOUSE", {"role": "sewer_house_connection"}),
                     ("LABEL", {"role": "sewer_label"}))), mock.patch.object(
                 reporting.utility_objects, "objects", return_value=(
                     ("ROUTE", {"role": "utility_route"}),)), mock.patch.object(
@@ -295,6 +297,7 @@ class RefreshBatchTests(unittest.TestCase):
             self.assertEqual("OBSERVER", reporting.synchronize_delete_observer())
         self.assertEqual(
             [("PIPE", 5, "OBSERVER"), ("STUB", 5, "OBSERVER"),
+             ("DRAIN", 5, "OBSERVER"), ("HOUSE", 5, "OBSERVER"),
              ("ROUTE", 5, "OBSERVER")],
             associations)
 

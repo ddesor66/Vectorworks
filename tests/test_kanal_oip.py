@@ -68,7 +68,22 @@ class KanalOIPTests(unittest.TestCase):
         self.assertTrue(any("weiterem Schacht verbinden" in title for title in titles))
         self.assertTrue(any("Zwei Haltungen vereinigen" in title for title in titles))
         self.assertTrue(any("Kanalobjekte löschen" in title for title in titles))
+        self.assertTrue(any("Bodenablauf" in title for title in titles))
+        self.assertTrue(any("Hausanschluss" in title for title in titles))
         self.assertFalse(any("Voreinstellungen" in title for title in titles))
+
+    def test_terminal_buttons_route_creation_actions(self):
+        for constant, expected in (("FLOOR_DRAIN", "floor_drain"),
+                                   ("HOUSE", "house")):
+            api = OIPAPI(event=35)
+            events = load_events(api)
+            api.button = getattr(events, constant)
+            events.owner = lambda _handle: ("TARGET", {"role": "sewer_pipe"})
+            events.live.selected_managed = lambda: ()
+            actions = []
+            events.app.run = lambda action=None: actions.append(action)
+            events.run()
+            self.assertEqual([expected], actions)
 
     def test_connect_shafts_button_preserves_selection_and_routes_action(self):
         api = OIPAPI(event=35)

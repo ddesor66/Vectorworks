@@ -355,3 +355,17 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   Prozentwerte fest mit zwei Nachkommastellen. Vier zusätzliche Rechen-,
   Rollen-, Anschluss- und Klassenregressionen erhöhen den Gesamtumfang auf 200
   automatisierte Tests.
+- Kanaltool und gemeinsamer Kanal-/Leitungsaufruf 1.3.6 sowie Mengenausgabe
+  1.2.7: Bodenabläufe und Hausanschlüsse werden als eigene persistente
+  Objekttypen geführt und schließen über einen ebenfalls eigenständigen
+  Kanalstutzen an RW-, SW- oder MW-Hauptleitungen an. Bodenabläufe verwenden
+  durchgängig das Kürzel `ABL`; bestehende `BA`-Objekte werden beim nächsten
+  Aufbau ohne Geometrieänderung migriert. Länge, Breite, Höhe und die stets an
+  der Unterkante liegende Anschlusshöhe lassen sich nachträglich bearbeiten.
+  Am Stutzen verbleiben ausschließlich die getrennt schaltbaren Zeilen
+  `ST 0+… m` und `Anschluss KS = … m`, jeweils mit eigener Schriftgröße. Die
+  Bodenablaufbeschriftung besitzt ebenfalls Sichtbarkeit und Schriftgröße in
+  den Voreinstellungen. Bodenablauf und Hausanschluss stehen zusätzlich in
+  der Objekt-Info-Palette; Mengen-Löschbeobachtung und Netzprüfung erkennen
+  die neuen Rollen. Sieben zusätzliche Modell-, Dialog-, Rollen-, Anschluss-
+  und Menüregressionen erhöhen den Gesamtumfang auf 207 automatisierte Tests.

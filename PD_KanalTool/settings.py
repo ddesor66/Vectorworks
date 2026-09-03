@@ -70,11 +70,21 @@ DEFAULTS = {
     "pipe_wall_thickness_mm": 10.0,
     "hollow_3d": True,
     "stub_dn_mm": 150,
+    "stub_station_label_visible": True,
+    "stub_height_label_visible": True,
+    "stub_station_point_size": 9.0,
+    "stub_height_point_size": 9.0,
     "floor_drain_dn_mm": 150,
+    "floor_drain_length_m": 0.50,
     "floor_drain_width_m": 0.30,
+    "floor_drain_height_m": 0.60,
+    # Kept in the persisted schema while older drawings and preference files
+    # are migrated to the unambiguous length/width/height field names.
     "floor_drain_depth_m": 0.60,
     "floor_drain_symbol": "",
     "floor_drain_symbol_has_3d": False,
+    "floor_drain_label_visible": True,
+    "floor_drain_label_point_size": 9.0,
     "house_connection_dn_mm": 150,
     "class_prefix": "PD-KAN",
     "flow_arrow_class": "PD-KAN-Fließrichtung",
@@ -186,6 +196,9 @@ def validate(value):
             ("pipe_name_point_size", "Schriftgröße des Haltungsnamens", 1.0, 200.0),
             ("shaft_name_point_size", "Schriftgröße des Schachtnamens", 1.0, 200.0),
             ("connection_point_size", "Schriftgröße der Zu- und Ablaufhöhen", 1.0, 200.0),
+            ("stub_station_point_size", "Schriftgröße der Stutzen-Stationierung", 1.0, 200.0),
+            ("stub_height_point_size", "Schriftgröße der Stutzen-Anschlusshöhe", 1.0, 200.0),
+            ("floor_drain_label_point_size", "Schriftgröße der Bodenablaufbeschriftung", 1.0, 200.0),
             ("text_offset_mm", "Textabstand", 0.0, 100.0)):
         result[key] = core.number(result.get(key), label)
         if not low <= result[key] <= high:
@@ -198,6 +211,12 @@ def validate(value):
     result["pipe_name_visible"] = bool(result.get("pipe_name_visible", True))
     result["shaft_connection_labels_visible"] = bool(
         result.get("shaft_connection_labels_visible", True))
+    result["stub_station_label_visible"] = bool(
+        result.get("stub_station_label_visible", True))
+    result["stub_height_label_visible"] = bool(
+        result.get("stub_height_label_visible", True))
+    result["floor_drain_label_visible"] = bool(
+        result.get("floor_drain_label_visible", True))
     result["shaft_name_text_style"] = str(
         result.get("shaft_name_text_style", "bold"))
     if result["shaft_name_text_style"] not in (
@@ -248,12 +267,17 @@ def validate(value):
             raise core.SewerError("%s ist ungültig." % label)
     for key in ("stub_dn_mm", "floor_drain_dn_mm", "house_connection_dn_mm"):
         result[key] = core._dn(result.get(key, 150))
+    if ("floor_drain_height_m" not in supplied and
+            "floor_drain_depth_m" in supplied):
+        result["floor_drain_height_m"] = supplied["floor_drain_depth_m"]
     for key, label, low, high in (
+            ("floor_drain_length_m", "Länge des Bodenablaufs", 0.05, 10.0),
             ("floor_drain_width_m", "Breite des Bodenablaufs", 0.05, 5.0),
-            ("floor_drain_depth_m", "Tiefe des Bodenablaufs", 0.05, 10.0)):
+            ("floor_drain_height_m", "Höhe des Bodenablaufs", 0.05, 10.0)):
         result[key] = core.number(result.get(key), label)
         if not low <= result[key] <= high:
             raise core.SewerError("%s liegt außerhalb des zulässigen Bereichs." % label)
+    result["floor_drain_depth_m"] = result["floor_drain_height_m"]
     result["floor_drain_symbol"] = str(result.get("floor_drain_symbol") or "").strip()
     if len(result["floor_drain_symbol"]) > 255 or any(
             character in result["floor_drain_symbol"] for character in "\r\n\t"):

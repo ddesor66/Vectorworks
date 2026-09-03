@@ -482,8 +482,8 @@ class KanalDialogTests(unittest.TestCase):
         api = DialogAPI()
 
         def accept(dialog, handler):
-            self.assertEqual([101, 105, 102, 104, 103], api.tab_panes[(dialog, 100)])
-            self.assertEqual({101, 102, 103, 104, 105}, {
+            self.assertEqual([101, 105, 102, 104, 103, 106], api.tab_panes[(dialog, 100)])
+            self.assertEqual({101, 102, 103, 104, 105, 106}, {
                 group for current_dialog, group in api.group_first
                 if current_dialog == dialog})
             # Apply the saved settings to the connected system of the selection.
@@ -501,6 +501,15 @@ class KanalDialogTests(unittest.TestCase):
         self.assertEqual(9.0, updated["pipe_name_point_size"])
         self.assertEqual(9.0, updated["connection_point_size"])
         self.assertTrue(updated["shaft_connection_labels_visible"])
+        self.assertTrue(updated["stub_station_label_visible"])
+        self.assertTrue(updated["stub_height_label_visible"])
+        self.assertEqual(9.0, updated["stub_station_point_size"])
+        self.assertEqual(9.0, updated["stub_height_point_size"])
+        self.assertTrue(updated["floor_drain_label_visible"])
+        self.assertEqual(9.0, updated["floor_drain_label_point_size"])
+        self.assertEqual(0.50, updated["floor_drain_length_m"])
+        self.assertEqual(0.30, updated["floor_drain_width_m"])
+        self.assertEqual(0.60, updated["floor_drain_height_m"])
         self.assertEqual([0, 26000, 65535], updated["shaft_pen_colors"]["RW"])
         self.assertEqual([0, 26000, 65535], updated["shaft_fill_colors"]["RW"])
         self.assertEqual(50.0, updated["shaft_fill_transparency_percent"]["RW"])

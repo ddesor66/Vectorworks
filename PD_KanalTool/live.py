@@ -24,8 +24,10 @@ sewer_settings = settings
 sewer_ui = ui
 
 
-ROLES = ("sewer_pipe", "sewer_shaft", "sewer_rigole", "sewer_label", "sewer_fitting")
-NODE_ROLES = ("sewer_shaft", "sewer_fitting")
+ROLES = ("sewer_pipe", "sewer_shaft", "sewer_rigole", "sewer_label", "sewer_fitting",
+         "sewer_floor_drain", "sewer_house_connection")
+NODE_ROLES = ("sewer_shaft", "sewer_fitting", "sewer_floor_drain",
+              "sewer_house_connection")
 TEXT_COLOR = (0, 0, 0)
 RENDER_OK = "ok"
 RENDER_ERROR = "error"
@@ -362,6 +364,12 @@ def read_shaft(handle, data=None):
     shaft = core.validate_shaft(data["shaft"], allow_hidden=True)
     if data["role"] == "sewer_fitting" and shaft["structure_type"] != "stub":
         raise core.SewerError("Als Stutzen geführtes Kanalbauteil besitzt ungültige Daten.")
+    if (data["role"] == "sewer_floor_drain" and
+            shaft["structure_type"] != "floor_drain"):
+        raise core.SewerError("Als Bodenablauf geführtes Kanalbauteil besitzt ungültige Daten.")
+    if (data["role"] == "sewer_house_connection" and
+            shaft["structure_type"] != "house"):
+        raise core.SewerError("Als Hausanschluss geführtes Kanalbauteil besitzt ungültige Daten.")
     if _name(handle) != core.SHAFT_PREFIX + shaft["id"]:
         raise core.SewerError("Schachtidentität wurde geändert oder kopiert.")
     factor = adapter.units_to_meters()
@@ -550,9 +558,12 @@ def _new_object(xy_m, role, payload, preferences, created):
     identity = payload["id"]
     prefixes = {"sewer_shaft": core.SHAFT_PREFIX,
                 "sewer_fitting": core.SHAFT_PREFIX,
+                "sewer_floor_drain": core.SHAFT_PREFIX,
+                "sewer_house_connection": core.SHAFT_PREFIX,
                 "sewer_pipe": core.PIPE_PREFIX,
                 "sewer_rigole": core.RIGOLE_PREFIX}
     keys = {"sewer_shaft": "shaft", "sewer_fitting": "shaft",
+            "sewer_floor_drain": "shaft", "sewer_house_connection": "shaft",
             "sewer_pipe": "pipe",
             "sewer_rigole": "rigole"}
     if role not in prefixes:
@@ -567,9 +578,12 @@ def _new_object(xy_m, role, payload, preferences, created):
 
 
 def _node_role(shaft):
-    """Stutzen are fittings, while every other network node is a shaft."""
-    return ("sewer_fitting" if shaft.get("structure_type") == "stub"
-            else "sewer_shaft")
+    """Return the persistent semantic role of one network node."""
+    return {
+        "stub": "sewer_fitting",
+        "floor_drain": "sewer_floor_drain",
+        "house": "sewer_house_connection",
+    }.get(shaft.get("structure_type"), "sewer_shaft")
 
 
 def _paper_offset_units(handle, preferences):
@@ -1307,13 +1321,18 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
             raise core.SewerError("Der freie Anschluss-Endpunkt konnte nicht zugeordnet werden.")
         endpoint.update(
             structure_type=terminal["structure_type"], visible=True,
-            name=_next_named_number("BA" if terminal["structure_type"] == "floor_drain" else "HA"),
+            name=_next_named_number("ABL" if terminal["structure_type"] == "floor_drain" else "HA"),
             note="", diameter_m=0.0, special_outline_m=[], drops=[], stub=None,
             kd_m=terminal["terminal_top_m"], ks_m=terminal["terminal_invert_m"],
+            terminal_length_m=terminal.get("terminal_length_m", 0.50),
             terminal_width_m=terminal.get("terminal_width_m", 0.30),
-            terminal_depth_m=terminal.get("terminal_depth_m", 0.60),
+            terminal_height_m=terminal.get("terminal_height_m", 0.60),
+            terminal_depth_m=terminal.get("terminal_height_m", 0.60),
             terminal_symbol=terminal.get("terminal_symbol", ""),
-            terminal_symbol_has_3d=terminal.get("terminal_symbol_has_3d", False))
+            terminal_symbol_has_3d=terminal.get("terminal_symbol_has_3d", False),
+            terminal_label_visible=terminal.get("terminal_label_visible", True),
+            terminal_label_point_size=terminal.get(
+                "terminal_label_point_size", preferences["point_size"]))
         core.validate_shaft(endpoint, allow_hidden=True)
     connected_values = []
     for pipe in built["pipes"]:
@@ -1450,17 +1469,30 @@ def connect_terminal(points, terminal, preferences):
     """Draw from a free terminal and connect only the last point to a pipe."""
     values = core.path(points)
     handle, main_pipe, projected = pipe_at_point(values[-1])
-    if terminal["kind"] != main_pipe["kind"]:
-        raise core.SewerError(
-            "Anschlussart %s passt nicht zur gewählten Hauptleitung %s." %
-            (terminal["kind"], main_pipe["kind"]))
-    top = terminal.get("terminal_top_m")
+    # The main line is authoritative. This permits the same floor-drain and
+    # house-connection workflow on RW, SW and MW without an avoidable dialog
+    # mismatch after the user has already selected the physical host pipe.
+    terminal = dict(terminal, kind=main_pipe["kind"])
+    bottom = terminal.get("terminal_bottom_m")
+    legacy_top = terminal.get("terminal_top_m")
     if terminal["structure_type"] == "floor_drain":
-        top = nearest_cover_height(values[0]) if top is None else core.number(top, "Oberkante Ablauf")
-        terminal_invert = top - core.number(terminal["terminal_depth_m"], "Tiefe des Bodenablaufs")
+        height = core.number(
+            terminal.get("terminal_height_m", terminal.get("terminal_depth_m", 0.60)),
+            "Höhe des Bodenablaufs")
+        if bottom is None and legacy_top is not None:
+            top = core.number(legacy_top, "Oberkante des Bodenablaufs")
+            terminal_invert = top - height
+        elif bottom is None:
+            top = nearest_cover_height(values[0])
+            terminal_invert = top - height
+        else:
+            terminal_invert = core.number(bottom, "Unterkante des Bodenablaufs")
+            top = terminal_invert + height
     else:
-        top = core.number(top, "Höhe des Hausanschlusses")
-        terminal_invert = top
+        terminal_invert = core.number(
+            bottom if bottom is not None else legacy_top,
+            "Höhe des Hausanschlusses")
+        top = terminal_invert
     (_first_handle, first), (_second_handle, second) = _endpoints(main_pipe)
     fraction, _xy = core.project_on_pipe(
         (first["x_m"], first["y_m"]), (second["x_m"], second["y_m"]), projected)
@@ -1489,7 +1521,8 @@ def connect_terminal(points, terminal, preferences):
         "graphics_mode": preferences["graphics_mode"],
         "line_type": preferences["single_line_type"],
         "connection_alignment": terminal["alignment"], "as_stub": True,
-        "terminal": dict(terminal, terminal_top_m=top, terminal_invert_m=terminal_invert),
+        "terminal": dict(terminal, terminal_top_m=top,
+                         terminal_invert_m=terminal_invert),
     }
     return connect_branch(handle, projected, (branch,), options, preferences)
 
@@ -1815,6 +1848,7 @@ def delete_selected(handles):
     pipe_rows = {}
     shaft_rows = {}
     fitting_rows = {}
+    terminal_rows = {}
     rigole_rows = {}
     for handle, data in handles:
         if data.get("role") == "sewer_pipe":
@@ -1823,6 +1857,9 @@ def delete_selected(handles):
             shaft = read_shaft(handle, data)
             if data.get("role") == "sewer_fitting":
                 fitting_rows[handle] = (data, shaft)
+            elif data.get("role") in (
+                    "sewer_floor_drain", "sewer_house_connection"):
+                terminal_rows[handle] = (data, shaft)
             else:
                 shaft_rows[handle] = (data, shaft)
             for pipe_handle, pipe in _connected_pipes(shaft["id"]):
@@ -1839,17 +1876,18 @@ def delete_selected(handles):
                 shaft_rows[node_handle] = (node_data, node)
                 for pipe_handle, pipe in _connected_pipes(node["id"]):
                     pipe_rows[pipe_handle] = (_live().data_of(pipe_handle), pipe)
-    if not pipe_rows and not shaft_rows and not fitting_rows and not rigole_rows:
+    if (not pipe_rows and not shaft_rows and not fitting_rows and
+            not terminal_rows and not rigole_rows):
         raise core.SewerError("Keine löschbaren Kanalobjekte markiert.")
     remaining_pipes = [pipe for handle, pipe in pipe_records() if handle not in pipe_rows]
-    removed_nodes = set(shaft_rows).union(fitting_rows)
+    removed_nodes = set(shaft_rows).union(fitting_rows).union(terminal_rows)
     remaining_shafts = [shaft for handle, shaft in shaft_records()
                         if handle not in removed_nodes]
     core.validate_network(remaining_pipes, remaining_shafts)
     affected_shaft_ids = {identity for _handle, (_data, pipe) in pipe_rows.items()
                           for identity in (pipe["start_id"], pipe["end_id"])}
     removed_shaft_ids = {
-        shaft["id"] for rows in (shaft_rows, fitting_rows)
+        shaft["id"] for rows in (shaft_rows, fitting_rows, terminal_rows)
         for _handle, (_data, shaft) in rows.items()}
     vs.NameUndoEvent("PD Kanalobjekte löschen")
     for handle, (data, _pipe) in pipe_rows.items():
@@ -1858,6 +1896,8 @@ def delete_selected(handles):
         _delete_with_labels(handle, data)
     for handle, (data, _fitting) in fitting_rows.items():
         _delete_with_labels(handle, data)
+    for handle, (data, _terminal) in terminal_rows.items():
+        _delete_with_labels(handle, data)
     for handle, (data, _rigole) in rigole_rows.items():
         _delete_with_labels(handle, data)
     for identity in affected_shaft_ids - removed_shaft_ids:
@@ -1865,7 +1905,8 @@ def delete_selected(handles):
         if shaft_handle:
             vs.ResetObject(shaft_handle)
     vs.ReDrawAll()
-    return len(pipe_rows), len(shaft_rows), len(fitting_rows), len(rigole_rows)
+    return (len(pipe_rows), len(shaft_rows), len(fitting_rows),
+            len(terminal_rows), len(rigole_rows))
 
 
 def _set_graphics(handle, class_value, color, fill=True, opacity=100):
@@ -2208,7 +2249,19 @@ def _connection_profile(shaft, pipe, width, factor):
             distance = core.ray_polygon_distance(shaft["special_outline_m"], direction) / factor
             return max(0.0, distance), width, False
     if shaft.get("structure_type") == "floor_drain":
-        return shaft.get("terminal_width_m", 0.30) * 0.5 / factor, width, False
+        other_id = pipe["end_id"] if pipe["start_id"] == shaft["id"] else pipe["start_id"]
+        other_handle = _handle_by_id(core.SHAFT_PREFIX, other_id)
+        if other_handle:
+            other = read_shaft(other_handle)
+            dx, dy = other["x_m"] - shaft["x_m"], other["y_m"] - shaft["y_m"]
+            distance = math.hypot(dx, dy)
+            if distance > 1e-9:
+                ux, uy = dx / distance, dy / distance
+                trim = (abs(ux) * shaft.get("terminal_length_m", 0.50) +
+                        abs(uy) * shaft.get("terminal_width_m", 0.30)) * 0.5
+                return trim / factor, width, False
+        return max(shaft.get("terminal_length_m", 0.50),
+                   shaft.get("terminal_width_m", 0.30)) * 0.5 / factor, width, False
     if shaft.get("structure_type") == "house":
         return 0.0, width, True
     if shaft.get("visible") and shaft["diameter_m"] > 0.0:
@@ -2841,6 +2894,36 @@ def edit_stub_alignment(handle, preferences):
     return True
 
 
+def edit_terminal(handle, preferences):
+    """Edit one floor drain or house endpoint and its connected pipe height."""
+    data = _live().data_of(handle)
+    original = read_shaft(handle, data)
+    if original.get("structure_type") not in ("floor_drain", "house"):
+        raise core.SewerError("Das gewählte Objekt ist kein Bodenablauf oder Hausanschluss.")
+    connected = _connected_pipes(original["id"])
+    if len(connected) != 1:
+        raise core.SewerError(
+            "Ein Bodenablauf oder Hausanschluss muss genau eine Anschlussleitung besitzen.")
+    updated = sewer_ui.terminal_properties_dialog(original, preferences)
+    if updated is None:
+        return False
+    pipe_handle, pipe = connected[0]
+    changed_pipe = copy.deepcopy(pipe)
+    if pipe["start_id"] == original["id"]:
+        changed_pipe["start_invert_m"] = updated["ks_m"]
+    else:
+        changed_pipe["end_invert_m"] = updated["ks_m"]
+    pipe_updates = _confirmed_pipe_directions({pipe_handle: changed_pipe})
+    if pipe_updates is None:
+        return False
+    _commit_network_updates(
+        pipe_updates, {handle: updated}, preferences,
+        "PD %s bearbeiten" % (
+            "Bodenablauf" if updated["structure_type"] == "floor_drain"
+            else "Hausanschluss"))
+    return True
+
+
 def _cover_direction(shaft):
     angles = []
     for _pipe_handle, pipe in _connected_pipes(shaft["id"]):
@@ -3008,6 +3091,7 @@ def _special_loft_faces(outline, cover_center, cover_radius, bottom_z, top_z,
 
 def _draw_floor_drain(handle, shaft, class_value, pen_color, fill_color,
                       transparency_percent, factor, draw_3d):
+    length = shaft["terminal_length_m"] / factor
     width = shaft["terminal_width_m"] / factor
     symbol_name = shaft.get("terminal_symbol", "")
     definition = vs.GetObject(symbol_name) if symbol_name else None
@@ -3017,9 +3101,10 @@ def _draw_floor_drain(handle, shaft, class_value, pen_color, fill_color,
         symbol = vs.LNewObj()
         if symbol:
             vs.SetClass(symbol, class_value)
-    half = width * 0.5
+    half_length = length * 0.5
+    half_width = width * 0.5
     if not symbol_used:
-        vs.Rect((-half, half), (half, -half))
+        vs.Rect((-half_length, half_width), (half_length, -half_width))
         square = vs.LNewObj()
         if not square:
             raise core.SewerError("2D-Bodenablauf konnte nicht erzeugt werden.")
@@ -3031,7 +3116,7 @@ def _draw_floor_drain(handle, shaft, class_value, pen_color, fill_color,
         z0 = (shaft["ks_m"] - layer_z) / factor
         z1 = (shaft["kd_m"] - layer_z) / factor
         vs.BeginXtrd(z0, max(z1, z0 + 0.01 / factor))
-        vs.Rect((-half, half), (half, -half))
+        vs.Rect((-half_length, half_width), (half_length, -half_width))
         vs.EndXtrd()
         body = vs.LNewObj()
         if not body:
@@ -3495,6 +3580,7 @@ def draw_label(handle, data):
     shaft_name = ""
     pipe_name = ""
     point_size = None
+    node_structure = ""
     if data.get("label_kind") == "connection_height":
         context = _connection_label_context(
             owner, owner_data, data.get("connection_id", ""))
@@ -3527,10 +3613,19 @@ def draw_label(handle, data):
     elif owner_data["role"] in NODE_ROLES:
         shaft_label = True
         shaft = read_shaft(owner, owner_data)
+        node_structure = shaft.get("structure_type", "")
         rows = shaft_connection_views(shaft)
         text = core.shaft_label(shaft, rows, preferences)
         shaft_name = shaft.get("name", "")
         anchor_m = shaft["x_m"], shaft["y_m"]
+        if node_structure == "stub":
+            point_size = preferences.get(
+                "stub_height_point_size", preferences["point_size"])
+        elif node_structure in ("floor_drain", "house"):
+            point_size = shaft.get(
+                "terminal_label_point_size",
+                preferences.get("floor_drain_label_point_size",
+                                preferences["point_size"]))
     elif owner_data["role"] == "sewer_rigole":
         shaft_label = True
         rigole = read_rigole(owner, owner_data)
@@ -3552,7 +3647,8 @@ def draw_label(handle, data):
         vs.SetTextSize(
             text_handle, 0, len(pipe_name),
             preferences.get("pipe_name_point_size", preferences["point_size"]))
-    if shaft_label and shaft_name and text.startswith(shaft_name):
+    if (shaft_label and shaft_name and text.startswith(shaft_name) and
+            node_structure not in ("stub", "floor_drain", "house")):
         # Vectorworks text styles are bit flags: bold=1, underline=4.
         style = {"normal": 0, "bold": 1, "underline": 4,
                  "bold_underline": 5}[
@@ -3561,6 +3657,16 @@ def draw_label(handle, data):
                        preferences.get("shaft_name_point_size",
                                        preferences["point_size"]))
         vs.SetTextStyle(text_handle, 0, len(shaft_name), style)
+    if node_structure == "stub":
+        offset = 0
+        for line in text.splitlines(True):
+            content = line.rstrip("\r\n")
+            size = (preferences.get("stub_station_point_size", preferences["point_size"])
+                    if content.startswith("ST 0+") else
+                    preferences.get("stub_height_point_size", preferences["point_size"]))
+            if content:
+                vs.SetTextSize(text_handle, offset, offset + len(content), size)
+            offset += len(line)
     box = _bbox(vs.GetBBox(text_handle))
     scale = max(1.0, float(vs.GetLScale(vs.GetLayer(handle)) or 1.0))
     padding = 0.0008 * scale / factor
@@ -3825,8 +3931,8 @@ def network_component(handle):
     if data and data.get("role") == "sewer_label":
         handle = vs.GetObject(data.get("owner", ""))
         data = _live().data_of(handle)
-    if not is_sewer_data(data) or data["role"] not in (
-            "sewer_pipe", "sewer_shaft", "sewer_fitting"):
+    if (not is_sewer_data(data) or
+            (data["role"] != "sewer_pipe" and data["role"] not in NODE_ROLES)):
         raise core.SewerError("Kein Kanalnetz gewählt.")
     all_pipes = tuple(pipe_records())
     all_shafts = {shaft["id"]: (shaft_handle, shaft) for shaft_handle, shaft in shaft_records()}
@@ -3972,9 +4078,12 @@ def edit(handle, preferences):
         data = _live().data_of(handle)
     if not is_sewer_data(data):
         raise core.SewerError("Kein Kanalobjekt gewählt.")
-    if (data["role"] in NODE_ROLES and
-            read_shaft(handle, data).get("structure_type") == "stub"):
-        return edit_stub_alignment(handle, preferences)
+    if data["role"] in NODE_ROLES:
+        node = read_shaft(handle, data)
+        if node.get("structure_type") == "stub":
+            return edit_stub_alignment(handle, preferences)
+        if node.get("structure_type") in ("floor_drain", "house"):
+            return edit_terminal(handle, preferences)
     if data["role"] == "sewer_pipe":
         original = read_pipe(handle, data)
         initial = dict(original, calculation_mode="end", calculation_value=original["end_invert_m"],
@@ -4184,8 +4293,8 @@ def _preference_targets(selected, scope):
     if scope not in ("selection", "systems", "drawing"):
         raise core.SewerError("Ungültiger Aktualisierungsumfang der Kanaleinstellungen.")
     rows = tuple((handle, data) for handle, data in objects()
-                 if data.get("role") in (
-                     "sewer_pipe", "sewer_shaft", "sewer_fitting", "sewer_rigole"))
+                 if (data.get("role") in NODE_ROLES or
+                     data.get("role") in ("sewer_pipe", "sewer_rigole")))
     if scope == "drawing":
         return rows
     selected_handles = {handle for handle, _data in tuple(selected or ())}
@@ -4256,6 +4365,11 @@ def _data_with_preferences(data, preferences):
                 "cover_placement": preferences["shaft_cover_placement"],
                 "cover_rotation_deg": preferences["shaft_cover_rotation_deg"],
             })
+        elif shaft.get("structure_type") == "floor_drain":
+            shaft.update({
+                "terminal_label_visible": preferences["floor_drain_label_visible"],
+                "terminal_label_point_size": preferences["floor_drain_label_point_size"],
+            })
         updated["shaft"] = core.validate_shaft(shaft, allow_hidden=True)
         updated["role"] = _node_role(updated["shaft"])
     elif updated["role"] == "sewer_rigole":
@@ -4325,7 +4439,7 @@ def apply_preferences(preferences, selected=None, scope="drawing"):
 def apply_standard_colors(preferences):
     count = 0
     for handle, data in objects():
-        if data["role"] not in ("sewer_pipe", "sewer_shaft", "sewer_fitting"):
+        if data["role"] != "sewer_pipe" and data["role"] not in NODE_ROLES:
             continue
         # Store the current system standards on every managed object.  Any
         # explicit pipe or shaft overrides remain in their payload and thus
@@ -4378,13 +4492,19 @@ def validate_document(preferences=None):
         raise core.SewerError("\n".join(sorted(set(errors))))
     fittings = [value for value in shafts
                 if value.get("structure_type") == "stub"]
+    floor_drains = [value for value in shafts
+                    if value.get("structure_type") == "floor_drain"]
+    house_connections = [value for value in shafts
+                         if value.get("structure_type") == "house"]
     visible_shafts = [value for value in shafts
                       if value.get("visible") and
-                      value.get("structure_type") != "stub"]
+                      value.get("structure_type") in ("round", "special")]
     junctions = [value for value in shafts
                  if value.get("structure_type") == "junction"]
     return {"pipes": len(pipes), "shafts": len(visible_shafts),
             "fittings": len(fittings), "nodes": len(junctions),
+            "floor_drains": len(floor_drains),
+            "house_connections": len(house_connections),
             "rigoles": len(rigoles), "errors": ()}
 
 
@@ -4392,7 +4512,7 @@ def _clone_translation_m(handle, role, payload):
     factor = adapter.units_to_meters()
     location = adapter.symbol_location_2d(handle, (0.0, 0.0))
     current = location[0] * factor, location[1] * factor
-    if role in ("sewer_shaft", "sewer_fitting", "sewer_rigole"):
+    if role in NODE_ROLES + ("sewer_rigole",):
         return current[0] - payload["x_m"], current[1] - payload["y_m"]
     return current
 
@@ -4407,14 +4527,18 @@ def _repair_shaft_clone(handle, data, translation=None):
     payload["x_m"] = float(payload["x_m"]) + float(translation[0])
     payload["y_m"] = float(payload["y_m"]) + float(translation[1])
     if payload["visible"]:
+        prefix = {"floor_drain": "ABL", "house": "HA"}.get(
+            payload.get("structure_type"), payload["kind"])
         next_number = 1
-        pattern = re.compile(r"%s\.(\d+)$" % re.escape(payload["kind"]))
-        for _peer, peer_data in objects("sewer_shaft"):
+        pattern = re.compile(r"%s\.(\d+)$" % re.escape(prefix), re.IGNORECASE)
+        for _peer, peer_data in objects():
+            if peer_data.get("role") not in NODE_ROLES:
+                continue
             peer = peer_data.get("shaft") or {}
             match = pattern.fullmatch(str(peer.get("name") or ""))
             if match:
                 next_number = max(next_number, int(match.group(1)) + 1)
-        payload["name"] = "%s.%03d" % (payload["kind"], next_number)
+        payload["name"] = "%s.%03d" % (prefix, next_number)
     changed = dict(data, shaft=payload, labels=[])
     vs.SetName(handle, core.SHAFT_PREFIX + payload["id"])
     _live().write_data(handle, changed)
@@ -4524,21 +4648,32 @@ def _cloned_endpoint_id(old_id, translation):
 
 def _repair_duplicate(handle, data):
     payload_keys = {"sewer_shaft": "shaft", "sewer_fitting": "shaft",
+                    "sewer_floor_drain": "shaft",
+                    "sewer_house_connection": "shaft",
                     "sewer_pipe": "pipe",
                     "sewer_rigole": "rigole"}
     prefixes = {"sewer_shaft": core.SHAFT_PREFIX,
                 "sewer_fitting": core.SHAFT_PREFIX,
+                "sewer_floor_drain": core.SHAFT_PREFIX,
+                "sewer_house_connection": core.SHAFT_PREFIX,
                 "sewer_pipe": core.PIPE_PREFIX,
                 "sewer_rigole": core.RIGOLE_PREFIX}
     payload_key = payload_keys[data["role"]]
     payload = copy.deepcopy(data[payload_key])
     if data["role"] in NODE_ROLES:
         desired_role = _node_role(payload)
-        if data["role"] != desired_role:
+        legacy_floor_name = re.fullmatch(
+            r"BA\.(\d+)", str(payload.get("name") or ""), re.IGNORECASE)
+        if legacy_floor_name:
+            requested_name = "ABL.%03d" % int(legacy_floor_name.group(1))
+            names = _existing_names() - {payload.get("name")}
+            payload["name"] = (requested_name if requested_name not in names
+                               else _next_named_number("ABL"))
+        if data["role"] != desired_role or legacy_floor_name:
             # Migrate legacy drawings lazily and transaction-free during the
-            # object's normal reset.  Identity and geometry stay unchanged;
-            # only the semantic object role changes from shaft to fitting.
-            data = dict(data, role=desired_role)
+            # object's normal reset. Identity and geometry stay unchanged;
+            # only the semantic role/name becomes explicit.
+            data = dict(data, role=desired_role, shaft=payload)
             _live().write_data(handle, data)
     prefix = prefixes[data["role"]]
     expected = prefix + payload["id"]

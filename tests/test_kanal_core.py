@@ -287,6 +287,56 @@ class ShaftConnectionTests(unittest.TestCase):
         self.assertEqual(main_a, core.validate_pipe(main_a))
         self.assertEqual(main_b, core.validate_pipe(main_b))
 
+    def test_stub_label_contains_only_separately_switchable_station_and_height(self):
+        value = core.validate_shaft(dict(
+            shaft("stub", "RW.099", 5.0, 99.5),
+            diameter_m=0.0, structure_type="stub",
+            stub={"alignment": "invert", "main_dn_mm": 300,
+                  "branch_dn_mm": 150, "connection_invert_m": 99.5,
+                  "station_enabled": True, "main_start_id": "s1",
+                  "main_end_id": "s2", "main_pipe_ids": ["ma", "mb"],
+                  "station_pipe_ids": ["ma", "mb"], "station_m": 4.937,
+                  "station_zero_id": "s2", "station_zero_name": "RW.002",
+                  "station_equal_inverts": False,
+                  "station_basis": "lower_invert"}), allow_hidden=True)
+        shown = dict(preferences(), stub_station_label_visible=True,
+                     stub_height_label_visible=True)
+        self.assertEqual(
+            "ST 0+4,94 m\nAnschluss KS = 99,50 m",
+            core.shaft_label(value, (), shown))
+        self.assertNotIn("DN", core.shaft_label(value, (), shown))
+        self.assertNotIn("Sohlgleich", core.shaft_label(value, (), shown))
+        self.assertEqual(
+            "ST 0+4,94 m",
+            core.shaft_label(value, (), dict(
+                shown, stub_height_label_visible=False)))
+        self.assertEqual(
+            "Anschluss KS = 99,50 m",
+            core.shaft_label(value, (), dict(
+                shown, stub_station_label_visible=False)))
+
+    def test_floor_drain_has_length_width_height_and_switchable_label(self):
+        value = core.validate_shaft(dict(
+            shaft("drain", "ABL.001", 0.0, 99.4),
+            structure_type="floor_drain", diameter_m=0.0,
+            kd_m=100.0, terminal_length_m=0.60,
+            terminal_width_m=0.35, terminal_height_m=0.60,
+            terminal_label_visible=True, terminal_label_point_size=8.5),
+            allow_hidden=True)
+        self.assertEqual((0.60, 0.35, 0.60), (
+            value["terminal_length_m"], value["terminal_width_m"],
+            value["terminal_height_m"]))
+        self.assertEqual(8.5, value["terminal_label_point_size"])
+        self.assertTrue(core.shaft_label(value, (), preferences()).startswith("ABL.001\n"))
+        hidden = core.validate_shaft(dict(value, terminal_label_visible=False),
+                                     allow_hidden=True)
+        self.assertEqual("", core.shaft_label(hidden, (), preferences()))
+
+    def test_legacy_floor_drain_depth_migrates_to_height(self):
+        migrated = settings.validate({"floor_drain_depth_m": 0.75})
+        self.assertEqual(0.75, migrated["floor_drain_height_m"])
+        self.assertEqual(0.75, migrated["floor_drain_depth_m"])
+
     def test_special_outline_rejects_self_intersection(self):
         with self.assertRaisesRegex(core.SewerError, "überschneiden"):
             core.special_outline(((0.0, 0.0), (4.0, 4.0),
