@@ -22,6 +22,27 @@ def fingerprint(license_id):
     return hashlib.sha256(license_id.strip().encode("utf-8")).hexdigest()
 
 
+def entry_checksum_valid(source, expected):
+    """Validate an entry script independent of checkout line endings.
+
+    Git keeps text files with LF but Windows checkouts commonly use CRLF.  The
+    executable Python content is identical in both representations, so accept
+    only the raw file or its strictly newline-normalized equivalents.
+    """
+    if not isinstance(source, bytes) or not isinstance(expected, str):
+        return False
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        return False
+    normalized_lf = source.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    normalized_crlf = normalized_lf.replace(b"\n", b"\r\n")
+    digests = (
+        hashlib.sha256(source).hexdigest(),
+        hashlib.sha256(normalized_lf).hexdigest(),
+        hashlib.sha256(normalized_crlf).hexdigest(),
+    )
+    return any(hmac.compare_digest(expected, digest) for digest in digests)
+
+
 def _unique_object(pairs):
     result = {}
     for key, value in pairs:

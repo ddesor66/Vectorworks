@@ -1,4 +1,4 @@
 # -*- coding: utf-8 -*-
 """PD Gelände und Baugruben for Vectorworks 2026."""
 
-__version__ = "1.0.18"
+__version__ = "1.0.19"

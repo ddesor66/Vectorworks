@@ -116,3 +116,8 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   angezeigt wird. Ein Live-Test in Vectorworks Landschaft 2026 verarbeitete
   600 Texte, 276 Linien und einen Bogen zu 600 Punkten, 277 Bruchkanten,
   952 Modellpunkten und 1.892 Dreiecken.
+- Gelände- und Baugrubenmodul 1.0.19: Die Integritätsprüfung der
+  Programmeinstiege akzeptiert nun ausschließlich byteidentische Skripte oder
+  deren inhaltlich identische LF-/CRLF-Darstellung. Damit bleiben die
+  kryptografisch geprüften Startdateien auch nach einem Windows-Git-Checkout
+  ausführbar, ohne beliebige inhaltliche Änderungen zuzulassen.

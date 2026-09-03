@@ -1,11 +1,14 @@
 """Fail-closed Vectorworks adapter; checks live identity on every invocation."""
-import hashlib
 import json
 from pathlib import Path
 
 import vs
 
-from ..core.network_license import MAX_LICENSE_BYTES, validate_document
+from ..core.network_license import (
+    MAX_LICENSE_BYTES,
+    entry_checksum_valid,
+    validate_document,
+)
 from ..core.public_key import PUBLIC_E, PUBLIC_N
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
@@ -47,7 +50,7 @@ def launch(entry_name):
             raise ValueError("Invalid PD entry point")
         source_path = PACKAGE_ROOT / "entries" / (entry_name + ".py")
         source = source_path.read_bytes()
-        if hashlib.sha256(source).hexdigest() != entries[entry_name]:
+        if not entry_checksum_valid(source, entries[entry_name]):
             raise ValueError("PD entry point checksum mismatch")
     except (OSError, ValueError, TypeError):
         vs.AlrtDialog("PD-Tools: Der Programmeinstieg fehlt oder wurde veraendert.\n"
