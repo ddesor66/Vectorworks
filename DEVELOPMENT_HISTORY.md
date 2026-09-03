@@ -121,3 +121,9 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   deren inhaltlich identische LF-/CRLF-Darstellung. Damit bleiben die
   kryptografisch geprüften Startdateien auch nach einem Windows-Git-Checkout
   ausführbar, ohne beliebige inhaltliche Änderungen zuzulassen.
+- Gelände- und Baugrubenmodul 1.0.20: Das nach der nativen DGM-Erzeugung
+  markierte Modell wird nun zuverlässig im Zeichenfenster eingepasst. Der
+  universelle Vectorworks-Menüname ist streng groß-/kleinschreibungsabhängig;
+  `Fit To Objects` ersetzt die zuvor wirkungslose Schreibweise. Im Live-Test
+  wurde das vollständige, bereite `DGM Bestand` dadurch unmittelbar mit
+  korrekter Ausdehnung und Höhenlinien angezeigt.

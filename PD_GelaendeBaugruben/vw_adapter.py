@@ -1278,7 +1278,10 @@ def create_site_model_from_selected_sources(model_name, model_class,
         # A freshly returned DTM has no reliable bounding box until its PIO is
         # ready and the document has redrawn. Only then can Vectorworks zoom
         # to the selected model.
-        vs.DoMenuTextByName("Fit to Objects", 0)
+        # Universal menu identifiers are case-sensitive.  Vectorworks accepts
+        # "Fit To Objects"; the formerly used lower-case "to" silently left
+        # the view unchanged although the DTM itself had been created.
+        vs.DoMenuTextByName("Fit To Objects", 0)
     except (AttributeError, TypeError):
         pass
     vs.ReDrawAll()

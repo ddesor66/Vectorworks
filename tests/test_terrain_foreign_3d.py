@@ -469,7 +469,7 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual(["PD-GB-Quelldaten"], fake.shown_layers)
         self.assertEqual({"new-model"}, fake.selected_members)
         self.assertEqual(
-            [("DTM6 Menu", 1), ("Fit to Objects", 0)], fake.menu_calls)
+            [("DTM6 Menu", 1), ("Fit To Objects", 0)], fake.menu_calls)
         self.assertEqual(2, fake.redraw_count)
 
     def test_cancelled_native_site_model_dialog_returns_no_result(self):
