@@ -19,10 +19,11 @@ Diese Prüfungen benötigen die echte Vectorworks-Laufzeit und werden nicht durc
 - [ ] Nach der Quelldatenprüfung öffnet sich automatisch der native Dialog `Geländemodell aus Ausgangsdaten`; Einstellungen bestätigen und ein natives DGM erzeugen.
 - [ ] Das neue DGM wird danach automatisch erkannt, benannt, der vorgesehenen Klasse zugewiesen, sichtbar geschaltet, einzeln markiert und in das Zeichenfenster eingepasst.
 - [ ] Nativen Dialog testweise abbrechen; kein neues DGM entsteht, die geprüfte Quellenebene bleibt erhalten.
+- [ ] Auf einer Ebene zwei räumlich getrennte Teilmengen nacheinander markieren und Schritt 1 zweimal ausführen. Jede Quellen- und Kontrollebene darf ausschließlich die jeweilige Markierung enthalten; unmarkierte Nachbarobjekte dürfen in keinem Lauf erscheinen. Beide DGM bleiben gleichzeitig bestehen und erhalten bei gleichen Namensvorgaben eindeutige Namenszusätze.
 
 Live-Referenztest vom 03.09.2026 in Vectorworks Landschaft 2026 mit `tesr Gel..vwx`:
 
-- [x] Vollständige aktive Importebene: 878 Objekte geprüft, 877 Quellgeometrien verwendbar, ein nicht unterstütztes Plug-in-Objekt protokolliert.
+- [x] Vollständig markierte aktive Importebene: 878 Objekte geprüft, 877 Quellgeometrien verwendbar, ein nicht unterstütztes Plug-in-Objekt protokolliert.
 - [x] 600 Texte an ihrer tatsächlichen 3D-Objekthöhe, 276 Linien und ein Bogen verarbeitet; 600 3D-Punkte und 277 Bruchkanten erzeugt und markiert.
 - [x] Native DGM-Höhen 99,522 bis 114,772 m; 952 Modellpunkte und 1.892 Dreiecke von Vectorworks verarbeitet.
 - [x] `DGM Bestand-6` liegt bei X 3.463.348,503 / Y 5.547.900,413, besitzt eine projizierte Fläche von rund 24.454 m² und wird mit plausibler langgestreckter Kontur und Höhenlinien dargestellt.

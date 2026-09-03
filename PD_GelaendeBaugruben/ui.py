@@ -103,17 +103,16 @@ def source_options(defaults=None):
     vs.CreateEditText(dialog, 26, defaults.get("model_name", "DGM Bestand"), 36)
     vs.CreateEditText(dialog, 27, defaults.get("model_class", "PD-GB-Gelaendemodell"), 36)
     vs.CreateEditReal(dialog, 28, 1, defaults.get("contour_interval_m", 0.5), 14)
-    vs.CreateCheckBox(dialog, 29,
-        "Unabhängig von der Markierung alle Objekte der aktiven Ebene prüfen")
-    vs.SetBooleanItem(dialog, 29, defaults.get("all_active_layer", False))
+    vs.CreateStaticText(dialog, 29,
+        "Es werden ausschließlich die aktuell markierten Objekte geprüft. Jede neue "
+        "Markierung kann ein eigenes DGM mit getrennten Quell- und Kontrollebenen erzeugen.", 70)
     vs.CreateCheckBox(dialog, 31,
         "Erstes markiertes geschlossenes 2D-Polygon als Modellbegrenzung verwenden")
     vs.SetBooleanItem(dialog, 31, defaults.get("use_selected_boundary", False))
     vs.CreateStaticText(dialog, 30,
-        "Standardmäßig werden sämtliche markierten 3D-Objekte einschließlich Gruppeninhalten "
-        "geprüft. Ab 1.024 Objekten werden wegen der Vectorworks-Auswahlbegrenzung automatisch "
-        "sämtliche Objekte über die direkte native Ebenenliste gelesen, damit auch Texte und Linien ohne Callback-Verlust ankommen. Die optionale Ebenenprüfung nimmt "
-        "zusätzlich unmarkierte Objekte der aktiven Ebene auf. Ohne "
+        "Auch große Markierungen werden über mehrere native Auswahlwege vollständig gelesen; "
+        "unmarkierte Objekte derselben oder anderer Ebenen werden niemals ergänzt. Markierte "
+        "Gruppen werden mit ihren Inhalten ausgewertet. Ohne "
         "aktivierte Begrenzungsoption schneidet keine geschlossene Fremdgeometrie Quelldaten ab. "
         "Zusätzlich wird eine unmarkierte Kontrollebene mit sichtbaren Kopien der erfassten Texte und Linien erzeugt.", 70)
     vs.SetFirstLayoutItem(dialog, 10)
@@ -142,7 +141,6 @@ def source_options(defaults=None):
                 "model_name": _text(dialog, 26),
                 "model_class": _text(dialog, 27),
                 "contour_interval_m": _real(dialog, 28, "Höhenlinien-Äquidistanz", 0.001),
-                "all_active_layer": bool(vs.GetBooleanItem(dialog, 29)),
                 "use_selected_boundary": bool(vs.GetBooleanItem(dialog, 31)),
             }
         return item

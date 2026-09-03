@@ -223,25 +223,20 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual(6059, len(handles))
         self.assertEqual((0, 2, 1), fake.layer_search_options)
 
-    def test_complete_active_layer_is_independent_of_partial_selection(self):
+    def test_native_layer_fallback_never_adds_unselected_objects(self):
         fake = FakeVS()
-        fake.selection = tuple("object-%d" % index for index in range(95))
-        fake.active_layer_objects = tuple("object-%d" % index for index in range(6059))
+        all_objects = tuple("object-%d" % index for index in range(1, 7))
+        expected = ("object-1", "object-3", "object-5")
+        fake.selection = ("object-1",)
+        fake.active_selection = ("object-1", "object-3")
+        fake.all_layer_selection = ("object-1", "object-3")
+        fake.all_document_objects = all_objects
+        fake.layer_order = ["import"]
+        fake.layer_objects["import"] = all_objects
+        fake.selected_members = set(expected)
         adapter = load_adapter(fake)
-        handles = adapter.active_layer_handles()
-        self.assertEqual(6059, len(handles))
-        self.assertFalse(hasattr(fake, "layer_search_options"))
 
-    def test_full_layers_of_truncated_selection_recover_deep_leaf_objects(self):
-        fake = FakeVS()
-        fake.types.update(selected=2, group=11, line=2, text=10, other=2)
-        fake.layers.update({"selected": "import", "group": "import",
-                            "line": "import", "text": "import",
-                            "other": "other-layer"})
-        fake.layer_objects["import"] = ("selected", "group", "line", "text")
-        adapter = load_adapter(fake)
-        handles = adapter.object_layer_handles(("selected",))
-        self.assertEqual(("selected", "group", "line", "text"), handles)
+        self.assertEqual(expected, adapter.selected_handles())
 
     def test_individual_selection_flags_recover_selection_iterator_limit(self):
         fake = FakeVS()
@@ -280,6 +275,15 @@ class Foreign3DTests(unittest.TestCase):
         fake = FakeVS()
         adapter = load_adapter(fake)
         self.assertEqual("Import''DGM", adapter._criterion_literal("Import'DGM"))
+
+    def test_repeated_source_runs_receive_unique_layer_names(self):
+        fake = FakeVS()
+        fake.names["source-layer-1"] = "PD-GB-Quelldaten"
+        fake.names["source-layer-2"] = "PD-GB-Quelldaten-2"
+        adapter = load_adapter(fake)
+
+        self.assertEqual("PD-GB-Quelldaten-3",
+                         adapter._unique_name("PD-GB-Quelldaten"))
 
     def test_imported_arc_uses_direct_geometry_fallback(self):
         fake = FakeVS()
@@ -483,6 +487,28 @@ class Foreign3DTests(unittest.TestCase):
         self.assertEqual(
             [("DTM6 Menu", 1), ("Fit To Objects", 0)], fake.menu_calls)
         self.assertEqual(2, fake.redraw_count)
+
+    def test_second_site_model_receives_an_independent_unique_name(self):
+        fake = FakeVS()
+        fake.site_model_handles = {"existing-model"}
+        fake.ready_site_models = {"existing-model", "new-model"}
+        fake.names["existing-model"] = "DGM Bestand"
+        fake.created_site_model = "new-model"
+        fake.names["new-model"] = "Geländemodell-1"
+        fake.types.update({"existing-model": 86, "new-model": 86})
+        fake.layer_order = ["model-layer"]
+        fake.layer_objects["model-layer"] = ["existing-model", "new-model"]
+        fake.layers["existing-model"] = "model-layer"
+        fake.layers["new-model"] = "model-layer"
+        fake.layer_names["model-layer"] = "PD-GB-Quelldaten-2"
+        adapter = load_adapter(fake)
+
+        result = adapter.create_site_model_from_selected_sources(
+            "DGM Bestand", "PD-GB-Gelaendemodell", (10.0, 20.0))
+
+        self.assertEqual("DGM Bestand-2", result["name"])
+        self.assertEqual("DGM Bestand", fake.names["existing-model"])
+        self.assertEqual("DGM Bestand-2", fake.names["new-model"])
 
     def test_native_site_model_query_metadata_is_written_to_control_layer(self):
         fake = FakeVS()

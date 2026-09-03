@@ -34,26 +34,14 @@ def _preview_sources(options):
     boundaries = (adapter.selected_boundaries(selected)
                   if options.get("use_selected_boundary", False) else ())
     boundary_handle, boundary = boundaries[0] if boundaries else (None, None)
-    all_active_layer = options.get("all_active_layer", False)
-    handles = adapter.active_layer_handles() if all_active_layer else selected
-    recovered_layer_scope = False
-    if (not all_active_layer and vectorworks_selection_count > len(handles)):
-        layer_handles = adapter.object_layer_handles(selected)
-        if layer_handles:
-            handles = layer_handles
-            recovered_layer_scope = True
-    # 1,024 is the repeatedly observed Vectorworks cutoff. The internal count
-    # may incorrectly report the same truncated value, so a large selection at
-    # or above this threshold also requires layer-based recovery.
-    if not all_active_layer and len(selected) >= 1024 and not recovered_layer_scope:
-        layer_handles = adapter.object_layer_handles(selected)
-        if layer_handles:
-            handles = layer_handles
-            recovered_layer_scope = True
+    # The DGM source set is defined exclusively by the current Vectorworks
+    # selection. selected_handles() already combines several native selected-
+    # only iterators and a complete document walk guarded by Selected(handle).
+    # Never broaden this set to a complete layer: separate selections must be
+    # able to create separate terrain models without importing one another.
+    handles = selected
     if not handles:
-        raise core.TerrainError(
-            "Auf der aktiven Ebene wurden keine Objekte gefunden." if all_active_layer else
-            "Es wurden keine Objekte markiert.")
+        raise core.TerrainError("Es wurden keine Objekte markiert.")
     sources, unsupported = adapter.extract_sources(
         handles, options["chord_tolerance_m"], boundary_handle)
     review = core.review_sources(
@@ -64,22 +52,15 @@ def _preview_sources(options):
         "%s: %d\nErkannte Quellgeometrien: %d\n"
         "Verwendbar: %d\nAusgeschlossen: %d\nProbleme: %d\n"
         "Nicht unterstützte Objekte: %d\nVerwendbare Stützpunkte: %d" %
-        ("Geprüfte Objekte der aktiven Ebene" if all_active_layer else
-         "Geprüfte Objekte der Ebenen mit Markierung" if recovered_layer_scope else
-         "Geprüfte markierte Objekte",
+        ("Geprüfte markierte Objekte",
          len(handles), review["input_count"],
          review["usable_count"], review["excluded_count"],
          review["problem_count"], len(unsupported), review["vertex_count"]))
-    if all_active_layer:
-        message += "\nErfassungsbereich: gesamte aktive Ebene einschließlich Gruppen"
-    elif recovered_layer_scope:
-        message += ("\nErfassungsbereich: sämtliche Einzelobjekte tief in den Ebenen der "
-                    "Markierung (Vectorworks-Auswahlbegrenzung umgangen)")
-    else:
-        message += "\nErfassungsbereich: markierte Objekte"
+    message += "\nErfassungsbereich: ausschließlich markierte Objekte"
     message += "\nVectorworks-Auswahlzähler: %d" % vectorworks_selection_count
-    if recovered_layer_scope:
-        message += " (Auswahlbegrenzung durch Ebenenerfassung ersetzt)"
+    if vectorworks_selection_count != len(handles):
+        message += (" (abweichend; es wurden keine unmarkierten "
+                    "Ebenenobjekte ergänzt)")
     message += ("\nModellbegrenzung: %s" %
                 ("markiertes Polygon" if boundary else "keine"))
     message += "\nEingelesene Vectorworks-Objekttypen: " + _count_labels(
@@ -98,7 +79,9 @@ def _preview_sources(options):
         adapter.alert(message + "\n\nDie blockierenden Konflikte müssen zuerst behoben werden.")
         return
     if not adapter.confirm(message + "\n\nQuelldaten-Ebene jetzt erzeugen?",
-                           "Originalobjekte werden weder verändert noch gelöscht."):
+                           "Originalobjekte und bestehende DGM werden weder verändert noch "
+                           "gelöscht. Dieser Lauf erhält eigene, eindeutige Quell- und "
+                           "Kontrollebenen."):
         return
     layer_name, created, verification = adapter.create_source_layer(
         review, options["layer_name"])

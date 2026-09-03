@@ -310,3 +310,11 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   Millimeter als Dokumenteinheit exakt `0,5 m` und wird nicht fälschlich als
   `500 m` gegen den zulässigen Bereich geprüft. Der Dialogtest kontrolliert
   nun zusätzlich, dass Erzeugung und Auslesen denselben REAL-Feldtyp verwenden.
+- Gelände- und Baugrubenmodul 1.0.26: Die Quelldatenerfassung ist strikt auf
+  die aktuelle Markierung begrenzt. Die frühere Erweiterung auf sämtliche
+  Objekte der aktiven oder einer von der Auswahl berührten Ebene wurde samt
+  Dialogoption entfernt. Große DWG-Auswahlen werden weiterhin über mehrere
+  native Wege vervollständigt, beim vollständigen Ebenendurchlauf aber nur bei
+  gesetztem Vectorworks-Auswahlstatus übernommen. Wiederholte Läufe erzeugen
+  getrennte, eindeutig benannte Quell- und Kontrollebenen sowie eigenständige
+  DGM, ohne bereits vorhandene Modelle zu verändern.
