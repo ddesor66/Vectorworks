@@ -200,6 +200,29 @@ class ShaftLabelTests(unittest.TestCase):
         self.assertNotIn("Zulauf", label)
         self.assertNotIn("Ablauf", label)
 
+    def test_anonymous_stub_terminal_has_no_framed_primary_label(self):
+        value = core.validate_shaft(dict(
+            shaft("terminal", "RW.099", 0.0, 99.58), diameter_m=0.0),
+            allow_hidden=True)
+        endpoint = ({"tag": "A1", "role": "out", "invert_m": 99.58,
+                     "dn_mm": 150, "material": "PP", "bearing_deg": 0.0},)
+        self.assertFalse(core.shaft_primary_label_visible(value, endpoint))
+        self.assertEqual("", core.shaft_label(value, endpoint, preferences()))
+
+    def test_zero_diameter_multi_pipe_junction_keeps_primary_label(self):
+        value = core.validate_shaft(dict(
+            shaft("junction", "RW.099", 0.0, 99.58), diameter_m=0.0),
+            allow_hidden=True)
+        endpoints = (
+            {"tag": "Z1", "role": "in", "invert_m": 99.60,
+             "dn_mm": 150, "material": "PP", "bearing_deg": 0.0},
+            {"tag": "A1", "role": "out", "invert_m": 99.58,
+             "dn_mm": 150, "material": "PP", "bearing_deg": 180.0},
+        )
+        self.assertTrue(core.shaft_primary_label_visible(value, endpoints))
+        self.assertIn("KS = 99,58 m", core.shaft_label(
+            value, endpoints, preferences()))
+
     def test_supplementary_text_is_directly_below_shaft_name(self):
         value = core.validate_shaft(dict(
             shaft("s1", "RW.001", 0.0, 100.0),

@@ -902,6 +902,12 @@ def validate_shaft(value, allow_hidden=False):
     result["id"] = _identity(result.get("id"), "Schachtidentität")
     result["kind"] = _kind(result.get("kind"))
     result["visible"] = bool(result.get("visible", True))
+    if "primary_label_visible" in result:
+        # This object-specific switch is used for anonymous terminal nodes of
+        # a stub branch.  Do not add it to legacy objects implicitly: their
+        # safe migration is derived from the current connection count in
+        # ``shaft_primary_label_visible`` below.
+        result["primary_label_visible"] = bool(result["primary_label_visible"])
     raw_diameter = number(result.get("diameter_m", 0.0), "Schachtdurchmesser")
     default_type = "round" if result["visible"] and raw_diameter > 0.0 else "junction"
     result["structure_type"] = str(result.get("structure_type", default_type))
@@ -1456,9 +1462,29 @@ def connection_plan_name(role, tag, role_count):
     return "%s %s" % (prefix, label) if int(role_count) > 1 and prefix else label
 
 
-def shaft_label(shaft, endpoint_rows, preferences):
+def shaft_primary_label_visible(shaft, endpoint_rows):
+    """Return whether one node needs its framed primary label.
+
+    A pure stub branch historically ended in a visible, zero-diameter round
+    node.  That anonymous end needs the independently movable connection-height
+    text, but not the additional framed ``KS = ...`` shaft label.  New objects
+    persist the decision explicitly; the narrow one-connection fallback fixes
+    existing drawings without hiding labels at real multi-pipe junctions.
+    """
     shaft = validate_shaft(shaft, allow_hidden=True)
     if not shaft["visible"]:
+        return False
+    if "primary_label_visible" in shaft:
+        return bool(shaft["primary_label_visible"])
+    return not (
+        shaft["structure_type"] in ("round", "junction") and
+        shaft["diameter_m"] == 0.0 and
+        len(tuple(endpoint_rows or ())) <= 1)
+
+
+def shaft_label(shaft, endpoint_rows, preferences):
+    shaft = validate_shaft(shaft, allow_hidden=True)
+    if not shaft_primary_label_visible(shaft, endpoint_rows):
         return ""
     def height(value):
         return format_number(value, 2)

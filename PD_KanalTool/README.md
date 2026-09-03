@@ -1,4 +1,4 @@
-# PD Kanaltool 1.3.7
+# PD Kanaltool 1.3.8
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und
@@ -22,6 +22,12 @@ Alle sichtbaren Deckel-, Sohl-, Anschluss- und sonstigen Höhenwerte werden in
 Dialogen, Meldungen, Planbeschriftungen und Schachtblättern einheitlich mit
 genau zwei Nachkommastellen ausgegeben. Die intern gespeicherten Werte und die
 Berechnungen behalten ihre volle Genauigkeit.
+
+Am freien Ende einer reinen Stutzenleitung wird keine zusätzliche gerahmte
+Schachtbeschriftung `KS = …` erzeugt. Die leitungsparallele Anschlusshöhe bleibt
+als eigenständig verschiebbare Beschriftung erhalten. Vorhandene Zeichnungen
+werden beim nächsten Objektaufbau anhand des anonymen Endknotens ebenso
+korrigiert; echte Schächte und mehrarmige Verbindungsknoten bleiben unverändert.
 
 ## Einstieg und Zeichenrichtung
 

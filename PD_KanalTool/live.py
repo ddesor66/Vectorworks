@@ -723,6 +723,18 @@ def ensure_label(owner, data, created):
     identity = str(uuid.uuid5(uuid.NAMESPACE_URL, _name(owner) + ":channel-label"))
     name = core.LABEL_PREFIX + identity
     label = vs.GetObject(name)
+    if data.get("role") in NODE_ROLES:
+        shaft = read_shaft(owner, data)
+        if not core.shaft_primary_label_visible(
+                shaft, shaft_connection_views(shaft)):
+            # Existing files may already contain this generated label PIO.
+            # Resetting it clears its old geometry while retaining the owner
+            # association for safe cleanup with the node. New terminal nodes
+            # do not create the redundant PIO at all.
+            if label:
+                vs.ResetObject(label)
+            _ensure_connection_height_labels(owner, data, created)
+            return None
     if label:
         label_data = _live().data_of(label)
         if not is_sewer_data(label_data) or label_data.get("owner") != _name(owner):
@@ -1337,6 +1349,23 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
             terminal_label_point_size=terminal.get(
                 "terminal_label_point_size", preferences["point_size"]))
         core.validate_shaft(endpoint, allow_hidden=True)
+    elif options.get("as_stub"):
+        # The free end remains a visible zero-diameter node so its separate,
+        # line-parallel connection-height annotation can be moved. It is not a
+        # shaft, however, and therefore must not receive the framed KS box.
+        for terminal_xy in (value[-1] for value in paths):
+            candidates = tuple(
+                value for value in built["shafts"]
+                if value.get("structure_type") == "round" and
+                float(value.get("diameter_m", 0.0)) == 0.0)
+            if not candidates:
+                continue
+            endpoint = min(
+                candidates,
+                key=lambda value: math.dist(
+                    (value["x_m"], value["y_m"]), terminal_xy))
+            if math.dist((endpoint["x_m"], endpoint["y_m"]), terminal_xy) <= 0.001:
+                endpoint["primary_label_visible"] = False
     connected_values = []
     for pipe in built["pipes"]:
         if pipe["start_id"] == shaft_id:

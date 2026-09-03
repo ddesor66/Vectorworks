@@ -380,3 +380,11 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   2D-Symbolauswahl zur Verfügung. Sechs zusätzliche Geometrie-, Dialog-,
   Auswahl- und Transaktionsregressionen erhöhen den Gesamtumfang auf 213
   automatisierte Tests.
+- Kanaltool und gemeinsamer Kanal-/Leitungsaufruf 1.3.8: Der anonyme freie
+  Endknoten einer Stutzenleitung erzeugt keine zusätzliche gerahmte
+  `KS = …`-Schachtbeschriftung mehr. Die separate, leitungsparallele
+  Anschlusshöhe bleibt erhalten und verschiebbar. Eine eng begrenzte
+  Bestandsmigration blendet dieselbe Doppelbeschriftung auch in vorhandenen
+  Zeichnungen aus, ohne echte Schächte oder mehrarmige Verbindungsknoten zu
+  verändern. Drei zusätzliche Modell- und Beschriftungsregressionen erhöhen
+  den Gesamtumfang auf 216 automatisierte Tests.

@@ -765,6 +765,60 @@ class VectorworksBoundaryTests(unittest.TestCase):
         self.assertFalse(store.data[moved]["auto_position"])
         self.assertIn(moved, api.reset)
 
+    def test_stub_terminal_creates_only_connection_height_label(self):
+        api = ConnectionLabelAPI()
+        live = load_module(api, "PD_KanalTool.live")
+        settings = importlib.import_module("PD_KanalTool.settings")
+        preferences = settings.validate({"shaft_connection_labels_visible": True})
+        shaft = live.core.validate_shaft({
+            "schema": live.core.SCHEMA, "id": "shaft-1", "kind": "RW",
+            "name": "RW.099", "note": "", "x_m": 10.0, "y_m": 20.0,
+            "kd_m": 100.50, "ks_m": 99.58, "diameter_m": 0.0,
+            "structure_type": "round", "visible": True,
+            "primary_label_visible": False,
+        }, allow_hidden=True)
+        owner_data = {
+            "schema": live.core.SCHEMA, "role": "sewer_shaft",
+            "shaft": shaft, "labels": [], "preferences": preferences,
+        }
+
+        class Store(object):
+            def __init__(self):
+                self.data = {"OWNER": owner_data}
+
+            def data_of(self, handle):
+                return self.data.get(handle)
+
+            def write_data(self, handle, data):
+                self.data[handle] = data
+
+            def _new_object(self, xy, data, name, created):
+                del xy
+                handle = "LABEL-%d" % (len(created) + 1)
+                api.names[handle] = name
+                api.objects[name] = handle
+                api.parents[handle] = "LAYER"
+                self.data[handle] = data
+                created.append(handle)
+                return handle
+
+        store = Store()
+        row = {
+            "connection_id": "p1:start", "role": "out", "tag": "A1",
+            "invert_m": 99.58, "direction": (1.0, 0.0),
+        }
+        live._live = lambda: store
+        live.adapter.units_to_meters = lambda: 1.0
+        live.read_shaft = lambda _owner, _data=None: shaft
+        live.shaft_connection_views = lambda _shaft: (row,)
+        live.core.shaft_outer_diameter_m = lambda _shaft: 0.0
+
+        created = []
+        self.assertIsNone(live.ensure_label("OWNER", owner_data, created))
+        self.assertEqual(1, len(created))
+        self.assertEqual("connection_height", store.data[created[0]]["label_kind"])
+        self.assertEqual(1, len(store.data["OWNER"]["labels"]))
+
 
 if __name__ == "__main__":
     unittest.main()
