@@ -145,4 +145,6 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   liegt nun vollständig getrennt vom nativen Geländemodell auf dessen visueller
   Kontrollebene. Damit wird auch die Modelleebene nach der Triangulation nicht
   mehr verändert; der native 2D-/3D-Grafikcache mit Geländegrenze,
-  Höhenlinien und Triangulation bleibt erhalten.
+  Höhenlinien und Triangulation bleibt erhalten. Der Assistent weist außerdem
+  eindeutig darauf hin, dass Schritt 1 den nativen Erzeugungsdialog bereits
+  selbst öffnet und der Befehl danach nicht nochmals ausgeführt werden darf.

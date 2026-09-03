@@ -54,9 +54,10 @@ def home():
     for item, label in actions:
         vs.CreateRadioButton(dialog, item, label)
     vs.CreateStaticText(dialog, 20,
-        "Technischer Hinweis: Die geprüfte Python-API kann native Geländemodelle auswerten, "
-        "aber nicht vollständig erzeugen oder automatisch aktualisieren. Quelldaten werden daher "
-        "sicher vorbereitet und für den nativen Vectorworks-Befehl markiert.", 72)
+        "Schritt 1 bereitet die markierten Quelldaten vor und öffnet den nativen "
+        "Vectorworks-Dialog zur Erzeugung des Geländemodells automatisch. Nach der "
+        "Erfolgsmeldung ist das Modell fertig; den Befehl ‚Geländemodell aus "
+        "Ausgangsdaten‘ anschließend nicht nochmals manuell aufrufen.", 72)
     vs.SetFirstLayoutItem(dialog, 4)
     previous = 4
     for item, _label in actions:
