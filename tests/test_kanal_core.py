@@ -2,6 +2,7 @@
 """Focused regression tests for channel shaft labels and shaft connections."""
 from __future__ import absolute_import
 
+import math
 import unittest
 
 from PD_KanalTool import core, settings
@@ -232,6 +233,44 @@ class ShaftLabelTests(unittest.TestCase):
 
 
 class ShaftConnectionTests(unittest.TestCase):
+    @staticmethod
+    def _turn_angles(points):
+        values = []
+        for first, corner, last in zip(points, points[1:], points[2:]):
+            incoming = corner[0] - first[0], corner[1] - first[1]
+            outgoing = last[0] - corner[0], last[1] - corner[1]
+            dot = ((incoming[0] * outgoing[0] + incoming[1] * outgoing[1]) /
+                   (math.hypot(*incoming) * math.hypot(*outgoing)))
+            values.append(math.degrees(math.acos(max(-1.0, min(1.0, dot)))))
+        return tuple(values)
+
+    def test_connection_bends_over_45_degrees_are_split_at_half_meter_spacing(self):
+        sixty = core.soften_connection_bends((
+            (0.0, 0.0), (2.0, 0.0), (3.0, math.sqrt(3.0))))
+        self.assertEqual(4, len(sixty))
+        self.assertTrue(all(value < 45.0 for value in self._turn_angles(sixty)))
+        self.assertAlmostEqual(0.50, math.dist(sixty[1], sixty[2]))
+
+        softened = core.soften_connection_bends(
+            ((0.0, 0.0), (2.0, 0.0), (2.0, 2.0)))
+        self.assertEqual((0.0, 0.0), softened[0])
+        self.assertEqual((2.0, 2.0), softened[-1])
+        self.assertEqual(5, len(softened))
+        self.assertEqual(3, len(self._turn_angles(softened)))
+        self.assertTrue(all(value < 45.0 for value in self._turn_angles(softened)))
+        self.assertAlmostEqual(0.50, math.dist(softened[1], softened[2]))
+        self.assertAlmostEqual(0.50, math.dist(softened[2], softened[3]))
+
+    def test_connection_bends_at_45_degrees_remain_unchanged(self):
+        path = ((0.0, 0.0), (2.0, 0.0),
+                (2.0 + math.sqrt(2.0), math.sqrt(2.0)))
+        self.assertEqual(path, core.soften_connection_bends(path))
+
+    def test_short_connection_rejects_required_bend_spacing(self):
+        with self.assertRaisesRegex(core.SewerError, "zu kurz"):
+            core.soften_connection_bends(
+                ((0.0, 0.0), (0.10, 0.0), (0.10, 0.10)))
+
     def test_component_and_annotation_classes_are_separate_by_type(self):
         first = shaft("s1", "RW.001", 0.0, 100.0)
         second = shaft("s2", "RW.002", 10.0, 99.0)

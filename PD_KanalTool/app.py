@@ -101,6 +101,14 @@ def _edit(preferences, managed):
         if sewer_live.edit(managed[0][0], preferences):
             adapter.alert("Kanalobjekt und angeschlossene Darstellung wurden aktualisiert.")
         return
+    if all(data.get("role") == "sewer_floor_drain"
+           for _handle, data in managed):
+        if sewer_live.edit_floor_drains(
+                tuple(handle for handle, _data in managed), preferences):
+            adapter.alert(
+                "%d Bodenabläufe mit gemeinsamen Abmessungen und 2D-Symbol aktualisiert."
+                % len(managed))
+        return
     if all(data.get("role") == "sewer_shaft" for _handle, data in managed):
         if sewer_live.edit_shafts(
                 tuple(handle for handle, _data in managed), preferences):
@@ -397,7 +405,8 @@ def _stub(preferences, managed):
     adapter.draw_points(
         _with_quantity_refresh(complete),
         help_text=("KANALSTUTZEN: Zuerst die Lage auf der gewählten Haltung anklicken. "
-                   "Danach die DN-%d-Anschlussleitung zeichnen; Doppelklick beendet." % options["dn_mm"]),
+                   "Danach die DN-%d-Anschlussleitung zeichnen; Doppelklick beendet. "
+                   "Knicke über 45° werden mit 0,50 m Abstand aufgeteilt." % options["dn_mm"]),
         undo_name="PD Kanalstutzen herstellen")
 
 
@@ -444,7 +453,8 @@ def _terminal(preferences, structure_type):
         _with_quantity_refresh(complete),
         help_text=("Vom Bodenablauf zur Hauptleitung zeichnen. " if structure_type == "floor_drain" else
                    "Vom freien Hausanschlussende zur Hauptleitung zeichnen. ") +
-                  "Der Doppelklickpunkt muss auf der bestehenden Haltung liegen.",
+                  "Der Doppelklickpunkt muss auf der bestehenden Haltung liegen. "
+                  "Knicke über 45° werden mit 0,50 m Abstand aufgeteilt.",
         undo_name="PD Bodenablauf anschließen" if structure_type == "floor_drain" else
                   "PD Hausanschluss anschließen")
 

@@ -1252,7 +1252,10 @@ def connect_branch(handle, point_m, branch_paths, options, preferences):
     (start_handle, start), (end_handle, end) = _endpoints(original)
     fraction, xy = core.project_on_pipe(
         (start["x_m"], start["y_m"]), (end["x_m"], end["y_m"]), point_m)
-    paths = tuple(core.path(value) for value in branch_paths)
+    paths = tuple(
+        core.soften_connection_bends(value)
+        if options.get("as_stub") else core.path(value)
+        for value in branch_paths)
     if not paths or math.dist(paths[0][0], xy) > 0.001:
         raise core.SewerError("Die neue Leitung beginnt nicht am gewählten Anschlusspunkt.")
     shaft_id = str(uuid.uuid4())
@@ -2921,6 +2924,37 @@ def edit_terminal(handle, preferences):
         "PD %s bearbeiten" % (
             "Bodenablauf" if updated["structure_type"] == "floor_drain"
             else "Hausanschluss"))
+    return True
+
+
+def edit_floor_drains(handles, preferences):
+    """Apply one body size and optional library symbol to several drains."""
+    requested = tuple(dict.fromkeys(tuple(handles or ())))
+    if len(requested) < 2:
+        raise core.SewerError(
+            "Für die Mehrfachbearbeitung mindestens zwei Bodenabläufe markieren.")
+    rows = []
+    for handle in requested:
+        data = _live().data_of(handle)
+        if (not is_sewer_data(data) or
+                data.get("role") != "sewer_floor_drain"):
+            raise core.SewerError(
+                "Für diese Mehrfachbearbeitung ausschließlich Bodenabläufe markieren.")
+        rows.append((handle, read_shaft(handle, data)))
+    choice = sewer_ui.floor_drain_batch_dialog(
+        tuple(value for _handle, value in rows), preferences)
+    if choice is None:
+        return False
+    updates = {}
+    for handle, original in rows:
+        changed = copy.deepcopy(original)
+        changed.update(choice)
+        changed["terminal_depth_m"] = changed["terminal_height_m"]
+        # The connection elevation is the lower edge and remains individual.
+        changed["kd_m"] = changed["ks_m"] + changed["terminal_height_m"]
+        updates[handle] = core.validate_shaft(changed, allow_hidden=True)
+    _commit_network_updates(
+        {}, updates, preferences, "PD Bodenabläufe mehrfach bearbeiten")
     return True
 
 

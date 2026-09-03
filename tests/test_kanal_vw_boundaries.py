@@ -302,6 +302,53 @@ class VectorworksBoundaryTests(unittest.TestCase):
         self.assertEqual(100.50, captured["options"]["terminal"]["terminal_invert_m"])
         self.assertEqual(100.90, captured["options"]["terminal"]["terminal_top_m"])
 
+    def test_multiple_floor_drains_keep_individual_lower_edges(self):
+        live = load_module(types.SimpleNamespace(), "PD_KanalTool.live")
+
+        def drain(identity, name, ks_m):
+            return live.core.validate_shaft({
+                "schema": live.core.SCHEMA, "id": identity, "kind": "RW",
+                "name": name, "note": "", "x_m": float(len(identity)),
+                "y_m": 0.0, "kd_m": ks_m + 0.60, "ks_m": ks_m,
+                "diameter_m": 0.0, "structure_type": "floor_drain",
+                "visible": True,
+            }, allow_hidden=True)
+
+        first = drain("d1", "ABL.001", 99.40)
+        second = drain("d2", "ABL.002", 98.20)
+        rows = {
+            "D1": {"schema": live.core.SCHEMA,
+                   "role": "sewer_floor_drain", "shaft": first},
+            "D2": {"schema": live.core.SCHEMA,
+                   "role": "sewer_floor_drain", "shaft": second},
+        }
+        store = types.SimpleNamespace(data_of=lambda handle: rows.get(handle))
+        commits = []
+        choice = {
+            "terminal_length_m": 0.80, "terminal_width_m": 0.40,
+            "terminal_height_m": 0.75, "terminal_symbol": "ABL 50x30",
+            "terminal_symbol_has_3d": False,
+        }
+        with mock.patch.object(live, "_live", return_value=store), mock.patch.object(
+                live, "read_shaft",
+                side_effect=lambda handle, _data=None: rows[handle]["shaft"]), mock.patch.object(
+                live.sewer_ui, "floor_drain_batch_dialog",
+                return_value=choice), mock.patch.object(
+                live, "_commit_network_updates",
+                side_effect=lambda pipes, shafts, preferences, undo: commits.append(
+                    (pipes, shafts, preferences, undo))):
+            self.assertTrue(live.edit_floor_drains(("D1", "D2"), {"draw_3d": True}))
+        updates = commits[0][1]
+        self.assertEqual((99.40, 98.20),
+                         (updates["D1"]["ks_m"], updates["D2"]["ks_m"]))
+        self.assertEqual((100.15, 98.95),
+                         (updates["D1"]["kd_m"], updates["D2"]["kd_m"]))
+        self.assertEqual((0.80, 0.40, 0.75), (
+            updates["D1"]["terminal_length_m"],
+            updates["D1"]["terminal_width_m"],
+            updates["D1"]["terminal_height_m"]))
+        self.assertEqual("ABL 50x30", updates["D2"]["terminal_symbol"])
+
     def test_legacy_stub_role_migrates_to_independent_fitting_type(self):
         api = types.SimpleNamespace(
             GetName=lambda _handle: "PD-KAN-S-stub-1")

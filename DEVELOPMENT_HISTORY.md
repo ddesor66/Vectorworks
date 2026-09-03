@@ -369,3 +369,14 @@ enthalten. Dieses Repository beginnt daher mit einem Snapshot von Version 1.30.2
   der Objekt-Info-Palette; Mengen-Löschbeobachtung und Netzprüfung erkennen
   die neuen Rollen. Sieben zusätzliche Modell-, Dialog-, Rollen-, Anschluss-
   und Menüregressionen erhöhen den Gesamtumfang auf 207 automatisierte Tests.
+- Kanaltool und gemeinsamer Kanal-/Leitungsaufruf 1.3.7: Knicke über 45° in
+  Stutzen-, Bodenablauf- und Hausanschlussleitungen werden geometrisch
+  automatisch in Einzelwinkel unter 45° mit jeweils 0,50 m Abstand zwischen
+  den erzeugten Knickpunkten aufgeteilt. Zu kurze Anschlussabschnitte werden
+  vor jeder Dokumentänderung verständlich abgewiesen. Länge, Breite und Höhe
+  mehrerer markierter Bodenabläufe können gemeinsam geändert werden, ohne ihre
+  individuellen Unterkanten zu verändern. Bei der Einzel- und
+  Mehrfachbearbeitung steht zusätzlich die dokument- und bibliotheksgebundene
+  2D-Symbolauswahl zur Verfügung. Sechs zusätzliche Geometrie-, Dialog-,
+  Auswahl- und Transaktionsregressionen erhöhen den Gesamtumfang auf 213
+  automatisierte Tests.

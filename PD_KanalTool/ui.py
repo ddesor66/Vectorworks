@@ -136,14 +136,14 @@ def _cover_symbol(unique_id, enabled):
     if not enabled:
         return ""
     if not vs.ResList_IsSelValid(unique_id):
-        raise core.SewerError("Bitte ein gültiges 2D-Schachtdeckelsymbol auswählen.")
+        raise core.SewerError("Bitte ein gültiges 2D-Symbol auswählen.")
     selected = str(vs.ResList_GetSel(unique_id) or "").strip()
     handle = vs.GetObject(selected) if vs.ResList_GetSelIsDoc(unique_id) else None
     if not handle:
         handle = vs.ResList_ImportItemN(unique_id, 2)
     name = str(vs.GetName(handle) or selected).strip() if handle else ""
     if not name or not vs.GetObject(name):
-        raise core.SewerError("Das gewählte Schachtdeckelsymbol konnte nicht importiert werden.")
+        raise core.SewerError("Das gewählte 2D-Symbol konnte nicht importiert werden.")
     return name
 
 
@@ -2032,7 +2032,8 @@ def terminal_dialog(structure_type, preferences):
          "HAUSANSCHLUSS  |  Vom freien Ende zur Hauptleitung zeichnen"), -1, TITLE_STYLE)
     vs.CreateStaticText(dialog, 11,
                         "Der letzte mit Doppelklick gesetzte Punkt muss auf der bestehenden Hauptleitung liegen. "
-                        "Dort wird automatisch der Stutzen erzeugt.", 78)
+                        "Dort wird automatisch der Stutzen erzeugt. Knicke über 45° werden in Winkel unter 45° "
+                        "mit jeweils 0,50 m Abstand aufgeteilt.", 78)
     vs.CreateStaticText(dialog, 12, "Kanalart:", -1)
     vs.CreatePullDownMenu(dialog, 13, 24)
     vs.CreateStaticText(dialog, 14, "Anschlussleitung DN:", -1)
@@ -2159,6 +2160,9 @@ def terminal_properties_dialog(shaft, preferences):
     vs.CreateEditText(dialog, 16, str(current["terminal_width_m"]).replace(".", ","), 18)
     vs.CreateStaticText(dialog, 17, "Höhe [m]:", -1)
     vs.CreateEditText(dialog, 18, str(current["terminal_height_m"]).replace(".", ","), 18)
+    vs.CreateCheckBox(dialog, 22, "2D-Symbol aus Dokument oder Bibliothek verwenden")
+    vs.CreateResourcePopup(dialog, 23, 44)
+    vs.CreateCheckBox(dialog, 24, "Gewähltes Symbol besitzt bereits einen 3D-Anteil")
     vs.CreateCheckBox(dialog, 19, "Beschriftung anzeigen")
     vs.CreateStaticText(dialog, 20, "Schriftgröße [pt]:", -1)
     vs.CreateEditText(dialog, 21, str(current["terminal_label_point_size"]).replace(".", ","), 18)
@@ -2168,21 +2172,36 @@ def terminal_properties_dialog(shaft, preferences):
         vs.SetBelowItem(dialog, previous, label, 0, 6)
         vs.SetRightItem(dialog, label, field, 8, 0)
         previous = label
-    vs.SetBelowItem(dialog, previous, 19, 0, 7)
+    vs.SetBelowItem(dialog, previous, 22, 0, 7)
+    vs.SetBelowItem(dialog, 22, 23, 0, 4)
+    vs.SetBelowItem(dialog, 23, 24, 0, 4)
+    vs.SetBelowItem(dialog, 24, 19, 0, 7)
     vs.SetBelowItem(dialog, 19, 20, 0, 5)
     vs.SetRightItem(dialog, 20, 21, 8, 0)
-    for item in (13, 14, 15, 16, 17, 18):
+    for item in (13, 14, 15, 16, 17, 18, 22, 23, 24):
         vs.EnableItem(dialog, item, floor)
     result = {"value": None}
+    resource_id = "PD.Kanal.Bodenablauf.Bearbeiten"
 
     def handler(item, _data):
         if item == INIT:
+            if floor:
+                _init_cover_resource(
+                    dialog, 23, resource_id, current["terminal_symbol"])
+                vs.SetBooleanItem(dialog, 22, bool(current["terminal_symbol"]))
+                vs.SetBooleanItem(
+                    dialog, 24, bool(current["terminal_symbol_has_3d"]))
+                vs.EnableItem(dialog, 23, bool(current["terminal_symbol"]))
+                vs.EnableItem(dialog, 24, bool(current["terminal_symbol"]))
             vs.SetBooleanItem(dialog, 19, current["terminal_label_visible"])
             vs.EnableItem(dialog, 20, current["terminal_label_visible"])
             vs.EnableItem(dialog, 21, current["terminal_label_visible"])
         elif item == 19:
             vs.EnableItem(dialog, 20, _selected(dialog, 19))
             vs.EnableItem(dialog, 21, _selected(dialog, 19))
+        elif item == 22 and floor:
+            vs.EnableItem(dialog, 23, _selected(dialog, 22))
+            vs.EnableItem(dialog, 24, _selected(dialog, 22))
         elif item == 1:
             try:
                 bottom = _float(dialog, 12, "Anschlusshöhe")
@@ -2197,6 +2216,10 @@ def terminal_properties_dialog(shaft, preferences):
                     updated["terminal_height_m"] = _float(dialog, 18, "Höhe")
                     updated["terminal_depth_m"] = updated["terminal_height_m"]
                     updated["kd_m"] = bottom + updated["terminal_height_m"]
+                    updated["terminal_symbol"] = _cover_symbol(
+                        resource_id, _selected(dialog, 22))
+                    updated["terminal_symbol_has_3d"] = bool(
+                        _selected(dialog, 24)) if updated["terminal_symbol"] else False
                 else:
                     updated["kd_m"] = bottom
                 result["value"] = core.validate_shaft(updated, allow_hidden=True)
@@ -2204,4 +2227,94 @@ def terminal_properties_dialog(shaft, preferences):
                 vs.AlrtDialog(str(error))
                 return -1
         return item
-    return result["value"] if _run(dialog, handler, (480, 390)) == 1 else None
+    return result["value"] if _run(dialog, handler, (540, 500)) == 1 else None
+
+
+def floor_drain_batch_dialog(shafts, preferences):
+    """Return common dimensions and 2D symbol for several floor drains."""
+    del preferences
+    current = tuple(core.validate_shaft(value, allow_hidden=True)
+                    for value in tuple(shafts or ()))
+    if len(current) < 2 or any(
+            value["structure_type"] != "floor_drain" for value in current):
+        raise core.SewerError(
+            "Für die Mehrfachbearbeitung mindestens zwei Bodenabläufe markieren.")
+    first = current[0]
+    dialog = vs.CreateResizableLayout(
+        _title("Bodenabläufe bearbeiten"), True,
+        "Auf alle anwenden", "Abbrechen", True, True)
+    vs.CreateStyledStatic(
+        dialog, 10, "BODENABLÄUFE  |  %d Objekte gemeinsam bearbeiten" % len(current),
+        -1, TITLE_STYLE)
+    vs.CreateStaticText(
+        dialog, 11,
+        "Die Abmessungen werden auf alle markierten Bodenabläufe übertragen. Das 2D-Symbol wird nur bei "
+        "aktivierter Symboländerung vereinheitlicht. Lage und jeweilige Anschlusshöhe bleiben erhalten.", 72)
+    vs.CreateStaticText(dialog, 12, "Länge [m]:", -1)
+    vs.CreateEditText(dialog, 13, str(first["terminal_length_m"]).replace(".", ","), 18)
+    vs.CreateStaticText(dialog, 14, "Breite [m]:", -1)
+    vs.CreateEditText(dialog, 15, str(first["terminal_width_m"]).replace(".", ","), 18)
+    vs.CreateStaticText(dialog, 16, "Höhe [m]:", -1)
+    vs.CreateEditText(dialog, 17, str(first["terminal_height_m"]).replace(".", ","), 18)
+    vs.CreateCheckBox(dialog, 21, "2D-Symbol bei allen markierten Bodenabläufen ändern")
+    vs.CreateCheckBox(dialog, 18, "2D-Symbol aus Dokument oder Bibliothek verwenden")
+    vs.CreateResourcePopup(dialog, 19, 44)
+    vs.CreateCheckBox(dialog, 20, "Gewähltes Symbol besitzt bereits einen 3D-Anteil")
+    vs.SetFirstLayoutItem(dialog, 10)
+    vs.SetBelowItem(dialog, 10, 11, 0, 6)
+    previous = 11
+    for label, field in ((12, 13), (14, 15), (16, 17)):
+        vs.SetBelowItem(dialog, previous, label, 0, 6)
+        vs.SetRightItem(dialog, label, field, 8, 0)
+        previous = label
+    vs.SetBelowItem(dialog, previous, 21, 0, 7)
+    vs.SetBelowItem(dialog, 21, 18, 0, 4)
+    vs.SetBelowItem(dialog, 18, 19, 0, 4)
+    vs.SetBelowItem(dialog, 19, 20, 0, 4)
+    resource_id = "PD.Kanal.Bodenablauf.Mehrfach"
+    result = {"value": None}
+
+    def handler(item, _data):
+        if item == INIT:
+            _init_cover_resource(
+                dialog, 19, resource_id, first["terminal_symbol"])
+            vs.SetBooleanItem(dialog, 21, False)
+            vs.SetBooleanItem(dialog, 18, bool(first["terminal_symbol"]))
+            vs.SetBooleanItem(
+                dialog, 20, bool(first["terminal_symbol_has_3d"]))
+            vs.EnableItem(dialog, 18, False)
+            vs.EnableItem(dialog, 19, False)
+            vs.EnableItem(dialog, 20, False)
+        elif item == 21:
+            apply_symbol = _selected(dialog, 21)
+            vs.EnableItem(dialog, 18, apply_symbol)
+            vs.EnableItem(dialog, 19, apply_symbol and _selected(dialog, 18))
+            vs.EnableItem(dialog, 20, apply_symbol and _selected(dialog, 18))
+        elif item == 18:
+            vs.EnableItem(dialog, 19, _selected(dialog, 21) and _selected(dialog, 18))
+            vs.EnableItem(dialog, 20, _selected(dialog, 21) and _selected(dialog, 18))
+        elif item == 1:
+            try:
+                candidate = core.validate_shaft(dict(
+                    first,
+                    terminal_length_m=_float(dialog, 13, "Länge"),
+                    terminal_width_m=_float(dialog, 15, "Breite"),
+                    terminal_height_m=_float(dialog, 17, "Höhe")),
+                    allow_hidden=True)
+                result["value"] = {
+                    "terminal_length_m": candidate["terminal_length_m"],
+                    "terminal_width_m": candidate["terminal_width_m"],
+                    "terminal_height_m": candidate["terminal_height_m"],
+                }
+                if _selected(dialog, 21):
+                    symbol = _cover_symbol(
+                        resource_id, _selected(dialog, 18))
+                    result["value"].update(
+                        terminal_symbol=symbol,
+                        terminal_symbol_has_3d=(
+                            bool(_selected(dialog, 20)) if symbol else False))
+            except core.SewerError as error:
+                vs.AlrtDialog(str(error))
+                return -1
+        return item
+    return result["value"] if _run(dialog, handler, (540, 420)) == 1 else None

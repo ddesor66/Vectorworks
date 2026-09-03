@@ -1,3 +1,3 @@
 """Independent Vectorworks 2026 channel-network plug-in."""
 
-VERSION = "1.3.6"
+VERSION = "1.3.7"

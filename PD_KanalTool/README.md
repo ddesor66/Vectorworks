@@ -1,4 +1,4 @@
-# PD Kanaltool 1.3.6
+# PD Kanaltool 1.3.7
 
 Das Kanaltool ist ein eigenständiges Vectorworks-2026-Menü und -Werkzeug. Es
 verwendet ausschließlich eigene parametrische Objekte (`PD KAN Objekt`) und
@@ -187,6 +187,13 @@ wird aus den Haltungseinstellungen übernommen. Im 3D verbindet ein durchgängig
 T-/Y-Formstück beide Hauptleitungsseiten mit dem höhengerecht angesetzten
 Abzweig, sodass keine offenen oder losgelösten Rohrstücke verbleiben.
 
+Knicke über 45° werden in Stutzen-, Bodenablauf- und
+Hausanschlussleitungen automatisch in mindestens zwei Einzelwinkel unter 45°
+aufgeteilt. Bei 90° entstehen beispielsweise drei Winkel zu je 30°. Zwischen
+den neu erzeugten Knickpunkten liegen jeweils 0,50 m. Reichen die angrenzenden
+Leitungsabschnitte für diese geometrisch eindeutige Ausbildung nicht aus,
+bleibt das Netz unverändert und das Tool fordert eine längere Leitungsführung.
+
 Jeder neu erzeugte Anschluss auf einer vorhandenen Haltung erhält automatisch
 eine Station. Das gilt für normale Abzweige, Kanalstutzen, Hausanschlüsse und
 Bodenabläufe. Nullpunkt ist der Bezugspunkt des Schachts mit der tieferen
@@ -202,14 +209,17 @@ berücksichtigt.
 Beim Hausanschluss ist die Höhe des freien Endpunkts zwingend anzugeben. Beim
 Bodenablauf entspricht die Anschlusshöhe immer der Unterkante. Länge, Breite
 und Höhe des eigenständigen Objekttyps `Bodenablauf` sind beim Erzeugen und
-nachträglich bearbeitbar; seine Bezeichnung beginnt mit `ABL` und seine
+nachträglich einzeln oder für mehrere markierte Bodenabläufe gemeinsam
+bearbeitbar; seine Bezeichnung beginnt mit `ABL` und seine
 Beschriftung besitzt eine eigene Sichtbarkeit und Schriftgröße. Hausanschluss
 und Bodenablauf übernehmen RW, SW oder MW direkt von der gewählten
 Hauptleitung und erzeugen dort jeweils einen separaten Stutzen. Beide Befehle
 stehen zusätzlich direkt in der Objekt-Info-Palette. Wird keine Unterkante
 eingegeben, wird sie aus der Deckelhöhe des nächsten Schachts und der
-eingestellten Objekthöhe abgeleitet. Ohne Bibliothekssymbol entsteht in 2D und
-3D ein geschlossener rechteckiger Ablauf mit den gewählten L/B/H-Maßen. Bei
+eingestellten Objekthöhe abgeleitet. Das 2D-Symbol kann beim Erzeugen sowie bei
+der Einzel- oder Mehrfachbearbeitung aus dem Dokument oder den Vectorworks-
+Bibliotheken gewählt werden. Ohne Bibliothekssymbol entsteht in 2D und 3D ein
+geschlossener rechteckiger Ablauf mit den gewählten L/B/H-Maßen. Bei
 einem reinen 2D-Symbol wird der 3D-Ersatzkörper zusätzlich erzeugt,
 bei einem Hybrid-/3D-Symbol kann er abgeschaltet werden. Die Leitung beginnt an
 der Unterkante des Ablaufs und fällt gleichmäßig zur Hauptleitung.

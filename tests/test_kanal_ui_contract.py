@@ -638,6 +638,22 @@ class KanalDialogTests(unittest.TestCase):
         app._edit(preferences, managed)
         self.assertEqual(("S1", "S2"), calls[0][0])
 
+    def test_multiple_selected_floor_drains_use_common_size_editor(self):
+        api = DialogAPI()
+        load_ui(api)
+        app = importlib.import_module("PD_KanalTool.app")
+        preferences = importlib.import_module("PD_KanalTool.settings").validate({})
+        managed = (
+            ("D1", {"role": "sewer_floor_drain"}),
+            ("D2", {"role": "sewer_floor_drain"}),
+        )
+        calls = []
+        app.sewer_live.edit_floor_drains = lambda handles, current: (
+            calls.append((tuple(handles), current)) or True)
+        app.adapter.alert = lambda _message: None
+        app._edit(preferences, managed)
+        self.assertEqual(("D1", "D2"), calls[0][0])
+
     def test_multiple_shaft_dialogs_stage_properties_and_pipe_ends_once(self):
         api = DialogAPI()
         load_ui(api)
@@ -1349,6 +1365,30 @@ class KanalDialogTests(unittest.TestCase):
             (pipe("p1", "s1", "s2", 100.0, 99.0),))
         self.assertIsNone(result)
         self.assertEqual(1, len(api.questions))
+
+    def test_floor_drain_editors_expose_document_and_library_symbol_popup(self):
+        api = DialogAPI()
+        ui = load_ui(api)
+        core = importlib.import_module("PD_KanalTool.core")
+        settings = importlib.import_module("PD_KanalTool.settings").validate({})
+
+        def drain(identity, x_m):
+            return core.validate_shaft({
+                "schema": core.SCHEMA, "id": identity, "kind": "RW",
+                "name": "ABL.%s" % identity[-1], "note": "",
+                "x_m": x_m, "y_m": 0.0, "kd_m": 100.0, "ks_m": 99.4,
+                "diameter_m": 0.0, "structure_type": "floor_drain",
+                "visible": True,
+            }, allow_hidden=True)
+
+        self.assertIsNone(ui.terminal_properties_dialog(drain("d1", 0.0), settings))
+        single_dialog = max(api.controls)
+        self.assertTrue({22, 23, 24}.issubset(api.controls[single_dialog]))
+
+        self.assertIsNone(ui.floor_drain_batch_dialog(
+            (drain("d1", 0.0), drain("d2", 2.0)), settings))
+        batch_dialog = max(api.controls)
+        self.assertTrue({18, 19, 20, 21}.issubset(api.controls[batch_dialog]))
 
 
 if __name__ == "__main__":

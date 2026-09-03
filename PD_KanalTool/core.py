@@ -15,6 +15,8 @@ DEFAULT_MATERIALS = ("PP", "KG", "B", "STZ", "STB")
 GRAPHICS_MODES = ("single_line", "double_line")
 CONNECTION_ALIGNMENTS = ("invert", "axis", "springline", "crown")
 STRUCTURE_TYPES = ("round", "special", "junction", "stub", "floor_drain", "house")
+CONNECTION_MAX_BEND_DEG = 45.0
+CONNECTION_BEND_SPACING_M = 0.50
 STRUCTURE_CLASS_TOKENS = {
     "round": "Schacht",
     "special": "Sonderschacht",
@@ -1036,6 +1038,100 @@ def validate_shaft(value, allow_hidden=False):
     if result["kd_m"] < result["ks_m"]:
         raise SewerError("Deckelhöhe KD muss über oder auf der Sohlhöhe KS liegen.")
     return result
+
+
+def soften_connection_bends(points, max_bend_deg=CONNECTION_MAX_BEND_DEG,
+                            bend_spacing_m=CONNECTION_BEND_SPACING_M):
+    """Replace every connection turn over ``max_bend_deg`` by smaller turns.
+
+    The generated bend points remain tangent to the two original legs.  The
+    straight segments between consecutive generated bends are exactly
+    ``bend_spacing_m`` long.  A 90-degree corner therefore becomes three
+    30-degree bends with two 0.50 m intermediate segments.  If the adjacent
+    user-drawn legs are too short, the operation is rejected instead of
+    silently moving an endpoint or violating the required spacing.
+    """
+    values = tuple(path(points))
+    maximum = number(max_bend_deg, "Maximaler Anschlusswinkel")
+    spacing = number(bend_spacing_m, "Abstand der Anschlusswinkel")
+    if not 0.0 < maximum <= 45.0:
+        raise SewerError("Der maximale Anschlusswinkel muss größer 0° und höchstens 45° sein.")
+    if spacing <= 0.0:
+        raise SewerError("Der Abstand der Anschlusswinkel muss größer 0 m sein.")
+    if len(values) < 3:
+        return values
+
+    plans = [None] * len(values)
+    for index in range(1, len(values) - 1):
+        first, corner, last = values[index - 1:index + 2]
+        incoming = corner[0] - first[0], corner[1] - first[1]
+        outgoing = last[0] - corner[0], last[1] - corner[1]
+        incoming_length = math.hypot(*incoming)
+        outgoing_length = math.hypot(*outgoing)
+        if incoming_length <= 1e-9 or outgoing_length <= 1e-9:
+            raise SewerError("Die Anschlussleitung enthält einen unbrauchbar kurzen Abschnitt.")
+        u = incoming[0] / incoming_length, incoming[1] / incoming_length
+        v = outgoing[0] / outgoing_length, outgoing[1] / outgoing_length
+        dot = max(-1.0, min(1.0, u[0] * v[0] + u[1] * v[1]))
+        cross = u[0] * v[1] - u[1] * v[0]
+        signed_angle = math.atan2(cross, dot)
+        angle_deg = abs(math.degrees(signed_angle))
+        if angle_deg <= maximum + 1e-9:
+            continue
+        if abs(cross) <= 1e-9:
+            raise SewerError(
+                "Eine Anschlussleitung kann nicht mit einer 180°-Kehre ausgebildet werden.")
+
+        # Exact multiples need one additional bend: a 90° turn requires three
+        # 30° bends because every result must be strictly below 45°.  The loop
+        # also makes that rule stable against floating-point angle noise.
+        bend_count = max(2, int(math.ceil(angle_deg / maximum)))
+        while angle_deg / bend_count >= maximum - 1e-9:
+            bend_count += 1
+        step = signed_angle / bend_count
+        internal_vectors = []
+        for step_index in range(1, bend_count):
+            angle = step * step_index
+            cosine, sine = math.cos(angle), math.sin(angle)
+            internal_vectors.append((
+                spacing * (u[0] * cosine - u[1] * sine),
+                spacing * (u[0] * sine + u[1] * cosine)))
+        displacement = (
+            sum(value[0] for value in internal_vectors),
+            sum(value[1] for value in internal_vectors))
+        trim_in = (displacement[0] * v[1] - displacement[1] * v[0]) / cross
+        trim_out = (u[0] * displacement[1] - u[1] * displacement[0]) / cross
+        if trim_in <= 1e-9 or trim_out <= 1e-9:
+            raise SewerError("Der Anschlussknick konnte geometrisch nicht aufgeteilt werden.")
+
+        generated = [(corner[0] - trim_in * u[0],
+                      corner[1] - trim_in * u[1])]
+        for vector in internal_vectors:
+            generated.append((generated[-1][0] + vector[0],
+                              generated[-1][1] + vector[1]))
+        plans[index] = {
+            "points": tuple(generated),
+            "trim_in_m": trim_in,
+            "trim_out_m": trim_out,
+        }
+
+    # Two neighbouring replacements consume the same original leg from both
+    # ends. Validate the complete path before returning any changed geometry.
+    for index, (first, last) in enumerate(zip(values, values[1:])):
+        length = math.dist(first, last)
+        start_trim = (plans[index] or {}).get("trim_out_m", 0.0)
+        end_trim = (plans[index + 1] or {}).get("trim_in_m", 0.0)
+        if start_trim + end_trim >= length - 1e-6:
+            raise SewerError(
+                "Die Anschlussleitung ist am Knick zu kurz. Für Winkel über 45° "
+                "werden mehrere Winkel unter 45° mit jeweils 0,50 m Abstand benötigt.")
+
+    result = [values[0]]
+    for index in range(1, len(values) - 1):
+        plan = plans[index]
+        result.extend(plan["points"] if plan else (values[index],))
+    result.append(values[-1])
+    return tuple(path(result))
 
 
 def change_stub_alignment(shaft, connected_pipes, alignment):
